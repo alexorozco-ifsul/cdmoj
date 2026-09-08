@@ -2,9 +2,10 @@
 require_method GET
 require_auth_contest treino
 source "$_LIBDIR/contest-create.sh"
+source "$_LIBDIR/problems.sh"   # owners_merged/my_orgs_json (privados do chamador)
 cc_can_create "$SESSION_LOGIN" || fail 403 "Sem permissão para criar contest" "create_forbidden"
 emit_json 200 OK
-cc_bank_json | jq -c '
+cc_bank_json_all | jq -c '
   [ .[].tags[]? ]
   | reduce .[] as $t ({}; .[$t] += 1)
   | to_entries | map({tag:.key, count:.value}) | sort_by(-.count)

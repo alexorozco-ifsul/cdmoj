@@ -383,6 +383,46 @@ cc_bank_json(){
   printf '%s' "${data:-[]}"
 }
 
+# cc_bank_private_json — os problemas PRIVADOS que $SESSION_LOGIN pode usar num contest (dono,
+# colaborador ou MEMBRO da org), no MESMO formato do cc_bank_json.
+#
+# Por que existe: o sorteio e as listas de tag/colecao do wizard liam so o indice PUBLICO
+# (var/jsons), enquanto a busca (contest-create/problems.sh) ja enxergava os privados via
+# owners_merged. Resultado: uma org privada — o caso normal de banco de questoes de aula —
+# sumia inteira do sorteio, sem erro e sem log, e o professor via "nenhum problema".
+#
+# NAO entra no cache compartilhado (var/problems.json) DE PROPOSITO: esta lista depende do
+# login, e cachear misturaria problema privado de um usuario na resposta de outro.
+cc_bank_private_json(){
+  local d="$CONTESTSDIR/treino/var/jsons-private" ids id f
+  [[ -d "$d" ]] || { printf '%s' '[]'; return; }
+  declare -F owners_merged >/dev/null 2>&1 || source "${BASH_SOURCE[0]%/*}/problems.sh"
+  ids="$(owners_merged | jq -r --arg me "$SESSION_LOGIN" --argjson orgs "$(my_orgs_json)" '
+    .problems[]?
+    | select((.public // false) | not)
+    | select(.owner == $me
+             or ((((.collaborators // []) | index($me))) != null)
+             or (((.repo // (.id | split("#")[0])) as $r | $orgs | index($r)) | type == "number"))
+    | .id' 2>/dev/null)"
+  [[ -n "$ids" ]] || { printf '%s' '[]'; return; }
+  {
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      f="$d/$id.json"
+      [[ -f "$f" ]] && cat "$f"
+    done <<< "$ids"
+  } | jq -cs 'map({id, title, tags:(.tags//[]), collections:(.collections//[])})' 2>/dev/null \
+    || printf '%s' '[]'
+}
+
+# cc_bank_json_all — o banco que o WIZARD deve enxergar: publico + os privados do chamador.
+# unique_by(.id) porque um problema recem-despublicado pode constar nos dois indices (o publico
+# sai por cache com TTL) e apareceria duas vezes, inflando a contagem das tags.
+cc_bank_json_all(){
+  { cc_bank_json; cc_bank_private_json; } | jq -cs 'add // [] | unique_by(.id)' 2>/dev/null \
+    || cc_bank_json
+}
+
 # cc_bank_filter <tags_csv> <match:any|all> <diff> [collections_json_array] — filtra o banco
 # (stdin = array do cc_bank_json) por tag E coleção (grupos em AND; dentro do grupo, tags casam
 # por match, coleções por "qualquer uma") e por dificuldade (buckets de acceptance do

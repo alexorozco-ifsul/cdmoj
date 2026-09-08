@@ -5,6 +5,7 @@
 require_method GET
 require_auth_contest treino
 source "$_LIBDIR/contest-create.sh"
+source "$_LIBDIR/problems.sh"   # owners_merged/my_orgs_json (privados do chamador)
 cc_can_create "$SESSION_LOGIN" || fail 403 "Sem permissão para criar contest" "create_forbidden"
 tags="$(param tags)"; count="$(param count)"; match="$(param match)"; diff="$(param difficulty)"; seed="$(param seed)"
 colls="$(param collections)"
@@ -14,7 +15,7 @@ case "$diff" in easy|medium|hard|known) ;; *) diff=any;; esac
 [[ "$seed" =~ ^[0-9]+$ ]] || seed="$RANDOM"
 jq -e 'type=="array" and all(.[]; type=="string")' >/dev/null 2>&1 <<<"$colls" || colls='[]'
 
-list="$(cc_bank_json | cc_bank_filter "$tags" "$match" "$diff" "$colls")"
+list="$(cc_bank_json_all | cc_bank_filter "$tags" "$match" "$diff" "$colls")"
 [[ -n "$list" ]] || list='[]'
 candidates="$(jq 'length' <<<"$list" 2>/dev/null)"; [[ "$candidates" =~ ^[0-9]+$ ]] || candidates=0
 drawn="$(jq -c '.[]' <<<"$list" 2>/dev/null | awk -v seed="$seed" 'BEGIN{srand(seed)} {print rand()"\t"$0}' | sort -n | cut -f2- | head -n "$count" | jq -cs '.' 2>/dev/null)"
