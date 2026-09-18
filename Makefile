@@ -10,6 +10,11 @@
 # WORKROOT = raiz do workspace (o dir que contém cdmoj/ mojtools/ contests/ run/); default `..`.
 # Ver deploy/Containerfile, deploy/quadlet/, docs/DEPLOY.md.
 
+# Config DESTA instalacao (host, URL base...), fora do versionamento: entra ANTES dos
+# defaults porque todos usam `?=` -- assim o pull nunca conflita e o smoke nao aponta
+# para o host do projeto de origem. Ver Makefile.local.exemplo.
+-include Makefile.local
+
 SHELL      := /bin/bash
 IMAGE      ?= localhost/moj-server
 REGISTRY   ?= ghcr.io/cd-moj/moj-server

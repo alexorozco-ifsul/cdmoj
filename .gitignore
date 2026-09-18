@@ -44,3 +44,6 @@ node_modules/
 /web/moj-contest
 /web/moj-judges
 __pycache__/
+
+# config local da instalacao (host/URL do smoke)
+Makefile.local
