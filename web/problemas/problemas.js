@@ -118,7 +118,12 @@ function filteredRows() {
       // (banco_de_questoes#300metrosparaagloria), entao jogar id e tags no mesmo saco fazia
       // "#c" casar com metade do banco e a tag sumir no ruido.
       if (q.startsWith('#')) {
-        if (!(p.tags || []).some(tg => norm(tg).includes(q))) return false;
+        // VARIOS termos = E logico: "#condicional #facil" traz so quem tem as duas.
+        // O # dos termos seguintes e opcional ("#condicional facil" da o mesmo), porque e
+        // assim que a pessoa fala -- exigir o # em cada um so criaria resultado vazio calado.
+        const tags = (p.tags || []).map(norm);
+        const termos = q.split(/\s+/).filter(Boolean).map(s => s.replace(/^#/, '')).filter(Boolean);
+        if (!termos.every(term => tags.some(tg => tg.includes(term)))) return false;
       } else {
         // sem '#': o termo vale para titulo, autor, id E tags (digitar "repeticao" acha a tag)
         const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || '')
