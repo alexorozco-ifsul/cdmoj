@@ -109,16 +109,22 @@ function stateBadges(p) {
 }
 
 function filteredRows() {
-  const q = norm(document.getElementById('q').value);
+  const q = norm(document.getElementById('q').value.trim());
   const onlyBroken = document.getElementById('onlybroken').checked;
   return ROWS.filter(p => {
     if (onlyBroken && p.public) return false;
     if (q) {
-      // tags entram na MESMA caixa (sem campo novo): quem digita "#repeticao" filtra por tag,
-      // quem digita "repeticao" acha a tag e tambem titulo/autor/id que contenham a palavra.
-      const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || '')
-                       + ' ' + (p.tags || []).join(' '));
-      if (!hay.includes(q)) return false;
+      // Busca comecando com '#' = SO tags. O id tem '#' no meio
+      // (banco_de_questoes#300metrosparaagloria), entao jogar id e tags no mesmo saco fazia
+      // "#c" casar com metade do banco e a tag sumir no ruido.
+      if (q.startsWith('#')) {
+        if (!(p.tags || []).some(tg => norm(tg).includes(q))) return false;
+      } else {
+        // sem '#': o termo vale para titulo, autor, id E tags (digitar "repeticao" acha a tag)
+        const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || '')
+                         + ' ' + (p.tags || []).join(' '));
+        if (!hay.includes(q)) return false;
+      }
     }
     return true;
   });
