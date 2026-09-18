@@ -1,6 +1,11 @@
 # GET /contest/admin/draw?contest=<id>&tags=&collections=<json-array>&count=&match=any|all&difficulty=&seed=
-# (admin DO contest) -> sorteio no banco PÚBLICO do treino (mesmo contrato do draw do wizard;
-# reusa cc_bank_filter — coleção/tag/dificuldade em AND, reproduzível por seed). Só públicos.
+# (admin DO contest) -> sorteio no banco do treino: PÚBLICO + os PRIVADOS que o DONO do contest
+# enxerga (mesmo contrato do draw do wizard; reusa cc_bank_filter — coleção/tag/dificuldade em
+# AND, reproduzível por seed).
+#
+# O sujeito e o DONO DO CONTEST, nao a sessao: e o mesmo de bank.sh (busca) e do gate de add em
+# problems.sh. Com a sessao, um admin do contest com banco proprio veria sortear problema que o
+# "adicionar" recusa com 404.
 require_method GET
 contest="$(param contest)"
 [[ -n "$contest" ]] || fail 400 "Missing contest" "contest_missing"
@@ -8,6 +13,7 @@ require_contest "$contest"
 require_auth_contest "$contest"
 is_admin || fail 403 "Apenas o admin do contest" "admin_required"
 source "$_LIBDIR/contest-create.sh"
+source "$_LIBDIR/problems.sh"   # owners_merged/orgs_json_for (privados do dono)
 
 tags="$(param tags)"; count="$(param count)"; match="$(param match)"; diff="$(param difficulty)"; seed="$(param seed)"
 colls="$(param collections)"
@@ -17,7 +23,8 @@ case "$diff" in easy|medium|hard|known) ;; *) diff=any;; esac
 [[ "$seed" =~ ^[0-9]+$ ]] || seed="$RANDOM"
 jq -e 'type=="array" and all(.[]; type=="string")' >/dev/null 2>&1 <<<"$colls" || colls='[]'
 
-list="$(cc_bank_json | cc_bank_filter "$tags" "$match" "$diff" "$colls")"
+cowner="$(head -1 "$CONTESTSDIR/$contest/owner" 2>/dev/null)"
+list="$(cc_bank_json_all "$cowner" | cc_bank_filter "$tags" "$match" "$diff" "$colls")"
 [[ -n "$list" ]] || list='[]'
 candidates="$(jq 'length' <<<"$list" 2>/dev/null)"; [[ "$candidates" =~ ^[0-9]+$ ]] || candidates=0
 drawn="$(jq -c '.[]' <<<"$list" 2>/dev/null | awk -v seed="$seed" 'BEGIN{srand(seed)} {print rand()"\t"$0}' | sort -n | cut -f2- | head -n "$count" | jq -cs '.' 2>/dev/null)"

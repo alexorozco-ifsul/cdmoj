@@ -4,7 +4,8 @@
 # sujeito do gate de add (problems.sh), então a busca lista exatamente o que pode ser
 # adicionado. Contest legado sem owner => só públicos. Privados vêm primeiro (como no wizard).
 # ?meta=1 -> {tags:[{tag,count}],collections:[{collection,count}]} p/ o painel de sorteio
-# (agregado do banco público — o sorteio é só público).
+# (agregado do MESMO banco que o sorteio usa: publico + privados do DONO do contest — senao
+# os chips de coleção/tag ficam vazios numa instancia de banco todo privado).
 require_method GET
 contest="$(param contest)"
 [[ -n "$contest" ]] || fail 400 "Missing contest" "contest_missing"
@@ -14,7 +15,7 @@ is_admin || fail 403 "Apenas o admin do contest" "admin_required"
 source "$_LIBDIR/contest-create.sh"
 
 if [[ "$(param meta)" == 1 ]]; then
-  bank="$(cc_bank_json)"
+  bank="$(cc_bank_json_all "$(head -1 "$CONTESTSDIR/$contest/owner" 2>/dev/null)")"
   tags="$(jq -c '[.[].tags[]?] | reduce .[] as $t ({}; .[$t]+=1) | to_entries | map({tag:.key,count:.value}) | sort_by(-.count)' <<<"$bank" 2>/dev/null)"
   cols="$(jq -c '[.[].collections[]?] | reduce .[] as $c ({}; .[$c]+=1) | to_entries | map({collection:.key,count:.value}) | sort_by(-.count)' <<<"$bank" 2>/dev/null)"
   [[ -n "$tags" ]] || tags='[]'; [[ -n "$cols" ]] || cols='[]'

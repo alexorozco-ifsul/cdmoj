@@ -4753,7 +4753,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Busca p/ adicionar problemas: banco público + privados do DONO do contest (mesmo sujeito do gate de add; privados primeiro). ?meta=1 devolve tags+coleções do banco público",
+        "summary": "Busca p/ adicionar problemas: banco público + privados do DONO do contest (mesmo sujeito do gate de add; privados primeiro). ?meta=1 devolve tags+coleções do mesmo banco que o sorteio usa (público + privados do dono)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4802,7 +4802,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Sorteio no banco público (contrato do /treino/contest-create/draw: tag+coleção+dificuldade em AND, seed reproduzível)",
+        "summary": "Sorteio no banco público + privados do DONO do contest (mesmo sujeito do gate de add; contrato do /treino/contest-create/draw: tag+coleção+dificuldade em AND, seed reproduzível)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"

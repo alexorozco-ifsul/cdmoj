@@ -393,11 +393,16 @@ cc_bank_json(){
 #
 # NAO entra no cache compartilhado (var/problems.json) DE PROPOSITO: esta lista depende do
 # login, e cachear misturaria problema privado de um usuario na resposta de outro.
+# [login] — SUJEITO da visibilidade. Sem argumento = quem esta logado (wizard). O painel de
+# admin do contest passa o DONO DO CONTEST: e o mesmo sujeito do gate de add (problems.sh) e da
+# busca (bank.sh), senao o sorteio ofereceria problema que o "adicionar" recusa com 404.
 cc_bank_private_json(){
+  local who="${1:-$SESSION_LOGIN}"
   local d="$CONTESTSDIR/treino/var/jsons-private" ids id f
   [[ -d "$d" ]] || { printf '%s' '[]'; return; }
+  [[ -n "$who" ]] || { printf '%s' '[]'; return; }
   declare -F owners_merged >/dev/null 2>&1 || source "${BASH_SOURCE[0]%/*}/problems.sh"
-  ids="$(owners_merged | jq -r --arg me "$SESSION_LOGIN" --argjson orgs "$(my_orgs_json)" '
+  ids="$(owners_merged | jq -r --arg me "$who" --argjson orgs "$(orgs_json_for "$who")" '
     .problems[]?
     | select((.public // false) | not)
     | select(.owner == $me
@@ -419,7 +424,7 @@ cc_bank_private_json(){
 # unique_by(.id) porque um problema recem-despublicado pode constar nos dois indices (o publico
 # sai por cache com TTL) e apareceria duas vezes, inflando a contagem das tags.
 cc_bank_json_all(){
-  { cc_bank_json; cc_bank_private_json; } | jq -cs 'add // [] | unique_by(.id)' 2>/dev/null \
+  { cc_bank_json; cc_bank_private_json "${1:-}"; } | jq -cs 'add // [] | unique_by(.id)' 2>/dev/null \
     || cc_bank_json
 }
 
