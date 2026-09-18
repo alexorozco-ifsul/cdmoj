@@ -73,6 +73,7 @@ out="$(jq -c --slurpfile TL "$tlmap" --slurpfile VAL "$valmap" --argjson CAL "$c
       | ($err or $gsnotl or $pubuncal or $pubunval) as $review
       | { id:$id, title:(.title // .prob // $id), owner:.owner, author:.author, public:.public,
           collaborators:(.collaborators // []),
+          tags:(.tags // []),
           validated:$vstate,
           calibrated:$cal,
           being_calibrated:(($calset[$id]) // false),
