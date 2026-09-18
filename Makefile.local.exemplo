@@ -1,0 +1,5 @@
+# Copie para Makefile.local e ajuste. Serve para o `make smoke` (e qualquer alvo que use
+# BASE/HOST_HDR) apontar para ESTA instalacao em vez do host do projeto de origem.
+# Makefile.local nao e versionado, entao o `git pull` nunca conflita com ele.
+#HOST_HDR = moj.suaescola.edu.br
+#BASE     = https://moj.suaescola.edu.br

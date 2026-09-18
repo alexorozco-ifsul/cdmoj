@@ -60,6 +60,20 @@ sudo bash server/bin/install-nginx.sh --workroot <raiz> --names "<host>"   # ngi
 make smoke
 ```
 
+- **`make smoke` precisa saber o SEU host.** Os defaults `HOST_HDR`/`BASE` do
+  `Makefile` apontam para a instalação de origem, então numa instalação nova o
+  smoke bate em endereço que não existe e devolve corpo vazio — parece falha do
+  deploy e não é. Copie `Makefile.local.exemplo` para `Makefile.local` e ajuste:
+
+  ```make
+  HOST_HDR = moj.suaescola.edu.br
+  BASE     = https://moj.suaescola.edu.br
+  ```
+
+  `Makefile.local` entra por `-include` **antes** dos defaults (que usam `?=`) e
+  **não é versionado** — o `git pull` nunca conflita com ele. Argumento na linha
+  de comando (`make smoke BASE=…`) continua vencendo os dois.
+
 - **Volumes (`:z`, SHARED):** `run/`, `contests/`, `moj-problems/`, `server/var/news` → `/data/…`.
   Estado e segredos NUNCA entram na imagem (ver `deploy/.containerignore`). Rootless: container-root
   ↔ o usuário do host (não defina `USER` nem `--userns=keep-id`).
