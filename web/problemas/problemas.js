@@ -114,7 +114,10 @@ function filteredRows() {
   return ROWS.filter(p => {
     if (onlyBroken && p.public) return false;
     if (q) {
-      const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || ''));
+      // tags entram na MESMA caixa (sem campo novo): quem digita "#repeticao" filtra por tag,
+      // quem digita "repeticao" acha a tag e tambem titulo/autor/id que contenham a palavra.
+      const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || '')
+                       + ' ' + (p.tags || []).join(' '));
       if (!hay.includes(q)) return false;
     }
     return true;

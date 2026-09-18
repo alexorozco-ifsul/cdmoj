@@ -127,7 +127,7 @@ Listagens leem o índice de donos `contests/treino/var/problem-owners.json` (ger
 
 | Rota | Método | I/O |
 |---|---|---|
-| `/problems/mine` | GET | `{problems:[{id,title,author,owner,collections,public,html,claimed}]}` — `claimed=true` se `owner==login`, senão "provável" (nome casa) |
+| `/problems/mine` | GET | `{problems:[{id,title,author,owner,collections,**tags**,public,html,claimed}]}` — `claimed=true` se `owner==login`, senão "provável" (nome casa) |
 | `/problems/shared` | GET | problemas compartilhados com o login: tudo que ele **pode editar e não é dele** — **membro da org** OU colaborador por-problema (não dono) |
 | `/problems/public` | GET | problemas **públicos** (no treino livre) — visão de gestão (dono/autor) |
 | `/problems/collection?name=<c>` | GET | problemas da coleção (curso/diretório, ex.: `obi-problems`) |
