@@ -24,6 +24,13 @@ export function makeUsersTab(CONTEST) {
     el('option', { value: 'active' }, T('ativos', 'active')), el('option', { value: 'disabled' }, T('desabilitados', 'disabled')),
     el('option', { value: 'priv' }, T('privilegiados', 'privileged')));
   let showAll = false;
+  // Ordenacao por coluna: clique no cabecalho alterna ▲/▼ (mesmo padrao da Gestao de Problemas).
+  // key null = ordem do servidor, que e o comportamento de antes -- nada muda para quem nao clica.
+  // Collator com numeric: "aluno2" vem antes de "aluno10", e sensitivity base ignora caixa e
+  // acento ("Álvaro" junto de "alvaro").
+  let SORT = { key: null, dir: 1 };
+  const COLL = new Intl.Collator('pt', { numeric: true, sensitivity: 'base' });
+  function setSort(key) { if (SORT.key === key) SORT.dir *= -1; else SORT = { key, dir: 1 }; renderList(); }
   fQ.addEventListener('input', () => { showAll = false; renderList(); });
   fSel.addEventListener('change', () => { showAll = false; renderList(); });
 
@@ -56,12 +63,27 @@ export function makeUsersTab(CONTEST) {
       if (sel === 'priv' && !(u.admin || PRIV.test(u.login || ''))) return false;
       return !q || [u.login, u.fullname, u.email].some((x) => (x || '').toLowerCase().includes(q));
     });
+    // ordena ANTES do corte de CAP: senao "ordenar por nome" em contest com 1000+ contas ordenaria
+    // so os 300 que ja estavam na tela, e o primeiro da ordem real ficaria escondido.
+    if (SORT.key) {
+      const k = SORT.key, d = SORT.dir;
+      items.sort((a, b) => {
+        const va = a[k] || '', vb = b[k] || '';
+        // vazio vai SEMPRE para o fim, nas duas direcoes: muita conta nao tem email, e elas nao
+        // podem tomar o topo da lista quando se inverte a ordem
+        if (!va && vb) return 1;
+        if (va && !vb) return -1;
+        return COLL.compare(va, vb) * d;
+      });
+    }
     list.append(el('div', { class: 'small muted', style: 'margin:.3rem 0' }, items.length + T(' de ', ' of ') + USERS.length + T(' usuário(s).', ' user(s).')));
     if (!items.length) { list.append(el('div', { class: 'muted' }, T('Nenhum com esses filtros.', 'None with these filters.'))); return; }
     const CAP = 300, shown = showAll ? items : items.slice(0, CAP);
     const tb = el('tbody'); shown.forEach((u) => tb.append(userRow(u)));
+    const arrow = (k) => SORT.key === k ? (SORT.dir > 0 ? ' ▲' : ' ▼') : '';
+    const th = (label, k) => el('th', { class: 'sortable', title: T('ordenar', 'sort'), onclick: () => setSort(k) }, label + arrow(k));
     list.append(el('div', { class: 'chart-wrap' }, el('table', { class: 'moj' },
-      el('thead', {}, el('tr', {}, el('th', {}, 'Login'), el('th', {}, T('Nome', 'Name')), el('th', {}, 'Email'), el('th', {}, T('Ações', 'Actions')))), tb)));
+      el('thead', {}, el('tr', {}, th('Login', 'login'), th(T('Nome', 'Name'), 'fullname'), th('Email', 'email'), el('th', {}, T('Ações', 'Actions')))), tb)));
     if (!showAll && items.length > CAP) list.append(el('div', { style: 'margin:.4rem 0' },
       el('button', { class: 'btn ghost', onclick: () => { showAll = true; renderList(); } }, T('mostrar todos (', 'show all (') + items.length + ')'),
       el('span', { class: 'small muted' }, T(' — exibindo os ' + CAP + ' primeiros', ' — showing the first ' + CAP))));
