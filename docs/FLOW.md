@@ -29,7 +29,7 @@ o modelo **pull** (os juízes puxam o job no heartbeat — sem master, sem push 
       4. recomputa users/<login>/metrics.json (fonte do placar)
       5. arquiva o fonte em users/<login>/submissions/<id>.<ext>
       6. roda server/score/build.sh <c>  ──▶  reescreve var/placar.txt
-      7. move o arquivo de spool p/ run/spool/submissions-done/
+      7. grava o result SEM o report_html_b64 em run/spool/submissions-done/ (retenção 7 dias)
       (+ spool de submit INVÁLIDO vira "Judge Error" na linha do history — nunca descarte mudo;
        e o reconciliador resolve pendência órfã >15 min: com fonte re-enfileira 1×, sem fonte
        Judge Error — incidente 2026-08-19)
@@ -71,12 +71,18 @@ entregam o formato global de 7 campos `tempo:login:problemid:lang:verdict:epoch:
 
 ## 2. Daemon de julgamento — `server/daemons/judged.sh`
 
-Serviço systemd **`moj-judged`**. Observa o spool com `inotifywait -m -e create -e moved_to`
-(fallback: poll de 1s). Para cada arquivo: lê o JSON, chama `judge_run`, e aplica o
+Serviço systemd **`moj-judged`**. Observa o spool com UM `inotifywait -m -e create -e moved_to`
+**persistente** (coproc): o laço drena o spool e faz `read -t` no pipe de eventos, então um
+evento que chega durante o dreno fica no pipe e nada se perde; o re-drain (`WATCH_REDRAIN_SECS`,
+10 s) é só rede de segurança e o watcher morto é re-subido. (Até 03/09/2026 era um `inotifywait`
+por giro, sem `-m`: o `.in.*` do escritor atômico acordava o laço e o `mv` final caía no buraco
+do rearme — ~15 % das submissões e dos results esperavam o re-drain de 30 s, o "piso de 30 s" do
+veredicto.) Fallback sem inotify-tools: poll de 1 s. Para cada arquivo: lê o JSON, chama `judge_run`, e aplica o
 veredicto reescrevendo **só a linha com sufixo `:<id>`** no `history` do usuário (casamento
 seguro, reescrita atômica via `mv`), recomputa `users/<login>/metrics.json`, arquiva o fonte
 decodificado, e dispara `server/score/build.sh <contest>` para recalcular o placar. Por fim
-move o arquivo para `run/spool/submissions-done/`.
+grava em `run/spool/submissions-done/` o result **sem** o `report_html_b64` (o mojlog já está em
+`users/<login>/mojlog/<id>.html.gz`, comprimido) — o GC do daemon apaga o que tem mais de 7 dias.
 
 **Shards do escritor** (`JUDGED_SHARDS=K`, default 1 — `api/v1/lib/spool-shard.sh`): com
 K>1 o daemon vira K workers, cada um dono dos logins com `hash(login) % K == k`. O teto
@@ -105,7 +111,8 @@ e servidos pelo `/submission/summary`. **Ao competidor o veredicto servido é SE
 canônico** (todos os modos; `lib/verdict.sh` canoniza os endpoints de history na leitura — o
 history em disco não muda) e o summary é **redigido por modo**: treino/lista = tudo;
 obi/heurístico/outro = score/grupos/heur; icpc/ausente = só o canônico. No **modo veredicto manual**, o
-casamento da matriz de auto-veredicto usa o **`verdict_canon`** (não a string com score), e os
+casamento das regras de revisão (`auto-verdicts.json`, `lib/review-rules.sh`: OPT-OUT desde 25/09/2026 —
+tudo automático menos o marcado) usa o **`verdict_canon`** (não a string com score), e os
 **erros de juiz** (`Judge Error`/`No_Servers`) também são **segurados** p/ revisão — o competidor
 vê só `Not Answered Yet` até um veredicto sair.
 
@@ -135,9 +142,28 @@ juiz (repo judge/, agente moj-agent@)
    POST /judge/tl-report   ─▶ reporta o TL calibrado (run/tl/<id>.json)
 ```
 
+**O TL aparece no contest logo depois da calibração.** O `/contest/problems` não abre o pacote: ele
+compara o checksum de `run/tl/<id>.json` com o `tl_checksum` do índice de donos, e o índice só se refaz em
+background (30 min ou mais). Por isso o `/judge/tl-report` — que confere o checksum real do pacote antes de
+gravar — também **carimba** esse valor em `treino/var/tl-checksum-fresh.json`. O carimbo vence o índice no
+contest e no Painel. Ele sai quando o pacote muda de checksum (`problem_commit`), quando o problema é
+removido ou movido, e quando o índice alcança o mesmo valor. Sem o carimbo, "editei e recalibrei" deixava
+o contest sem TL até a próxima regeneração do índice (relato de 18/09/2026).
+
 `allowed_hosts` (pool de juízes do problema/contest) é respeitado no claim: com o pool
 offline o job **espera na fila** (o preflight/dashboard avisam). Protocolo completo em
 `server/judge-gw/PULL.md`.
+
+**Largura (24/09/2026).** Os juízes oficiais são slots de 1 CPU e um problema pode pedir **k CPUs
+por teste** (`CPUNEEDED=k` no `conf`, `SAMENUMA=y` = no mesmo nó NUMA). O claim é **por largura**:
+o job só cabe num juiz com `k_slots` livres (num nó, se numa; a memória por slot também conta),
+senão é pulado e os de 1 slot passam na frente; o agente junta os slots num grupo por teste e
+devolve os que sobram no fim do job (`released`). Um largo pendente há 20 s **segura** um juiz
+(`run/hold/<host>.json`: nada novo entra nele até caber); sem juiz capaz por 120 s vira Judge
+Error. O agente que não conseguir alocar **recusa** (`POST /judge/decline`) e o job volta à fila.
+Testes **em paralelo** (vários testes da mesma submissão ao mesmo tempo, cada um nas suas k CPUs)
+só com a política global `auto` e fila vazia — em prova, `off`. Guia do autor:
+`mojtools/docs/problema-paralelo.md`; conf em `PACOTE.md`.
 
 **Test-run de autoria** (`POST /problems/test-run`, `moj testrun`): o autor roda UMA solução
 avulsa no juiz real — o job entra na MESMA fila (banda `040-lista-privada`) com o contest
@@ -173,6 +199,11 @@ Uma máquina de juiz clona só `judge/` + `mojtools/` (não o `cdmoj`) e sobe o 
 heartbeat, baixa o pacote sob demanda p/ um **cache local**, calibra na 1ª vez e **reporta o
 TL**, e roda a solução em sandbox **bubblewrap** (`mojtools/cage-run.sh` +
 `lang/<lang>/{compile,run}.sh`, tipicamente sobre um rootfs `moj-sysroot`). Ver `judge/README.md`.
+"Na 1ª vez" é por MÁQUINA: o juiz que nunca calibrou o problema (ou calibrou outra versão) baixa e
+calibra DENTRO da 1ª submissão, que espera — 7,3 min na XIV Maratona UnB (2026-09-25). O preflight
+do contest mostra isso juiz a juiz (item `judges_warm`, `lib/judge-warm.sh`: `run/tl/<id>.json` ×
+`run/tl/<id>.pkv`) e o `POST /contest/admin/warm-judges` manda o `calibrate` dirigido só aos pares
+frios, antes do início.
 
 A API expõe o estado dos juízes por `handlers/treino/admin/judges.sh` (painel admin, `model:"pull"`)
 e a página pública `/status/` (`handlers/index/status.sh`) agrega fila + juízes + liveness do daemon.
@@ -212,6 +243,24 @@ O mesmo mecanismo (API → spool → daemon) serve comandos administrativos vind
 `alteravigenciacontest`, `rejulgar`. O `jplag` roda à parte: `handlers/contest/admin/jplag-run.sh`
 dispara `server/score/jplag-run.sh` em background, que junta as soluções aceitas, roda o jar
 e grava os pares de similaridade em `contests/<c>/jplag/`.
+
+## 8½. Participação virtual (contest encerrado, refeito a partir do treino)
+
+A submissão virtual **é uma submissão normal do treino** e segue o caminho das seções 1 a 7 sem
+mudança. A diferença está só na porta e na leitura (`lib/virtual.sh`, `docs/VIRTUAL.md`):
+
+1. `POST /submit?contest=treino` com `virtual:"<cid>"`. A porta confere o **portão** do virtual
+   (contest encerrado, descongelado, não-secreto, todos os problemas públicos), a run **rodando**, o
+   problema **da prova** e a linguagem **do contest**. Depois anexa o subid em
+   `treino/users/<login>/virtual/<cid>.subs`.
+2. Spool, daemon, juiz, history, metrics e placar **do treino**: iguais.
+3. `GET /treino/virtual/run` **deriva** o resultado: history do treino ∩ subids etiquetados ∩ janela.
+4. No fim do tempo, a primeira leitura **finaliza**: grava o snapshot em
+   `contests/<cid>/virtual/runs/<login>.json` (ou descarta, se 0 aceito).
+5. O placar é montado no **navegador**: `GET /treino/virtual/feed` (times do `placar.txt` final +
+   todas as runs) + `web/shared/virtual-board.js`.
+
+Nada é escrito em `contests/<cid>/users/`: o placar oficial do contest não muda.
 
 ## Troca de rodada (aquecimento → prova oficial)
 

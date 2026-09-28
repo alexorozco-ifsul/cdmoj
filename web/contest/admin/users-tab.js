@@ -5,11 +5,10 @@
 import { el } from '/shared/ui.js';
 import { apiGet, apiPost } from '/shared/api.js';
 import { parseUsers, parseRichCsv, downloadCsv } from '/shared/users-batch.js';
-import { mkBool } from '/shared/admin-ui.js';
+import { mkBool, PRIV_RE as PRIV } from '/shared/admin-ui.js';
 import { T } from '/shared/i18n.js';
 
 const enc = encodeURIComponent;
-const PRIV = /\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$/;
 
 export function makeUsersTab(CONTEST) {
   const G = { contest: CONTEST, auth: true };
@@ -173,7 +172,7 @@ export function makeUsersTab(CONTEST) {
       try { const r = await call('users-set-password', { password: bpw.value, include_disabled: binc.checked }); bmsg.className = 'small'; bmsg.textContent = '✓ ' + r.count + T(' usuário(s) atualizados', ' user(s) updated'); bulk.disabled = false; bpw.value = ''; loadList(); }
       catch (e) { bulk.disabled = false; bmsg.className = 'small error-box'; bmsg.textContent = e.message || T('falha', 'failed'); }
     } }, T('Trocar senha de todos', 'Change everyone\'s password'));
-    panel.append(el('h3', { style: 'margin:1rem 0 .3rem' }, T('Adicionar / resetar senha', 'Add / reset password')),
+    panel.append(el('h3', { style: 'margin:1rem 0 .3rem' }, T('➕ Adicionar / resetar senha', '➕ Add / reset password')),
       el('div', { class: 'row' }, li, pw, fn, em, add), amsg,
       makeBatchUsers(),
       el('h3', { style: 'margin:1rem 0 .3rem' }, T('🔑 Troca de senha geral (prova)', '🔑 Bulk password change (contest)')),

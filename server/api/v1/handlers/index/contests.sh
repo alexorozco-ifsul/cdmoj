@@ -51,14 +51,15 @@ TSV="$(mktemp)" || fail 500 "Falha ao criar temporário" "tmp_failed"
 trap 'rm -f "$TSV"' EXIT
 
 # 1 linha por contest, SEM NADA QUE DEPENDA DA HORA (ver o cabeçalho):
-#   start \x1f id \x1f título \x1f end \x1f nprobs \x1f reg \x1f ro \x1f rc \x1f rl \x1f warmup \x1f início-oficial
+#   start \x1f id \x1f título \x1f end \x1f nprobs \x1f reg \x1f ro \x1f rc \x1f rl \x1f warmup \x1f início-oficial \x1f relatório-publicado
 for d in "$CONTESTSDIR"/*/; do
   c="${d%/}"; id="${c##*/}"
   [[ "$id" == treino ]] && continue
   [[ -f "$c/conf" ]] || continue
   (
     CONTEST_START=""; CONTEST_END=""; CONTEST_NAME=""; SECRET=""; PROBS=()
-    REG_OPEN=""; REG_CLOSE=""; REG_LATE_MINUTES=""; ROUND_KIND=""
+    REG_OPEN=""; REG_CLOSE=""; REG_LATE_MINUTES=""; ROUND_KIND=""; REPORT_PUBLISHED=""
+    CONTEST_MODULES=""; CONTEST_TYPE=""; FREEZE_TIME=""
     source "$c/conf" 2>/dev/null
     [[ "$SECRET" == 1 ]] && exit 0   # SUPER SECRETO: fora de abertos/por vir/encerrados
     [[ "$CONTEST_START" =~ ^[0-9]+$ && "$CONTEST_END" =~ ^[0-9]+$ ]] || exit 0
@@ -82,9 +83,18 @@ for d in "$CONTESTSDIR"/*/; do
       # (a inscrição sem prazo do aquecimento no ar depende da HORA — resolvida no jq)
     fi
     np=$(( ${#PROBS[@]} / 5 ))
-    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
+    # relatório estático PUBLICADO (admin/report-publish grava REPORT_PUBLISHED no conf — e o
+    # mtime do conf é o que invalida este cache): vira `report_url` no card (histórico)
+    rep=0; [[ -n "$REPORT_PUBLISHED" && -s "$c/relatorio/index.html" ]] && rep=1
+    # PARTICIPAÇÃO VIRTUAL: o card só sabe o que o CONF diz (módulo ligado, ICPC, sem freeze) —
+    # este cache é invalidado pelo conf, e "todo problema é público" não mora nele. O botão é
+    # conveniência e pode ficar defasado: quem decide é o portão de lib/virtual.sh, a cada requisição.
+    virt=0
+    if [[ ",${CONTEST_MODULES//\\/}," == *",virtual,"* && "${CONTEST_TYPE:-icpc}" == icpc ]] \
+       && { [[ -z "${FREEZE_TIME//[!0-9]/}" ]] || (( ${FREEZE_TIME//[!0-9]/} == 0 )); }; then virt=1; fi
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
       "$CONTEST_START" "$id" "$t" "$CONTEST_END" "$np" \
-      "$reg" "$ro" "$rc" "$rl" "$warm" "$osec"
+      "$reg" "$ro" "$rc" "$rl" "$warm" "$osec" "$rep" "$virt"
   )
 done | sort -t"$US" -k1,1rn > "$TSV"
 mkdir -p "${TSVC%/*}" 2>/dev/null
@@ -119,7 +129,9 @@ body="$(jq -R -s -c \
                                        closes_at:(if $warm_aberto then 0 else ((.[7] // "0")|tonumber? // 0) end),
                                        late_until:(if $warm_aberto then 0 else ((.[8] // "0")|tonumber? // 0) end),
                                        url:("/contests/inscricao/?c=" + .[1]) } }
-                else {} end)) })
+                else {} end)
+             + (if (.[11] // "0") == "1" then { report_url:("/relatorio/" + .[1] + "/") } else {} end)
+             + (if ((.[12] // "0") == "1") and ($st == "e") then { virtual_url:("/treino/virtual/?c=" + .[1]) } else {} end)) })
   | (map(select(.st=="r") | .obj)) as $open
   | (map(select(.st=="u") | .obj)) as $up
   | (map(select(.st=="e") | .obj)) as $closed

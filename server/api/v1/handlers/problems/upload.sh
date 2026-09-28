@@ -1,4 +1,5 @@
-# POST /problems/upload   (Bearer)   body: {id? | repo(=org),prob, tar_b64}
+# POST /problems/upload   (Bearer)   body: {id? | repo(=org),prob, tar_b64, base_rev?, force?}
+# `base_rev`/`force`: a trava de edição concorrente (ver edit.sh e pkg_rev_guard em lib/problems.sh).
 # Sobe um .tar(.gz)/.zip do pacote e ATUALIZA TUDO (substitui o conteúdo do problema). Commit LOCAL
 # autorado pelo login (sem Gitea). Novo problema exige permissão de criação. Acesso = membro da org.
 require_method POST
@@ -49,6 +50,10 @@ if [[ ! -d "$pdir" ]]; then   # problema NOVO via tar -> exige permissão de cri
   cc_can_create "$SESSION_LOGIN" || fail 403 "Sem permissão para criar novos problemas (mesma regra de criar contest)" "create_forbidden"
 fi
 mkdir -p "$pdir"
+# seção crítica: conferir o rev, gravar o pacote e commitar sem outra gravação no meio
+exec {_lkfd}>"$(problem_lockfile "$pdir")"; flock "$_lkfd"; export _PC_LOCK_HELD=1
+_brev="$(jq -r '(.base_rev // "") | tostring' <<<"$body")"; [[ "$_brev" =~ ^[0-9a-f]{0,40}$ ]] || fail 400 "base_rev inválido" "bad_rev"
+pkg_rev_guard "$pdir" "$_brev" "$(jq -r 'if .force == true then 1 else 0 end' <<<"$body")"
 # O `.moj-meta.json` é ARQUIVO DO SERVIDOR — o cliente não manda nem apaga:
 #  - o `public` só o /problems/set-public escreve (é o único que checa a trava da org). Se viesse do
 #    tar, bastava baixar um problema público, adaptá-lo p/ uma prova numa org privada e dar `moj
@@ -72,7 +77,11 @@ pub_srv=false
 keep_tags=0; [[ ! -f "$src/tags" && -f "$pdir/tags" ]] && keep_tags=1
 if command -v rsync >/dev/null 2>&1; then
   rs_ex=(--exclude='.git' --exclude='.moj-meta.json'); (( keep_tags )) && rs_ex+=(--exclude='/tags')
-  rsync -a --delete "${rs_ex[@]}" "$src"/ "$pdir"/ \
+  # --checksum (2026-09-16): sem ele o rsync PULA arquivo de mesmo tamanho E mesmo mtime sem olhar
+  # o conteúdo — e o tar do cliente preserva o mtime. Caso real: tests/output/x mudou de "3000" p/
+  # "1234" (4 bytes, mtime de 2019) e o servidor ficou com o velho p/ sempre, WA na referência, nem
+  # re-upload limpo resolvia. O -c só hasheia quem tem o mesmo tamanho; o resto já transfere.
+  rsync -a --checksum --delete "${rs_ex[@]}" "$src"/ "$pdir"/ \
     || fail 500 "Falha ao gravar o pacote (rsync)" "pkg_write_failed"
 else
   fd_ex=(); (( keep_tags )) && fd_ex=(! -name tags)
@@ -88,9 +97,11 @@ owner="$(problem_owner "$id")"; [[ -n "$owner" ]] || owner="$SESSION_LOGIN"
 # PASTA, sem coleção e SEM WHITELIST de linguagem (languages [] = todas — furava o ban de função):
 # o write_meta só PRESERVA o que o servidor já tem, e problema novo não tem nada — e o
 # .moj-meta.json do tar, que traz os valores certos, tinha acabado de ser descartado pelo --exclude.
-tar_title=""; tar_colls=""; tar_langs=""
+tar_title=""; tar_colls=""; tar_langs=""; tar_titles=""
 if [[ -f "$src/.moj-meta.json" ]] && jq -e . "$src/.moj-meta.json" >/dev/null 2>&1; then
   tar_title="$(jq -r '.display_title // empty' "$src/.moj-meta.json" 2>/dev/null)"
+  tar_titles="$(jq -c '(.titles // {}) | with_entries(select((.value|type)=="string" and (.key|test("^(en|es)$"))) | .value |= .[0:200])' "$src/.moj-meta.json" 2>/dev/null)"
+  [[ "$tar_titles" == "{}" ]] && tar_titles=""    # sem titles no tar => não mexe nos do servidor
   tar_colls="$(jq -c '[.collections[]? | select(type=="string")]' "$src/.moj-meta.json" 2>/dev/null)"
   [[ "$tar_colls" == "[]" ]] && tar_colls=""      # sem coleção no tar => não mexe nas do servidor
   tar_langs="$(jq -c '[.languages[]? | select(type=="string")]' "$src/.moj-meta.json" 2>/dev/null)"
@@ -103,15 +114,16 @@ if [[ -n "$tar_colls" ]]; then
     coll_exists "$cn" || fail 400 "Coleção '$cn' não existe — crie antes (moj collection create)" "coll_unknown"
   done < <(jq -r '.[]?' <<<"$tar_colls")
 fi
-write_meta "$pdir" "$owner" "$org" "$pub_srv" "$tar_colls" "$tar_title" "$tar_langs"   # public: o do SERVIDOR
+write_meta "$pdir" "$owner" "$org" "$pub_srv" "$tar_colls" "$tar_title" "$tar_langs" "$tar_titles"   # public: o do SERVIDOR
 _pkg_canon_modes "$pdir"   # 644/755 — o mesmo modo do caminho do push (o tl-checksum inclui o modo)
 [[ -f "$pdir/problem.yaml" ]] || bash "$MOJTOOLS_DIR/kattis/sidecar.sh" "$pdir" "$id" "$org" >/dev/null 2>&1 || true
 
 sha="$(problem_commit "$pdir" "$SESSION_LOGIN" "upload do pacote: $prob")"
+rev="$(pkg_rev "$pdir")"; exec {_lkfd}>&-; unset _PC_LOCK_HELD
 pub="$(jq -r 'if .public==true then "true" else "false" end' "$pdir/.moj-meta.json" 2>/dev/null)"
 colls="$(jq -c '.collections // []' "$pdir/.moj-meta.json" 2>/dev/null)"
 title="$(jq -r '.display_title // ""' "$pdir/.moj-meta.json" 2>/dev/null)"
 author="$(head -1 "$pdir/author" 2>/dev/null)"
 authored_upsert "$id" "$owner" "$org" "$prob" "$title" "${pub:-false}" "${colls:-[]}" "$author" '[]'
 audit_log "upload" "id=$id by=$SESSION_LOGIN"
-ok_json '{action:"upload", id:$id, sha:$s}' --arg id "$id" --arg s "${sha:0:12}"
+ok_json '{action:"upload", id:$id, sha:$s, rev:$r}' --arg id "$id" --arg s "${sha:0:12}" --arg r "$rev"

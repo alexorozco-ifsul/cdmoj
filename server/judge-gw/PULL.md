@@ -12,18 +12,24 @@ inventário e **puxam jobs no heartbeat**. O escalonador é o próprio handler d
         ◀── {registered, config:{partition,reserve,disabled,cfg_hash}} ──
         (boot:true = restart do agente ⇒ o servidor RE-ENFILEIRA o que estava atribuído ao
          host — jobs e calibrações; e o agente adota a config ANTES do 1º heartbeat)
-  GET  /judge/package-meta?id ───────▶  handlers/judge/package-meta.sh ─▶ {checksum} (afeta-TL)
-  GET  /judge/package?id ────────────▶  handlers/judge/package.sh   ─▶ .tar.gz + X-Moj-Checksum
+  GET  /judge/package-meta?id ───────▶  handlers/judge/package-meta.sh ─▶ {checksum, tl_checksum}
+        (checksum = VERSÃO do pacote: tudo que afeta o TL + `sols/` INTEIRO — a chave do cache)
+  GET  /judge/package?id ────────────▶  handlers/judge/package.sh ─▶ .tar.gz + X-Moj-Checksum
+        (+ X-Moj-Tl-Checksum = o carimbo estreito, p/ diagnóstico)
   ...cacheia em ~/.cache/moj/problems/<id>, CALIBRA na 1ª vez (calibreitor → tl.<host>)...
   POST /judge/tl-report(id,checksum,tl)▶ handlers/judge/tl-report.sh ─▶ run/tl/<id>.json (por host)
-  POST /judge/heartbeat(state,inv,free_slots,total_slots,cfg_hash,status) ─▶ heartbeat.sh = ESCALONADOR
-        ◀── {assigned:[…]|null, update|null, command|null, reregister, config?} ──
-        (claim atômico; LOTE de até free_slots jobs; config por juiz quando o cfg_hash difere;
+  POST /judge/heartbeat(state,inv,free_slots,total_slots,cfg_hash,status,slot_cpus,max_free_group) ─▶ heartbeat.sh = ESCALONADOR
+        ◀── {assigned:[…]|null, update|null, command|null, reregister, config?, holding?} ──
+        (claim atômico; LOTE de até free_slots SLOTS — job de CPUNEEDED=k ocupa k_slots e leva
+         {test_cpus,same_numa,slots,par_max,par_cap}; config por juiz quando o cfg_hash difere;
          status ∈ ok|draining|disabled = auto-relato honesto; comando URGENTE kill|restart é
-         entregue MESMO ocupado — recuperação sem SSH, /ops/judge-reset)
+         entregue MESMO ocupado — recuperação sem SSH, /ops/judge-reset; holding = juiz
+         SEGURADO p/ um job largo)
+  POST /judge/decline(id|reqid|command, reason) ─▶ decline.sh ─▶ o job volta à fila (epoch novo,
+        backoff do host; 3ª recusa = Judge Error) — o agente não conseguiu alocar os slots
   ...julga com mojtools no CACHE local (tl.<host>): N SLOTS em paralelo, cada job PINADO
-     no cpuset do slot (partition off|numa|cpus:X + reserve — ver judges-config), cada um em
-     PROCESS GROUP próprio sob TETO de wall-clock DINÂMICO (TL×testes×margem) com kill...
+     na união dos seus grupos de k CPUs (partition off|numa|cpus:X + reserve — ver judges-config),
+     sob TETO de wall-clock DINÂMICO (TL×testes×margem) imposto pelo laço do agente (_kill_tree)...
   POST /judge/result(verdict,verdict_canon,score*,groups?,tests,html_b64) ─▶ handlers/judge/result.sh ─▶ spool "result"
   POST /judge/update-report(reqid,ok,log_b64) ─▶ update-report.sh ─▶ upd_done (fecha a calibração)
                                                                               │
@@ -40,14 +46,14 @@ inventário e **puxam jobs no heartbeat**. O escalonador é o próprio handler d
 | `server/api/v1/lib/tl-store.sh` | Store dos TLs reportados pelos juízes (`run/tl/<id>.json`, por host, por checksum); TL servível = **máx entre hosts**; `pkg_tl_checksum`, `index_problem_bg` (índice no servidor). |
 | `server/api/v1/lib/worker-auth.sh` | `require_worker`: Bearer `mojw_<token>` (compartilhado, 600). |
 | `server/api/v1/handlers/judge/register.sh` | Anuncia specs (CPU/mem/**GPU**) + inventário (problemas **em cache**) → `registry/<host>.json`. GPU só entra com **compute comprovado** (vendor nvidia/amd, do `nvidia-smi`/`rocm-smi`; lspci/erro de driver são descartados) e `capability=gpu` sem GPU real rebaixa p/ `pos`. |
-| `server/api/v1/handlers/judge/package{,-meta}.sh` | Serve o pacote do problema (.tar.gz) + checksum p/ o juiz cachear. |
-| `server/api/v1/handlers/judge/tl-report.sh` | Recebe o TL calibrado pelo juiz → `run/tl/<id>.json`; re-indexa o `var/jsons`. |
+| `server/api/v1/handlers/judge/package{,-meta}.sh` | Serve o pacote do problema (.tar.gz) + a **versão** (`pkg_judge_version`) p/ o juiz cachear; o `tl_checksum` estreito vai junto, p/ diagnóstico. |
+| `server/api/v1/handlers/judge/tl-report.sh` | Recebe o TL calibrado pelo juiz (valida a **versão** reportada) → `run/tl/<id>.json` sob o `tl_checksum`; re-indexa o `var/jsons`. |
 | `server/api/v1/handlers/judge/heartbeat.sh` | Pulso; reivindica 1 command OU 1 update OU um LOTE de até `free_slots` jobs (multi-slot) e devolve; entrega a CONFIG por juiz quando muda (`cfg_hash`). **É o escalonador.** |
 | `server/api/v1/handlers/judge/result.sh` | Recebe o veredicto do worker → spool "result" (judged finaliza). |
 | `server/api/v1/handlers/judge/update-report.sh` | Recebe o report de calibração (ok/log) → `registry.<host>.last_update`. |
 | `server/api/v1/handlers/ops/problemtl.sh` | (admin) TL de um problema, do store (máx entre hosts) + por host. |
 | `server/api/v1/handlers/judge/list.sh` | (admin) Dump dos juízes: specs + inventário + `last_update`. |
-| `mojtools/tl-checksum.sh` | Checksum (16 hex) dos arquivos que afetam o TL/compilação (conf+tests/input+sols/good+scripts/*, este último com o bit +x). |
+| `mojtools/tl-checksum.sh` | Checksum (16 hex) dos arquivos que afetam o TL/compilação (conf+tests/input+tests/output+tests/score+sols/good+scripts/*, este último com o bit +x). Com **`--all-sols`** soma `sols/{pass,slow,wrong,upcoming}` = a **versão do pacote** que o juiz usa como chave de cache. |
 | `judge/agent/moj-agent.sh` + `inventory.sh` | O agente (pull + **cache**). Roda 1 por capacidade. |
 | `server/etc/systemd/moj-agent@.service` | Unit do agente: `systemctl enable --now moj-agent@pos`. |
 
@@ -60,13 +66,26 @@ comando `result` e do `synctreino`. `contest-create.sh` ganhou `CONTEST_PRIORITY
 
 O juiz **não clona repositório**. Ele baixa o **pacote de cada problema** (sob demanda,
 no 1º job ou num pedido de calibração) p/ um **cache local** (`~/.cache/moj/problems/<id>`)
-e guarda, junto, o **checksum** dos arquivos que afetam o TL/compilação (`conf`+`tests/input`+
-`sols/good`+`scripts/*` da correção especial, este com o bit +x; via `mojtools/tl-checksum.sh`).
+e guarda, junto, o **`checksum`** que o `package-meta` devolveu — para o agente é um valor
+**opaco**: igual = cache bom, diferente = re-baixa.
+
+⚠ **Esse `checksum` é a VERSÃO do pacote** (`tl-checksum.sh --all-sols`: o conjunto que afeta o
+TL **mais `sols/` INTEIRO**), e não o `tl_checksum` estreito que amarra o TL (ver
+`docs/PACOTE.md` §10). Eram a mesma coisa até 2026-09-20, e aí mexer numa solução
+`pass`/`slow`/`wrong` não mudava nada para o juiz: o **Calibrar explícito também reaproveita o
+cache**, então o calibreitor varria o `sols/` do pacote **velho** (relato do Arthur Botelho —
+juiz rodando solução apagada, ignorando a nova, cada host com um conjunto diferente). Como o
+agente trata o valor como opaco, a troca valeu **sem mexer no repo `judge/`**.
+
 Na 1ª vez (ou quando o checksum muda) ele **calibra**
-(`calibreitor.sh` → `tl.<host>`) e **reporta** o TL ao MOJ (`POST /judge/tl-report`). O MOJ
-guarda o TL **por host, por checksum** (`run/tl/<id>.json`) e serve o **máximo entre os hosts**
-no `var/jsons` (conservador). Ao **relançar**, o agente re-reporta os TLs do cache (sem
-recalibrar). Se o problema muda, o checksum novo **descarta** o TL antigo (todos recalibram).
+(`calibreitor.sh` → `tl.<host>`) e **reporta** o TL ao MOJ (`POST /judge/tl-report`). O servidor
+CONFERE a versão reportada contra a atual (versão velha = `stale`, nada é gravado) e guarda o TL
+sob o **`tl_checksum` que ele mesmo calcula** (`run/tl/<id>.json`, por host — com a `pkg_version`
+ao lado, na entrada do host): é o carimbo estreito que diz se o TL vale, e ele **não** pode
+envelhecer porque alguém salvou uma solução `wrong`. Serve o **máximo entre os hosts** no
+`var/jsons` (conservador). Ao **relançar**, o agente re-reporta os TLs do cache (sem
+recalibrar). Se o pacote muda de verdade, o `tl_checksum` novo **descarta** o TL antigo (todos
+recalibram).
 O `POST /judge/calib-report` leva, além do log texto e dos `reports` (report.html por solução),
 o campo **`sols`** = o `.calib-sols.json` do calibreitor (a calibração POR EXTENSO:
 `[{file,lang,category,verdict,tests:[{name,code,time,tl}]}]`, ≤300 KB; cópia em
@@ -92,11 +111,24 @@ de um POST sem esses campos com o MESMO checksum (boot/agente velho não apagam 
   problemas novos/alterados (checksum ≠ o do TL guardado). `{all:true}` recalibra tudo.
 - **Calibração é IDEMPOTENTE** (lição do incidente 2026-07-15, quando 4 pedidos duplicados
   entupiram os 6 slots do juiz): `cal_request` é o choke-point único — se já existe calibração
-  **pendente ou em execução** p/ o mesmo problema (`upd_find_calibrate`, sob o lock do
-  `upd_claim`), devolve o `reqid` existente e NÃO cria outro job. Re-disparar `moj calibrate`,
+  **PENDENTE** p/ o mesmo problema (`upd_find_calibrate … pending`, sob o lock do
+  `upd_claim`), devolve o `reqid` existente e NÃO cria outro job. ⚠ **Só o pendente** desde
+  21/09/2026: quem está na fila ainda vai baixar a versão ATUAL quando for reivindicado, mas quem
+  **já está rodando** baixou a ANTERIOR — se o autor salva no meio (o fluxo de quem está
+  consertando solução) e pede outra, engolir o pedido significa que a versão nova nunca é
+  calibrada. No pior caso isto põe 1 job extra por job em voo, e a trava de verdade contra o
+  entupimento continua sendo o **dedup do agente** (full do mesmo checksum = pulada). Re-disparar `moj calibrate`,
   re-validar ou publicar em massa nunca multiplica jobs. O caminho direcionado
   (`request-calibration` com `hosts`) dedupa os comandos ainda não entregues por host
-  (`cmd_find_calibrate`). E o **publish** (`/problems/set-public`) só enfileira calibração se o
+  (`cmd_find_calibrate`). ⚠ **Calibração DIRIGIDA entregue deixa um MARCADOR** em
+  `updates/inprogress/<host>/cmd-<cmdid>.json` (20/09/2026): o comando some do diretório ao ser
+  entregue, e sem o marcador o servidor esquecia que o juiz estava calibrando — Painel sem
+  "calibrando…", `calib_targeted` de volta a 0 e `moj judges show` dizendo "rodando: nada" por
+  minutos. O marcador é **só p/ aparecer**: o escalonamento o ignora (`origin=="command"` filtrado
+  no `upd_find_calibrate` e na serialização por target do `upd_claim`), o heartbeat **não** o
+  re-carimba e o `upd_reconcile` o **apaga** em vez de devolvê-lo à fila (o trabalho já foi
+  entregue). Quem o remove no caso feliz é o próprio juiz, ao reportar (`tl-report`/`calib-report`).
+  E o **publish** (`/problems/set-public`) só enfileira calibração se o
   `tl-checksum` atual difere do checksum calibrado servido (`run/tl/<id>.json`) — publicar sem
   mudança de pacote responde `calibration:"up_to_date"` e não toca a fila.
 - **Indexar** (`var/jsons`, HTML do enunciado) roda **no servidor** (`index_problem_bg`, via o
@@ -113,13 +145,62 @@ de X cpus); `reserve` tira as N primeiras cpus dos slots (SO/agente); `disabled`
 
 - **Config por juiz** = `contests/treino/var/judges-config.json` (estado DESEJADO do admin;
   NUNCA no registry — o register o sobrescreve). Editada por `POST /ops/judge-config`
-  (`moj judges config <host> …` na CLI, ou a aba 🖥️ Máquinas). O heartbeat compara o
-  `cfg_hash` do agente com o vigente e entrega `config` quando difere; o agente **drena**
-  (espera os jobs em andamento) e aplica.
+  (`moj judges config <host> …` na CLI, ou a aba 🖥️ Máquinas), que **FUNDE** campos na entrada
+  do host (nunca a substitui). O heartbeat compara o `cfg_hash` do agente com o vigente e entrega
+  `config` quando difere; o agente **drena** (espera os jobs em andamento) e aplica. O `cfg_hash`
+  (`judges_config_for`) cobre **só `{partition,reserve,disabled}` normalizados** — nunca a entrada
+  inteira (`updated_at`/`by` e campos de escalonamento que só o servidor lê): hashear tudo fazia
+  qualquer edição drenar o juiz p/ reaplicar a mesma partição (bug (d), 24/09/2026). O agente, por
+  sua vez, adota sem drenar uma config igual à aplicada com hash novo, e **despacha o lote que veio
+  no mesmo beat da config** (antes descartava e os jobs esperavam o ASSIGN_TTL em assigned/).
+  Teste: `smoke-judge-config.sh`.
 - **Heartbeat multi-slot**: agente manda `free_slots`/`total_slots`; o handler entrega um
-  **lote `assigned:[…]`** de até `free_slots` jobs (agente ANTIGO sem `free_slots` recebe o
+  **lote `assigned:[…]`** de até `free_slots` **slots** (agente ANTIGO sem `free_slots` recebe o
   escalar de sempre). O registro guarda `free_slots`/`total_slots` p/ os painéis
-  (`/index/status` `judge.busy` = Σ slots ocupados, `judge.slots` = Σ slots).
+  (`/index/status` `judge.busy` = Σ slots ocupados, `judge.slots` = Σ slots,
+  `cpus_online` = Σ `total_slots×slot_cpus`).
+
+### Largura k (`CPUNEEDED`), `SAMENUMA` e testes em paralelo (24/09/2026)
+
+Os juízes oficiais são slots de **1 CPU**. Um problema com `CPUNEEDED=k` no `conf` pede **k CPUs
+por teste**: o servidor lê o conf do pacote por regex (`sched_pkg_par`, memoizado no sidecar
+`.cmeta` v2 = `v2\x01prob\x01need\x01lang\x01hosts\x01k\x01numa\x01par\x01m\x01memmb\x01enq\x01decl`)
+e o **claim é por largura**: o job cabe num juiz se `k_slots = ceil(k/slot_cpus) ≤ slots livres`,
+com `SAMENUMA=y` também `≤ max_free_group` (maior nº de slots livres num nó, do beat), e a memória
+por slot comporta o `MEMLIMITMB` (`max(600, MEMLIMITMB+64) ≤ (mem−4 GB)×k_slots/total_slots`).
+Não cabe ⇒ **pula** (backfill: o de 1 slot passa na frente; sem teto de varredura). O agente
+recebe `test_cpus`, `same_numa`, `slots` (= grupos × k_slots), `par_max` e `par_cap`, junta os
+slots num grupo por teste (`alloc_slots`, dentro de um nó; núcleos inteiros com SMT) e, se não
+conseguir (corrida), **recusa** por `POST /judge/decline` — o job volta à fila com epoch novo e
+`declined.<host>` (o host o pula por `DECLINE_BACKOFF`); a `DECLINE_MAX`-ésima recusa vira Judge
+Error. Juiz **legado** (beat sem `slot_cpus`) só recebe k=1, sem campos novos. A calibração de um
+problema largo ocupa k_slots (um teste por vez em k CPUs) — `upd_claim`/`cmd_claim` só entregam se
+cabe.
+
+- **HOLD (anti-fome do largo)**: job largo pendente há `HOLD_AFTER` (20 s, pela época de entrada
+  do cmeta — nunca pelo epoch do nome, que promoção/reconcile reescrevem) que passa nas portas de
+  algum juiz vivo, não-drenando, não-desabilitado e com capacidade (`total_slots ≥ k_slots`; numa:
+  maior nó ≥ k_slots) mas sem livres suficientes em nenhum ⇒ `run/hold/<host>.json
+  {job,k_slots,numa,since}` no juiz com mais livres. Enquanto há hold o juiz **não recebe jobs nem
+  updates novos** (`holding:true` no beat; comandos do admin passam) e, com `k_slots` livres, recebe
+  o segurado + o resto do lote. Solta ao ser reivindicado por qualquer juiz, juiz morto ou
+  `HOLD_TTL` (600 s; recriado se o job segue pendente). 1 hold por juiz; com a banda `020-prova`
+  não vazia, 1 hold no total. Juiz único: um hold pausa o claim por até a duração de um job.
+- **Infactível**: job largo pendente há `INFEASIBLE_AFTER` (120 s) com ≥1 juiz vivo e NENHUM
+  capaz ⇒ Judge Error pelo spool, no formato do `/judge/result` (host `scheduler`). Sem juiz vivo:
+  espera.
+- **Testes em paralelo (`par_max`)**: só com a política global `auto` (`judges-config.json`
+  chave `"*"` = `{parallel:off|auto, cushion:0.25, share_max:0.5}`; **nada disso vai ao agente**,
+  fora do `cfg_hash`), job com `ALLOWPARALLELTEST` (ausente = y), varredura terminada com a **fila
+  vazia** e **sem job pulado por porta de tempo/largura** (quem foi pulado vai querer slot em
+  segundos): a sobra além do colchão `ceil(total×cushion)` é repartida em rodízio (+k_slots por vez)
+  até `min(MAXPARALLELTESTS, parallel_max do juiz — default 4)` grupos e `share_max×total` slots
+  por job; `slots` do job = grupos×k_slots. Fora disso `par_max = 1`. Em prova a recomendação é
+  `off`. Não há shrink no meio do job: só expansão no claim + **liberação de cauda** (o
+  build-and-test anota em `released` os grupos que ficaram sem teste; o agente devolve os slots).
+- Registro `+ slot_cpus, slots_by_node, smt, max_free_group`; `/treino/admin/judges` mostra
+  `slots.{cpus,by_node,smt,max_free_group}`, `hold` e `policy`; `/ops/judge-config` aceita
+  `parallel_max` por host e a chave `"*"`. Teste: `smoke-sched-width.sh`.
 - **Relatório por juiz**: `GET /ops/judge-results?host=&limit=` — últimas correções (de
   `run/results/`, que carrega o `.host`) + agregado por host. CLI: `moj judges results`.
 
@@ -137,15 +218,19 @@ no servidor. Estados de um JOB (submissão): `spool/` → `queue/<banda>/` (q_en
 `q_done`) → `results/<id>.json`. De uma CALIBRAÇÃO: `updates/pending/` (`cal_request`,
 **idempotente**) → `updates/inprogress/<host>/` (upd_claim, carimbo `claimed_at`) → fechada por
 `/judge/update-report` (`upd_done`). Comandos por-host: `commands/<host>/` (`cmd_request`;
-urgentes kill|restart furam o gate de ocupado via `cmd_claim_urgent`).
+urgentes kill|restart furam o gate de ocupado via `cmd_claim_urgent`) — `calibrate` entregue vira
+o MARCADOR `inprogress/<host>/cmd-*.json` (display; some no report do juiz ou no TTL).
 
 | mecanismo | quando devolve à fila | roda onde |
 |---|---|---|
 | `q_reconcile` | host fora de `reg_live_hosts` (sem beat há `REG_TTL`=30s) OU `assigned_at` > `ASSIGN_TTL`=900s (teto p/ juiz VIVO: cabe a correção inteira, download incluso) | a cada heartbeat (throttle ~15s) |
-| `upd_reconcile` | host morto OU `claimed_at` > `UPD_TTL`=1800s | a cada heartbeat (throttle ~15s) |
+| `upd_reconcile` | host morto OU `claimed_at` > `UPD_TTL`=1800s (marcador `cmd-*` é APAGADO, não devolvido) | a cada heartbeat (throttle ~15s) |
 | `upd_touch_host` | (o oposto) re-carimba `claimed_at` das calibrações do host a cada beat de agente NOVO — calibração longa LEGÍTIMA não é re-enfileirada; o `UPD_TTL` vira proteção só de host morto/agente antigo | a cada heartbeat |
 | register `boot:true` | **na hora**: restart do agente devolve TUDO que estava atribuído ao host (`sched_requeue_host`) | no register de boot |
-| teto dinâmico do agente | o agente MATA o grupo de processos de um job/calibração presos (cap = TL×testes×margem) e reporta judge-error/calib-fail — o servidor fecha na hora (`q_done`/`upd_done`) | no juiz |
+| `hold_get`/`hold_sweep` | hold de job largo: solto quando o job foi reivindicado, o juiz morreu ou `HOLD_TTL`=600s (recriado se o job segue pendente) | a cada heartbeat (throttle `SWEEP_THROTTLE`=5s) |
+| `infeasible_sweep` | job largo pendente > `INFEASIBLE_AFTER`=120s sem juiz vivo capaz ⇒ Judge Error pelo spool | a cada heartbeat (throttle 5s) |
+| `/judge/decline` | o agente devolve o que não conseguiu alocar: epoch novo + `declined.<host>` (`DECLINE_BACKOFF`=60s); `DECLINE_MAX`=3 ⇒ Judge Error | no beat seguinte do agente |
+| teto dinâmico do agente | o LAÇO do agente MATA a ÁRVORE de processos de um job/calibração presos (`_kill_tree`, por parentesco — atravessa grupos de processos; cap = TL×testes×margem, prazo em `$TMPDIR/.deadline` do slot) e reporta judge-error/calib-fail — o servidor fecha na hora (`q_done`/`upd_done`) | no juiz |
 
 Corolário: nada se perde num restart (de qualquer peça) — no pior caso um job re-executa
 (idempotente por id em `results/`). E os reconciles só rodam DENTRO de um heartbeat: com TODOS
@@ -162,7 +247,9 @@ os agentes mortos a fila simplesmente pausa (nada expira errado).
    checksum NOVO sempre recalibra — pedido novo deliberado também). O `tl.<host>`/`tl` do
    pacote são substituídos ATOMICAMENTE pelo calibreitor (leitor nunca vê placeholder/tabela
    rasgada) e a tabela de trabalho da calibração é privada (`MOJ_TLFILE`).
-3. **Nenhum job roda sem teto**: wall-clock dinâmico + SIGKILL do process group no agente.
+3. **Nenhum job roda sem teto**: wall-clock dinâmico + `_kill_tree` (SIGSTOP+SIGKILL na árvore
+   inteira, por parentesco) no agente — o SIGKILL no process group não alcançava a subárvore
+   do `timeout` (pgroup próprio) e o job "morto" seguia nas CPUs do slot seguinte.
 4. **Recuperação sem SSH**: `/ops/judge-reset` (kill|restart, furando o gate de ocupado) +
    `/ops/calib-cancel` (purga pendentes). `disable` continua sendo só drenagem (não é recovery).
 5. **Config por juiz nunca diverge no restart**: precedência servidor (register) > estado
@@ -193,6 +280,11 @@ os agentes mortos a fila simplesmente pausa (nada expira errado).
 | `REG_TTL` | `30` | s; heartbeat mais velho = worker morto |
 | `ASSIGN_TTL` | `900` | s; teto de paciência com juiz **vivo** (juiz morto volta na hora, pelo `REG_TTL`). Tem de caber a correção inteira + o download do pacote: era 120 e revogava job de problema pesado no meio — a submissão recomeçava em outro juiz (incidente 24/08/2026). Teste: `smoke-sched-reclaim.sh` |
 | `COLD_GRACE` | `8` | s; juiz que NÃO tem o problema em cache só reivindica após isso |
+| `HOLD_AFTER` / `HOLD_TTL` | `20` / `600` | s; job largo pendente há HOLD_AFTER segura um juiz (`run/hold/<host>.json`); o hold vence em HOLD_TTL |
+| `INFEASIBLE_AFTER` | `120` | s; job largo sem juiz vivo capaz vira Judge Error |
+| `DECLINE_BACKOFF` / `DECLINE_MAX` | `60` / `3` | s que o host que recusou pula o job / recusas até Judge Error |
+| `PARALLEL_MAX_DEFAULT` | `4` | teto de testes ao mesmo tempo por job (por juiz: `parallel_max` no judges-config) |
+| `SWEEP_THROTTLE` | `5` | s entre varreduras de hold/infactível |
 | `POOL_GRACE` | `0` | s; job com `allowed_hosts` (pool): `0` = ESTRITO (só o pool julga; offline = fila espera), `>0` = qualquer juiz após esse tempo |
 | `JUDGE_CACHE` | `~/.cache/moj/problems` | (juiz) cache local de pacotes por problema |
 | `MOJ_PROBLEMS_DIR` | `…/moj-problems` | (servidor) store dos pacotes servidos aos juízes |

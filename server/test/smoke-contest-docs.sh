@@ -1,10 +1,14 @@
 #!/bin/bash
 # smoke-contest-docs.sh — GATES dos documentos da prova (fase × papel × publicação):
-# - caderno/times publicados: sede (.staff/.cstaff) vê ANTES do início; TIME só após o start;
+# - caderno/times publicados: só admin/chefe/juiz veem ANTES do início; sede (.staff/.cstaff),
+#   .mon e TIME só após o start (decisão do Ribas, 2026-09-15: o caderno na mão da sede antes da
+#   prova é a prova vazada);
 # - info-sheet: publicado = visível (logística);
 # - EDITORIAL: publicar exige contest_over_for_all (e o download do time idem — prorrogação
 #   por sede segura o editorial); notícia anexando caderno antes do início é recusada.
-# Os arquivos de doc são FAKES gravados direto (a geração real é coberta em produção).
+# - .odt (o intermediário editável, 25/09/2026): SÓ admin/juiz-chefe baixam (juiz, sede e time = 403);
+# - a CAPA abre com o template padrão (não vazia); salvar o padrão sem mexer não cria cópia no contest.
+# Os arquivos de doc são FAKES gravados direto (a geração real é coberta pelo render-docs.sh).
 set -u
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/router.sh"
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
@@ -24,9 +28,10 @@ fx_user "$C" time01 s3nha "Time 01"
 fx_user "$C" dprova.admin adm "Admin"
 fx_user "$C" sede.cstaff st "Chefe de Sede"
 fx_user "$C" apoio.staff st "Apoio"
+fx_user "$C" juiz.judge st "Juiz"
 
 mkses(){ printf 'CONTEST=%q\nLOGIN=%q\nUSERFULLNAME=%q\nLOGINAT=1\n' dprova "$1" "$1" > "$SESS/$2"; }
-mkses dprova.admin tok-adm; mkses time01 tok-time; mkses sede.cstaff tok-cstaff; mkses apoio.staff tok-staff
+mkses dprova.admin tok-adm; mkses time01 tok-time; mkses sede.cstaff tok-cstaff; mkses apoio.staff tok-staff; mkses juiz.judge tok-judge
 
 # docs fake + index.json (publish exige o arquivo; a listagem lê o índice)
 for t in info-sheet contest times editorial; do printf '%%PDF-fake' > "$C/docs/$t.pt.pdf"; done
@@ -41,22 +46,29 @@ pass=0; fail=0
 ck(){ if eval "$2"; then echo "  ok: $1"; ((pass++)); else echo "  FAIL: $1 :: ${OUT:0:200}"; ((fail++)); fi; }
 J(){ jq -r "$1" <<<"$BODY" 2>/dev/null; }
 
-echo "== ANTES do início: sede vê publicado, time não =="
+echo "== ANTES do início: juiz vê publicado; sede e time NÃO (só o info-sheet) =="
 adm '{"action":"publish","type":"contest","lang":"pt"}'
 ck "publica caderno (sem news)"       '[[ "$(J .ok)" == true ]]'
 adm '{"action":"publish","type":"times","lang":"pt"}'
 adm '{"action":"publish","type":"info-sheet","lang":"pt"}'
+call /contest/doc GET '' tok-judge
+ck "juiz LISTA caderno pré-início"    '[[ "$(J "[.docs[].type]|index(\"contest\")")" != null ]]'
 call /contest/doc GET '' tok-cstaff
-ck "cstaff LISTA caderno pré-início"  '[[ "$(J "[.docs[].type]|index(\"contest\")")" != null ]]'
+ck "cstaff NÃO lista caderno/times pré-início" '[[ "$(J "[.docs[].type]|index(\"contest\")")" == null && "$(J "[.docs[].type]|index(\"times\")")" == null ]]'
+ck "cstaff lista o info-sheet"        '[[ "$(J "[.docs[].type]|index(\"info-sheet\")")" != null ]]'
 call /contest/doc GET '' tok-staff ''
-ck "staff idem"                       '[[ "$(J "[.docs[].type]|index(\"times\")")" != null ]]'
+ck "staff idem (sem times)"           '[[ "$(J "[.docs[].type]|index(\"times\")")" == null ]]'
 call /contest/doc GET '' tok-time
 ck "time NÃO lista caderno/times"     '[[ "$(J "[.docs[].type]|index(\"contest\")")" == null && "$(J "[.docs[].type]|index(\"times\")")" == null ]]'
 ck "time LISTA info-sheet"            '[[ "$(J .success)" == true && "$(J "[.docs[].type]|index(\"info-sheet\")")" != null ]]'
 call /contest/doc GET '' tok-time 'type=contest&lang=pt&fmt=pdf'
 ck "time baixa caderno -> 404"        '[[ "$OUT" == *"Status: 404"* ]]'
 call /contest/doc GET '' tok-cstaff 'type=contest&lang=pt&fmt=pdf'
-ck "cstaff baixa caderno -> 200"      '[[ "$OUT" == *"Status: 200"* && "$OUT" == *PDF-fake* ]]'
+ck "cstaff baixa caderno pré-início -> 404" '[[ "$OUT" == *"Status: 404"* ]]'
+call /contest/doc GET '' tok-staff 'type=times&lang=pt&fmt=pdf'
+ck "staff baixa times pré-início -> 404" '[[ "$OUT" == *"Status: 404"* ]]'
+call /contest/doc GET '' tok-judge 'type=contest&lang=pt&fmt=pdf'
+ck "juiz baixa caderno -> 200"        '[[ "$OUT" == *"Status: 200"* && "$OUT" == *PDF-fake* ]]'
 call /contest/doc GET '' tok-time 'type=info-sheet&lang=pt&fmt=pdf'
 ck "time baixa info-sheet -> 200"     '[[ "$OUT" == *"Status: 200"* ]]'
 adm '{"action":"publish","type":"contest","lang":"pt","news":true}'
@@ -81,7 +93,9 @@ printf '[{"regex":"^sedex","end":%s,"reason":"prorrogada"}]' "$((NOW+1800))" > "
 call /contest/doc GET '' tok-time 'type=editorial&lang=pt&fmt=pdf'
 ck "prorrogou DEPOIS: time -> 404"    '[[ "$OUT" == *"Status: 404"* ]]'
 call /contest/doc GET '' tok-cstaff 'type=editorial&lang=pt&fmt=pdf'
-ck "sede segue baixando (publicado)"  '[[ "$OUT" == *"Status: 200"* ]]'
+ck "sede também espera o fim p/ todos -> 404" '[[ "$OUT" == *"Status: 404"* ]]'
+call /contest/doc GET '' tok-judge 'type=editorial&lang=pt&fmt=pdf'
+ck "juiz baixa o editorial publicado" '[[ "$OUT" == *"Status: 200"* ]]'
 rm -f "$C/time-overrides.json"
 
 echo "== COMEÇOU: time baixa caderno/times =="
@@ -90,6 +104,8 @@ call /contest/doc GET '' tok-time 'type=contest&lang=pt&fmt=pdf'
 ck "pós-início: caderno -> 200"       '[[ "$OUT" == *"Status: 200"* ]]'
 call /contest/doc GET '' tok-time
 ck "listagem inclui caderno agora"    '[[ "$(J "[.docs[].type]|index(\"contest\")")" != null ]]'
+call /contest/doc GET '' tok-cstaff 'type=contest&lang=pt&fmt=pdf'
+ck "pós-início: sede baixa o caderno" '[[ "$OUT" == *"Status: 200"* ]]'
 call /contest/doc GET '' tok-time 'type=editorial&lang=pt&fmt=pdf'
 ck "editorial em prova -> 404"        '[[ "$OUT" == *"Status: 404"* ]]'
 adm '{"action":"publish","type":"contest","lang":"pt","news":true}'
@@ -125,6 +141,25 @@ ck "agora vem o gerado"               '[[ "$OUT" == *"PDF-gerado-diferente"* ]]'
 adm "{\"action\":\"upload\",\"type\":\"times\",\"lang\":\"es\",\"pdf_b64\":\"$(printf 'nao sou pdf' | base64 -w0)\"}"
 ck "não-PDF recusado"                 '[[ "$BODY" == *pdf_invalid* ]]'
 
+echo "== PDF ENVIADO num contest que NUNCA gerou nada (sem index.json) aparece e publica =="
+# relato do Ribas (2026-09-14): "enviei o PDF inteiro e não deixa publicar" — o doc_index saía
+# antes de varrer os enviados quando o index.json não existia; a UI não via a linha e não
+# desenhava o botão. O servidor sempre aceitou o publish; a lista é que escondia.
+mv "$C/docs/index.json" "$C/docs/index.json.bak"
+adm "{\"action\":\"upload\",\"type\":\"editorial\",\"lang\":\"en\",\"pdf_b64\":\"$PDF64\"}"
+ck "upload sem index.json aceito"     '[[ "$(J .saved)" == true ]]'
+call /contest/admin/docs GET '' tok-adm
+ck "lista mostra o enviado (uploaded)" '[[ "$(J "[.docs[]|select(.type==\"editorial\" and .lang==\"en\")|.uploaded]|first")" == true ]]'
+ck "e nada mais (index inexistente)"  '[[ "$(J ".docs|length")" == 1 ]]'
+conf "$((NOW-10800))" "$((NOW-3600))"        # editorial só publica depois do fim
+adm '{"action":"publish","type":"editorial","lang":"en"}'
+ck "publica sem index.json"           '[[ "$(J .ok)" == true ]]'
+call /contest/doc GET '' tok-cstaff
+ck "organização lista o enviado"      '[[ "$(J "[.docs[]|select(.type==\"editorial\" and .lang==\"en\" and .published==true)]|length")" == 1 ]]'
+adm '{"action":"unpublish","type":"editorial","lang":"en"}'
+adm '{"action":"upload","type":"editorial","lang":"en","remove_upload":true}'
+mv "$C/docs/index.json.bak" "$C/docs/index.json"
+
 echo "== resources.json: type/lang + gate de fase (a aba Contest agrupa por documento) =="
 call /contest/resources GET '' tok-adm
 ck "documento traz type e lang"       '[[ "$(J "[.items[]|select(.type==\"contest\" and .lang==\"pt\")]|length")" == 1 ]]'
@@ -133,7 +168,42 @@ call /contest/resources GET '' tok-time
 ck "time não vê caderno pré-início"   '[[ "$(J "[.items[]|select(.type==\"contest\")]|length")" == 0 ]]'
 ck "…mas vê o info-sheet"             '[[ "$(J "[.items[]|select(.type==\"info-sheet\")]|length")" -ge 1 ]]'
 call /contest/resources GET '' tok-cstaff
-ck "sede vê tudo (organização)"       '[[ "$(J "[.items[]|select(.type==\"contest\")]|length")" -ge 1 ]]'
+ck "sede NÃO vê o caderno pré-início" '[[ "$(J "[.items[]|select(.type==\"contest\")]|length")" == 0 ]]'
+call /contest/resources GET '' tok-judge
+ck "juiz vê o caderno (organização)"  '[[ "$(J "[.items[]|select(.type==\"contest\")]|length")" -ge 1 ]]'
+
+echo "== .odt editável: só a organização =="
+fx_user "$C" chefe.cjudge st "Chefe"; mkses chefe.cjudge tok-chief
+printf 'PK-fake-odt' > "$C/docs/contest.pt.odt"
+call /contest/doc GET '' tok-adm 'type=contest&lang=pt&fmt=odt'
+ck "admin baixa o .odt (ODT, attachment)" '[[ "$OUT" == *"Status: 200"* && "$OUT" == *"application/vnd.oasis.opendocument.text"* && "$OUT" == *attachment* && "$OUT" == *PK-fake-odt* ]]'
+call /contest/doc GET '' tok-chief 'type=contest&lang=pt&fmt=odt'
+ck "juiz-chefe baixa o .odt"            '[[ "$OUT" == *"Status: 200"* && "$OUT" == *PK-fake-odt* ]]'
+call /contest/doc GET '' tok-judge 'type=contest&lang=pt&fmt=odt'
+ck "juiz NÃO (mesmo publicado) -> 403"  '[[ "$OUT" == *"Status: 403"* && "$BODY" == *odt_org_only* ]]'
+conf "$((NOW-3600))" "$((NOW+3600))"         # prova em andamento: o PDF já é do time — o .odt não
+call /contest/doc GET '' tok-time 'type=contest&lang=pt&fmt=pdf'
+ck "(controle) time baixa o PDF do caderno na prova" '[[ "$OUT" == *"Status: 200"* ]]'
+call /contest/doc GET '' tok-time 'type=contest&lang=pt&fmt=odt'
+ck "time NÃO baixa o .odt -> 403"       '[[ "$OUT" == *"Status: 403"* ]]'
+call /contest/doc GET '' tok-cstaff 'type=contest&lang=pt&fmt=odt'
+ck "sede NÃO baixa o .odt -> 403"       '[[ "$OUT" == *"Status: 403"* ]]'
+call /contest/doc GET '' tok-adm 'type=times&lang=pt&fmt=odt'
+ck ".odt não gerado -> 404"             '[[ "$OUT" == *"Status: 404"* ]]'
+conf "$((NOW+3600))" "$((NOW+10800))"
+
+echo "== capa: o editor abre com o template padrão =="
+call /contest/admin/docs GET '' tok-adm
+ck "capa pt = template padrão (com marcadores), custom=false" '[[ "$(J .templates.cover.pt)" == *"{{CONTEST_NAME}}"* && "$(J .templates.cover.pt)" == *"{.session}"* && "$(J .custom.cover.pt)" == false ]]'
+ck "capa en/es e info sheet também vêm (padrão)" '[[ "$(J .templates.cover.en)" == *"Contest Session"* && "$(J .templates.cover.es)" == *"Cuadernillo"* && "$(J .custom.info_sheet.pt)" == false && -n "$(J .templates.info_sheet.pt)" ]]'
+DEF="$(J .templates.cover.pt)"
+adm "$(jq -cn --arg v "$DEF" '{action:"config", cover_pt:$v}')"
+ck "salvar o padrão sem mexer NÃO cria cópia (segue o padrão)" '[[ ! -e "$C/docs/cover.pt.md" ]]'
+adm "$(jq -cn --arg v "$DEF" '{action:"config", cover_pt:($v + "\nLinha nova da capa\n")}')"
+call /contest/admin/docs GET '' tok-adm
+ck "editou: a cópia do contest vale (custom=true)" '[[ -s "$C/docs/cover.pt.md" && "$(J .custom.cover.pt)" == true && "$(J .templates.cover.pt)" == *"Linha nova da capa"* ]]'
+adm '{"action":"config","cover_pt":""}'
+ck "vazio = volta ao padrão"            '[[ ! -e "$C/docs/cover.pt.md" ]]'
 
 echo; echo "passed=$pass failed=$fail"
 (( fail == 0 ))

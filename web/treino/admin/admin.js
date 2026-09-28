@@ -114,7 +114,7 @@ function makeSessionsTab() {
       tb.append(el('tr', {},
         el('td', {}, cb),
         el('td', {}, el('div', { class: 'cell-user' },
-          avatarEl(s.login, s.name, 28),
+          avatarEl(s.login, s.name, 28, s.has_photo),   // sem foto = iniciais, sem pedir (era 1 GET/sessão)
           el('div', {},
             el('div', {}, s.name || s.login || '—'),
             el('div', { class: 'lg' }, '~' + (s.login || '?'))))),
@@ -646,30 +646,65 @@ function makeJudgesTab() {
     if (data.has_machine_list && (data.machines || []).length) {
       body.append(el('div', { class: 'section-head', style: 'margin-top:1rem' },
         T('Juízes — ', 'Judges — ') + data.machines_online + '/' + data.machines_count + ' online'));
-      // célula de SLOTS: partição vigente (do agente) + form da config desejada (o agente
-      // drena os jobs em andamento e aplica; 'moj judges config' faz o mesmo pela CLI)
+      // POLÍTICA GLOBAL de testes em paralelo (judges-config chave "*"): off = todo job com par_max 1
+      // (o recomendado em prova); auto = a sobra de slots além do colchão vira testes em paralelo.
+      // Nada disso vai ao agente (fora do cfg_hash): mudar aqui NÃO drena juiz nenhum.
+      const pol = data.policy || {};
+      const polSel = el('select', { class: 'small' });
+      [['off', T('desligado (recomendado em prova)', 'off (recommended in contests)')], ['auto', T('auto (sobra de slots vira testes em paralelo)', 'auto (spare slots become parallel tests)')]]
+        .forEach(([v, l]) => polSel.append(el('option', { value: v }, l)));
+      polSel.value = pol.parallel === 'auto' ? 'auto' : 'off';
+      const polCus = el('input', { type: 'text', value: String(pol.cushion != null ? pol.cushion : 0.25), style: 'width:3.5rem', title: T('colchão: fração dos slots que NUNCA vira teste em paralelo (0..1)', 'cushion: fraction of the slots that NEVER becomes parallel tests (0..1)') });
+      const polShare = el('input', { type: 'text', value: String(pol.share_max != null ? pol.share_max : 0.5), style: 'width:3.5rem', title: T('fração máxima dos slots do juiz que UM job pode tomar (0..1)', 'max fraction of a judge\'s slots ONE job may take (0..1)') });
+      const polBtn = el('button', { class: 'btn ghost', type: 'button', style: 'font-size:.82em;padding:.1rem .5rem' }, T('Aplicar', 'Apply'));
+      polBtn.onclick = async () => {
+        polBtn.disabled = true; polBtn.textContent = '…';
+        try {
+          await apiPost('/ops/judge-config', { host: '*', parallel: polSel.value, cushion: parseFloat(polCus.value) || 0, share_max: parseFloat(polShare.value) || 0 }, G());
+          setTimeout(load, 1500);
+        } catch (e) { alert(T('Falha na política: ', 'Policy failed: ') + e); polBtn.disabled = false; polBtn.textContent = T('Aplicar', 'Apply'); }
+      };
+      body.append(el('div', { class: 'row small', style: 'gap:.4rem;align-items:center;flex-wrap:wrap;margin:.3rem 0 .5rem' },
+        el('b', {}, T('Testes em paralelo:', 'Parallel tests:')), polSel,
+        el('span', { class: 'muted' }, T('colchão', 'cushion')), polCus,
+        el('span', { class: 'muted' }, T('máx. por job', 'max per job')), polShare, polBtn,
+        el('span', { class: 'muted' }, T('— só vale p/ problemas com ALLOWPARALLELTEST; não drena juiz (fora do cfg_hash)', '— only for problems with ALLOWPARALLELTEST; never drains a judge (outside cfg_hash)'))));
+      // célula de SLOTS: partição vigente (do agente) + LARGURA (cpus do menor slot, slots por nó,
+      // SMT, hold) + form da config desejada (o agente drena os jobs em andamento e aplica;
+      // 'moj judges config' faz o mesmo pela CLI; parallel_max NÃO drena — é só do servidor)
       const slotsCell = (mc) => {
         const cfg = mc.config || {};
         const cur = mc.partition || 'off';
+        const sl = mc.slots || {};
         const wrap = el('div', {});
-        wrap.append(el('div', {}, (((mc.slots && mc.slots.total) || 1) + ' slot(s) · ' + cur)
+        wrap.append(el('div', {}, ((sl.total || 1) + ' slot(s) · ' + cur)
+          + (sl.cpus != null ? (' · ' + sl.cpus + T(' CPU/slot', ' CPU/slot')) : '')
           + (cfg.partition && cfg.partition !== cur ? ' → ' + cfg.partition + T(' (aplicando…)', ' (applying…)') : '')
           + (cfg.disabled ? T(' · ⛔ desabilitado', ' · ⛔ disabled') : '')));
+        const byNode = sl.by_node && Object.keys(sl.by_node).length > 1
+          ? Object.entries(sl.by_node).map(([n, k]) => T('nó ', 'node ') + n + ': ' + k).join(' · ') : '';
+        if (byNode || sl.smt) wrap.append(el('div', { class: 'muted', style: 'font-size:.82em' },
+          byNode + (sl.smt ? (byNode ? ' · ' : '') + 'SMT' : '')
+          + (sl.max_free_group != null && byNode ? T(' · maior grupo livre ', ' · largest free group ') + sl.max_free_group : '')));
+        if (mc.hold && mc.hold.job) wrap.append(el('div', { class: 'small', style: 'color:#9a6700', title: T('juiz SEGURADO: não recebe trabalho novo até ter os slots livres p/ este job largo (CPUNEEDED)', 'judge HELD: gets no new work until it has the free slots for this wide job (CPUNEEDED)') },
+          '⏳ ' + T('segurado p/ ', 'held for ') + mc.hold.job + ' (' + mc.hold.k_slots + ' slots' + (mc.hold.numa ? ', NUMA' : '') + ')'));
         const sel = el('select', { class: 'small', style: 'max-width:8rem' });
-        ['off', 'numa', 'cpus:4', 'cpus:8', 'cpus:16'].forEach(v => sel.append(el('option', { value: v }, v)));
-        sel.value = ['off', 'numa', 'cpus:4', 'cpus:8', 'cpus:16'].includes(cfg.partition || cur) ? (cfg.partition || cur) : 'off';
+        ['off', 'numa', 'cpus:1', 'cpus:2', 'cpus:4', 'cpus:8', 'cpus:16'].forEach(v => sel.append(el('option', { value: v }, v)));
+        sel.value = ['off', 'numa', 'cpus:1', 'cpus:2', 'cpus:4', 'cpus:8', 'cpus:16'].includes(cfg.partition || cur) ? (cfg.partition || cur) : 'off';
         const res = el('input', { type: 'text', value: String(cfg.reserve || 0), title: T('cpus reservadas p/ o SO (fora dos slots)', 'cpus reserved for the OS (outside the slots)'), style: 'width:3rem' });
+        const pmax = el('input', { type: 'text', value: String(cfg.parallel_max || 4), title: T('teto de testes ao mesmo tempo por job NESTE juiz (parallel_max; só o servidor lê — não drena)', 'ceiling of tests at once per job ON THIS judge (parallel_max; server-side only — no drain)'), style: 'width:2.6rem' });
         const dis = el('input', { type: 'checkbox', title: T('desabilitar (drena e para de receber trabalho)', 'disable (drains and stops receiving work)') }); dis.checked = !!cfg.disabled;
         const btn = el('button', { class: 'btn ghost', type: 'button', style: 'font-size:.82em;padding:.1rem .5rem' }, T('Aplicar', 'Apply'));
         btn.onclick = async () => {
           btn.disabled = true; btn.textContent = '…';
           try {
-            await apiPost('/ops/judge-config', { host: mc.host, partition: sel.value, reserve: parseInt(res.value, 10) || 0, disabled: dis.checked }, G());
+            await apiPost('/ops/judge-config', { host: mc.host, partition: sel.value, reserve: parseInt(res.value, 10) || 0, disabled: dis.checked, parallel_max: parseInt(pmax.value, 10) || 4 }, G());
             setTimeout(load, 2500);
           } catch (e) { alert(T('Falha na config: ', 'Config failed: ') + e); btn.disabled = false; btn.textContent = T('Aplicar', 'Apply'); }
         };
         wrap.append(el('div', { class: 'row', style: 'gap:.25rem;align-items:center;flex-wrap:wrap;margin-top:.2rem' },
-          sel, res, el('label', { class: 'row', style: 'gap:.15rem' }, dis, el('span', { class: 'muted', style: 'font-size:.8em' }, 'off')), btn));
+          sel, res, el('span', { class: 'muted', style: 'font-size:.8em' }, T('P≤', 'P≤')), pmax,
+          el('label', { class: 'row', style: 'gap:.15rem' }, dis, el('span', { class: 'muted', style: 'font-size:.8em' }, 'off')), btn));
         return wrap;
       };
       const tb = el('tbody');
@@ -987,67 +1022,164 @@ function makeAuditTab() {
 }
 
 // ============================ aba: Contests ============================
+// Escopo vem da API (/treino/admin/contests: super-admin vê tudo; .admin comum vê os seus e os de
+// criadores sem papel de admin). Aqui: filtros em memória (busca, dono, modo, situação, ordem) e a
+// permissão de criar como LISTA com trilha (quem liberou, quando), pessoa resolvida p/ nome + perfil.
+const statLink = (login, name) => el('a', { href: '/treino/stat/?user=' + encodeURIComponent(login), title: login }, name || login);
+function personCell(login, name, hasPhoto, extra) {
+  const box = el('div', { class: 'row', style: 'gap:.45rem;align-items:center;flex-wrap:nowrap' },
+    avatarEl(login, name || login, 24, !!hasPhoto),
+    el('div', {}, el('div', {}, statLink(login, name), extra || ''),
+      el('div', { class: 'small muted', style: 'font-family:var(--mono)' }, login,
+        name ? '' : el('span', { class: 'muted' }, ' · ' + T('conta não existe', 'account does not exist')))));
+  return box;
+}
 function makeContestsTab() {
   const panel = el('div', { class: 'section' });
   panel.append(el('h2', {}, '🏆 Contests'));
 
+  // ---------- quem pode criar contests e problemas ----------
   const thr = el('input', { type: 'number', min: '0', style: 'width:90px' });
-  const allow = el('textarea', { rows: '2', placeholder: T('logins separados por espaço ou vírgula', 'logins separated by space or comma'), style: 'width:100%' });
-  const deny = el('textarea', { rows: '2', placeholder: T('logins separados por espaço ou vírgula', 'logins separated by space or comma'), style: 'width:100%' });
+  const thrSave = el('button', { class: 'btn ghost' }, T('Salvar limite', 'Save threshold'));
   const permMsg = el('div', { class: 'small' });
-  const saveBtn = el('button', { class: 'btn' }, T('Salvar permissões', 'Save permissions'));
-  const parseList = (s) => (s || '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true; permMsg.className = 'small'; permMsg.textContent = T('Salvando…', 'Saving…');
-    try {
-      await apiPost('/treino/admin/contest-perms', { threshold: num(thr.value), allow: parseList(allow.value), deny: parseList(deny.value) }, G());
-      permMsg.className = 'small'; permMsg.textContent = T('✓ salvo', '✓ saved'); saveBtn.disabled = false;
-    } catch (e) { saveBtn.disabled = false; permMsg.className = 'small error-box'; permMsg.textContent = e.message || T('falha', 'failed'); }
-  });
+  const listsBox = el('div', {});
+  let PERMS = null;
+  const say = (t, err) => { permMsg.className = err ? 'small error-box' : 'small'; permMsg.textContent = t || ''; };
+  async function permPost(body) {
+    say(T('Salvando…', 'Saving…'));
+    try { const r = await apiPost('/treino/admin/contest-perms', body, G()); say(T('✓ salvo', '✓ saved')); renderPerms(r); }
+    catch (e) { say(e.message || T('falha', 'failed'), true); }
+  }
+  thrSave.addEventListener('click', () => permPost({ action: 'threshold', threshold: num(thr.value) }));
+  function permTable(kind, info) {
+    const allow = kind === 'allow';
+    const login = el('input', { placeholder: 'login', style: 'width:12rem;font-family:var(--mono)' });
+    const note = el('input', { placeholder: T('nota (opcional)', 'note (optional)'), style: 'flex:1;min-width:10rem' });
+    const add = el('button', { class: 'btn' + (allow ? '' : ' danger'), onclick: () => {
+      const l = login.value.trim(); if (!l) { login.focus(); return; }
+      permPost({ action: 'add', list: kind, login: l, note: note.value.trim() }).then(() => { login.value = ''; note.value = ''; });
+    } }, allow ? T('✅ Liberar', '✅ Allow') : T('⛔ Bloquear', '⛔ Block'));
+    login.addEventListener('keydown', (e) => { if (e.key === 'Enter') add.click(); });
+    const tb = el('tbody');
+    (info || []).forEach((u) => {
+      const rm = el('button', { class: 'btn ghost danger small', title: T('remover da lista', 'remove from the list'), onclick: () => {
+        if (!confirm(T(`Tirar ${u.login} da lista?`, `Remove ${u.login} from the list?`))) return;
+        permPost({ action: 'remove', list: kind, login: u.login });
+      } }, '✕');
+      tb.append(el('tr', {},
+        el('td', {}, personCell(u.login, u.name, u.has_photo)),
+        el('td', { class: 'small' }, u.by ? statLink(u.by, u.by_name) : el('span', { class: 'muted' }, T('(antes da trilha)', '(before the audit trail)'))),
+        el('td', { class: 'small', style: 'white-space:nowrap' }, u.at ? fmtDate(u.at) : '—'),
+        el('td', { class: 'small' }, u.note || ''),
+        el('td', {}, rm)));
+    });
+    const table = el('table', { class: 'moj narrow' },
+      el('thead', {}, el('tr', {}, el('th', {}, T('Pessoa', 'Person')),
+        el('th', {}, allow ? T('Liberado por', 'Allowed by') : T('Bloqueado por', 'Blocked by')), el('th', {}, T('Quando', 'When')), el('th', {}, T('Nota', 'Note')), el('th', {}, ''))), tb);
+    return el('div', { class: 'field' },
+      el('label', {}, allow ? T('✅ Liberados (allow)', '✅ Allowed (allow)') : T('⛔ Bloqueados (deny)', '⛔ Blocked (deny)'),
+        el('span', { class: 'small muted' }, ` · ${(info || []).length}`)),
+      (info || []).length ? el('div', { class: 'chart-wrap' }, table) : el('div', { class: 'small muted' }, allow ? T('Ninguém liberado por lista.', 'Nobody allowed by list.') : T('Ninguém bloqueado.', 'Nobody blocked.')),
+      el('div', { class: 'row', style: 'gap:.4rem;align-items:center;margin-top:.35rem;flex-wrap:wrap' }, login, note, add));
+  }
+  function renderPerms(r) {
+    PERMS = r; const p = r.perms || {};
+    if (document.activeElement !== thr) thr.value = p.threshold || 0;
+    listsBox.innerHTML = ''; listsBox.append(permTable('allow', r.allow_info), permTable('deny', r.deny_info));
+  }
   const permBox = el('div', { class: 'section', style: 'background:#fafcff' },
     el('h3', { style: 'margin:.1rem 0 .5rem' }, T('Quem pode criar contests e problemas', 'Who can create contests and problems')),
-    el('p', { class: 'muted small' }, T('Esta mesma permissão controla a criação de contests E a criação de problemas/coleções na Gestão de Problemas. Usuários .admin sempre podem. Além deles: a lista “liberados” OU quem atingir o limite de problemas resolvidos. A lista “bloqueados” impede até quem atingiria o limite.', 'This same permission controls creating contests AND creating problems/collections in Problem Management. .admin users always can. Beyond them: the “allowed” list OR whoever reaches the solved-problems threshold. The “blocked” list stops even those who would reach the threshold.')),
-    el('div', { class: 'field' }, el('label', {}, T('Liberar automaticamente quem resolveu ≥', 'Auto-allow whoever solved ≥')), thr, el('span', { class: 'small muted' }, T(' problemas (0 = desativado)', ' problems (0 = disabled)'))),
-    el('div', { class: 'field' }, el('label', {}, T('✅ Liberados (allow)', '✅ Allowed (allow)')), allow),
-    el('div', { class: 'field' }, el('label', {}, T('⛔ Bloqueados (deny)', '⛔ Blocked (deny)')), deny),
-    el('div', { class: 'row' }, saveBtn, permMsg));
-
-  const listBox = el('div', {}, loading());
-
+    el('p', { class: 'muted small' }, T('Esta mesma permissão controla a criação de contests E a criação de problemas/coleções na Gestão de Problemas. Usuários .admin sempre podem. Além deles: a lista “liberados” OU quem atingir o limite de problemas resolvidos. A lista “bloqueados” impede até quem atingiria o limite. Cada linha registra quem liberou e quando.', 'This same permission controls creating contests AND creating problems/collections in Problem Management. .admin users always can. Beyond them: the “allowed” list OR whoever reaches the solved-problems threshold. The “blocked” list stops even those who would reach the threshold. Each row records who granted it and when.')),
+    el('div', { class: 'field' }, el('label', {}, T('Liberar automaticamente quem resolveu ≥', 'Auto-allow whoever solved ≥')),
+      el('div', { class: 'row', style: 'gap:.4rem;align-items:center' }, thr, el('span', { class: 'small muted' }, T('problemas (0 = desativado)', 'problems (0 = disabled)')), thrSave)),
+    listsBox, permMsg);
   async function loadPerms() {
-    try {
-      const r = await apiGet('/treino/admin/contest-perms', G()); const p = r.perms || {};
-      thr.value = p.threshold || 0; allow.value = (p.allow || []).join(' '); deny.value = (p.deny || []).join(' ');
-    } catch { permMsg.className = 'small error-box'; permMsg.textContent = T('Falha ao carregar permissões.', 'Failed to load permissions.'); }
+    try { renderPerms(await apiGet('/treino/admin/contest-perms', G())); }
+    catch { say(T('Falha ao carregar permissões.', 'Failed to load permissions.'), true); }
   }
-  async function loadList() {
-    listBox.innerHTML = ''; listBox.append(loading());
-    let r; try { r = await apiGet('/treino/admin/contests', G()); }
-    catch (e) { listBox.innerHTML = ''; listBox.append(errBox(T('Falha ao carregar: ', 'Failed to load: ') + (e.message || T('erro', 'error')))); return; }
-    const cs = r.contests || []; listBox.innerHTML = '';
-    if (!cs.length) { listBox.append(el('div', { class: 'muted' }, T('Nenhum contest criado pela interface ainda.', 'No contest created via the interface yet.'))); return; }
-    const tb = el('tbody');
-    cs.forEach((c) => {
-      const rm = el('button', { class: 'btn danger', onclick: async () => {
+
+  // ---------- contests criados pela interface ----------
+  let ALL = [], META = { scope: 'admin', me: '', is_superadmin: false };
+  const norm = (v) => String(v || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const q = el('input', { placeholder: T('buscar: nome, id, dono…', 'search: name, id, owner…'), style: 'min-width:14rem' });
+  const ownerSel = el('select', {}, el('option', { value: '' }, T('todos os donos', 'all owners')));
+  const modeSel = el('select', {}, el('option', { value: '' }, T('todos os modos', 'all modes')));
+  const statusSel = el('select', {},
+    el('option', { value: '' }, T('qualquer situação', 'any status')), el('option', { value: 'running' }, T('em andamento', 'running')),
+    el('option', { value: 'upcoming' }, T('por vir', 'upcoming')), el('option', { value: 'ended' }, T('encerrados', 'ended')));
+  const sortSel = el('select', {},
+    el('option', { value: 'created' }, T('mais recentes', 'newest first')), el('option', { value: 'start' }, T('por início', 'by start')),
+    el('option', { value: 'name' }, T('por nome', 'by name')), el('option', { value: 'owner' }, T('por dono', 'by owner')));
+  const mineChk = el('input', { type: 'checkbox' });
+  const count = el('span', { class: 'small muted' });
+  const scopeNote = el('p', { class: 'small muted', style: 'margin:.2rem 0 .5rem' });
+  const tableBox = el('div', {}, loading());
+  const statusOf = (c) => { const now = Date.now() / 1000; if (c.start && now < c.start) return 'upcoming'; if (c.end && now > c.end) return 'ended'; return 'running'; };
+  const STATUS = () => ({ running: [T('em andamento', 'running'), 'v-ok'], upcoming: [T('por vir', 'upcoming'), 'v-warn'], ended: [T('encerrado', 'ended'), ''] });
+  const dt = (e) => (e ? new Date(e * 1000).toLocaleString(undefined, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+  function renderList() {
+    const f = norm(q.value), own = ownerSel.value, md = modeSel.value, st = statusSel.value;
+    let rows = ALL.filter((c) => (!mineChk.checked || c.owner === META.me)
+      && (!own || c.owner === own) && (!md || (c.mode || '') === md) && (!st || statusOf(c) === st)
+      && (!f || norm(c.name).includes(f) || norm(c.id).includes(f) || norm(c.owner).includes(f) || norm(c.owner_name).includes(f)));
+    const cmp = { created: (a, b) => (b.created_at || 0) - (a.created_at || 0), start: (a, b) => (b.start || 0) - (a.start || 0),
+      name: (a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)), owner: (a, b) => String(a.owner_name || a.owner).localeCompare(String(b.owner_name || b.owner)) }[sortSel.value] || (() => 0);
+    rows = rows.slice().sort(cmp);
+    count.textContent = T(`${rows.length} de ${ALL.length}`, `${rows.length} of ${ALL.length}`);
+    tableBox.innerHTML = '';
+    if (!ALL.length) { tableBox.append(el('div', { class: 'muted' }, T('Nenhum contest criado pela interface no seu escopo.', 'No contest created via the interface in your scope.'))); return; }
+    if (!rows.length) { tableBox.append(el('div', { class: 'muted' }, T('Nenhum contest casa com os filtros.', 'No contest matches the filters.'))); return; }
+    const tb = el('tbody'); const ST = STATUS();
+    rows.forEach((c) => {
+      const canRemove = META.is_superadmin || c.owner === META.me;
+      const rm = el('button', { class: 'btn danger small', onclick: async () => {
         if (!confirm(T('Remover o contest "', 'Remove the contest "') + (c.name || c.id) + T('"? (vai para a lixeira, reversível pelo servidor)', '"? (goes to trash, reversible by the server)'))) return;
         try { await apiPost('/treino/admin/contest-remove', { contest: c.id }, G()); loadList(); }
         catch (e) { alert(T('Falha ao remover: ', 'Failed to remove: ') + (e.message || T('erro', 'error'))); }
       } }, T('Remover', 'Remove'));
+      const sk = statusOf(c);
       tb.append(el('tr', {},
-        el('td', {}, el('b', {}, c.name || c.id), el('div', { class: 'small muted' }, c.id)),
+        el('td', {}, el('b', {}, c.name || c.id), el('div', { class: 'small muted', style: 'font-family:var(--mono)' }, c.id)),
         el('td', { class: 'small' }, c.mode || '—'),
-        el('td', { class: 'small' }, '~' + (c.owner || '?')),
-        el('td', { class: 'small' }, c.created_at ? fmtDate(c.created_at) : '—'),
+        el('td', {}, personCell(c.owner, c.owner_name, c.owner_has_photo, c.owner_is_admin ? el('span', { class: 'pill', style: 'margin-left:.35rem' }, 'admin') : '')),
+        el('td', { class: 'small', style: 'white-space:nowrap' }, dt(c.start), ' → ', dt(c.end), el('div', {}, el('span', { class: 'verdict ' + ST[sk][1], style: 'font-size:.72rem;padding:.1rem .45rem' }, ST[sk][0]))),
+        el('td', { class: 'n' }, String(c.problems_count ?? '—')),
+        el('td', { class: 'small', style: 'white-space:nowrap' }, c.created_at ? fmtDate(c.created_at) : '—'),
         el('td', {}, el('div', { class: 'row-actions' },
-          el('a', { class: 'btn ghost', href: '/contest/?c=' + encodeURIComponent(c.id), target: '_blank' }, T('Abrir', 'Open')),
-          el('a', { class: 'btn ghost', href: '/contest/score/?c=' + encodeURIComponent(c.id), target: '_blank' }, T('Placar', 'Scoreboard')),
-          rm))));
+          el('a', { class: 'btn ghost small', href: '/contest/?c=' + encodeURIComponent(c.id), target: '_blank' }, T('Abrir', 'Open')),
+          el('a', { class: 'btn ghost small', href: '/contest/score/?c=' + encodeURIComponent(c.id), target: '_blank' }, T('Placar', 'Scoreboard')),
+          canRemove ? rm : ''))));
     });
-    listBox.append(el('div', { class: 'chart-wrap' }, el('table', { class: 'moj' },
-      el('thead', {}, el('tr', {}, el('th', {}, 'Contest'), el('th', {}, T('Modo', 'Mode')), el('th', {}, T('Dono', 'Owner')), el('th', {}, T('Criado', 'Created')), el('th', {}, T('Ações', 'Actions')))), tb)));
+    tableBox.append(el('div', { class: 'chart-wrap' }, el('table', { class: 'moj' },
+      el('thead', {}, el('tr', {}, el('th', {}, 'Contest'), el('th', {}, T('Modo', 'Mode')), el('th', {}, T('Dono', 'Owner')), el('th', {}, T('Período', 'Period')),
+        el('th', { class: 'n' }, T('Probl.', 'Probl.')), el('th', {}, T('Criado', 'Created')), el('th', {}, T('Ações', 'Actions')))), tb)));
   }
+  function rebuildSelects() {
+    const keepO = ownerSel.value, keepM = modeSel.value;
+    const owners = new Map(); const modes = new Map();
+    ALL.forEach((c) => { const o = owners.get(c.owner) || { name: c.owner_name, n: 0 }; o.n++; owners.set(c.owner, o); modes.set(c.mode || '', (modes.get(c.mode || '') || 0) + 1); });
+    [...ownerSel.querySelectorAll('option')].slice(1).forEach((o) => o.remove());
+    [...owners.entries()].sort((a, b) => String(a[1].name || a[0]).localeCompare(String(b[1].name || b[0])))
+      .forEach(([login, o]) => ownerSel.append(el('option', { value: login }, `${o.name || login} (${login}) · ${o.n}`)));
+    [...modeSel.querySelectorAll('option')].slice(1).forEach((o) => o.remove());
+    [...modes.keys()].filter(Boolean).sort().forEach((m) => modeSel.append(el('option', { value: m }, `${m} · ${modes.get(m)}`)));
+    ownerSel.value = keepO; modeSel.value = keepM;
+  }
+  async function loadList() {
+    let r; try { r = await apiGet('/treino/admin/contests', G()); }
+    catch (e) { tableBox.innerHTML = ''; tableBox.append(errBox(T('Falha ao carregar: ', 'Failed to load: ') + (e.message || T('erro', 'error')))); return; }
+    ALL = r.contests || []; META = { scope: r.scope || 'admin', me: r.me || '', is_superadmin: !!r.is_superadmin };
+    scopeNote.textContent = META.is_superadmin
+      ? T('Você é super-admin: vê e opera os contests de todos.', 'You are a super-admin: you see and operate everyone\'s contests.')
+      : T('Você vê os seus contests e os de criadores sem papel de admin. Contests de outros administradores não aparecem.', 'You see your own contests and those of creators without an admin role. Contests of other administrators are not shown.');
+    rebuildSelects(); renderList();
+  }
+  [q, ownerSel, modeSel, statusSel, sortSel, mineChk].forEach((x) => x.addEventListener(x === q ? 'input' : 'change', renderList));
+  const filters = el('div', { class: 'row', style: 'gap:.5rem;align-items:center;flex-wrap:wrap;margin:.3rem 0 .5rem' },
+    q, ownerSel, modeSel, statusSel, sortSel,
+    el('label', { class: 'row', style: 'gap:.3rem;align-items:center;cursor:pointer' }, mineChk, el('span', { class: 'small' }, T('só os meus', 'only mine'))), count);
 
-  panel.append(permBox, el('h3', { style: 'margin:1rem 0 .3rem' }, T('Contests criados pela interface', 'Contests created via the interface')), listBox);
+  panel.append(permBox, el('h3', { style: 'margin:1rem 0 .3rem' }, T('Contests criados pela interface', 'Contests created via the interface')), scopeNote, filters, tableBox);
   function load() { loadPerms(); loadList(); }
   return { panel, load };
 }
@@ -1254,6 +1386,8 @@ function makeManagedTab() {
     (skipped || []).forEach(s => box.append(el('div', { class: 'small error-box', style: 'margin-top:.3rem' },
       `${s.fullname || s.login || '?'}: ${s.reason}`)));
     credsBox.append(box);
+    // a caixa nasce no TOPO da aba: traz p/ a vista (no celular, e com a lista longa, ela nascia fora da tela)
+    if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   function renderList() {
@@ -1298,22 +1432,33 @@ function makeManagedTab() {
   async function post(path, payload) {
     return apiPost(path, payload, G());
   }
+  // um pedido de senha por vez: sem isto, cada clique a mais gerava OUTRA senha e só a última vale
+  let busy = false;
+  const working = (txt) => { msg.className = 'small'; msg.textContent = txt; };
   async function resetPw(u) {
+    if (busy) return;
     if (!confirm(T(`Gerar senha NOVA para ${u.login}? A atual deixa de valer e as sessões caem.`,
       `Generate a NEW password for ${u.login}? The current one stops working and sessions are dropped.`))) return;
+    busy = true; working(T(`⏳ Gerando senha nova para ${u.login}…`, `⏳ Generating a new password for ${u.login}…`));
     try { const j = await post('/treino/admin/managed-reset', { login: u.login });
+      msg.textContent = '';
       showCreds([{ login: j.login, password: j.password, fullname: u.fullname }]); }
     catch (e) { msg.className = 'small error-box'; msg.textContent = e.message; }
+    finally { busy = false; }
   }
   async function toggleDisabled(u) {
+    if (busy) return;
     const dis = !u.disabled;
     if (!confirm(dis ? T(`Desabilitar ${u.login}?`, `Disable ${u.login}?`)
       : T(`Reabilitar ${u.login}? Uma senha nova será gerada.`, `Enable ${u.login}? A new password will be generated.`))) return;
+    busy = true; working(dis ? T(`⏳ Desabilitando ${u.login}…`, `⏳ Disabling ${u.login}…`) : T(`⏳ Reabilitando ${u.login}…`, `⏳ Enabling ${u.login}…`));
     try {
       const j = await post('/treino/admin/managed-update', { login: u.login, disabled: dis });
+      msg.textContent = '';
       if (j.password) showCreds([{ login: u.login, password: j.password, fullname: u.fullname }]);
       await load();
     } catch (e) { msg.className = 'small error-box'; msg.textContent = e.message; }
+    finally { busy = false; }
   }
   async function removeU(u) {
     if (!confirm(T(`REMOVER a conta ${u.login} (${u.fullname})? As submissões ficam arquivadas em .removed-users.`,

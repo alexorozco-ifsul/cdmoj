@@ -1,7 +1,9 @@
 # lib/verdict.sh — política de EXIBIÇÃO do veredicto ao competidor (fonte ÚNICA).
 #
 # O history em disco guarda a string de DISPLAY completa (com score embutido, ex.
-# "Wrong,60p. Pontos | 30 | 0 |") e NÃO muda — a canonização é só na LEITURA. O que o
+# "Time Limit Exceeded,30p. Pontos | 30 | 0 |" — com grupos, o prefixo é o pior teste; o legado
+# "Wrong,60p. …"/"Wrong. Pontos …", de antes de 24/09/2026, segue lido como Wrong Answer) e NÃO
+# muda — a canonização é só na LEITURA. O que o
 # competidor recebe nos endpoints de history é sempre o rótulo CANÔNICO
 # (Accepted/Wrong Answer/Time Limit Exceeded/Memory Limit Exceeded/Runtime Error/
 # Compilation Error/Judge Error); o DETALHE (score/grupos/testes) sai só pelo
@@ -62,8 +64,21 @@ showlog_effective() {
 #     "Possible Runtime Error"/"Unknown ERROR" -> "Runtime Error");
 #   - string desconhecida passa INTACTA — histories antigos têm "Wrong package format",
 #     "Wrong Problem ID", "Language 'x' not availale", …: NUNCA canonizar por prefixo.
-# Uso (awk): awk -F: "$VERDICT_CANON_AWK"'{ ... canon(v) ... }'
-VERDICT_CANON_AWK='function canon(v,  orig, ign, head) {
+# VEREDICTO MANUAL COM TEXTO PARA O TIME (2026-09-14): a opção do juiz-chefe tem 3 campos —
+# rótulo do juiz, CLASSE (uma das 6 canônicas: é o que pontua/penaliza) e texto que o TIME vê.
+# O history guarda `<classe>¦<texto>` (marcador U+00A6, nunca ':'); canon() classifica pela
+# CLASSE (tira o `¦…` antes de tudo) e canon_team()/vteam devolvem o TEXTO (ou a classe canônica
+# quando não há texto). Quem fala com o TIME usa canon_team; quem pontua/agrupa usa canon.
+VERDICT_CLASSES="Accepted|Wrong Answer|Time Limit Exceeded|Memory Limit Exceeded|Runtime Error|Compilation Error"
+VERDICT_TEAM_SEP='¦'
+verdict_class_ok(){ case "$1" in Accepted|"Wrong Answer"|"Time Limit Exceeded"|"Memory Limit Exceeded"|"Runtime Error"|"Compilation Error") return 0;; esac; return 1; }
+# Uso (awk): awk -F: "$VERDICT_CANON_AWK"'{ ... canon(v) ... canon_team(v) ... }'
+VERDICT_CANON_AWK='function canon_team(v,  t) {
+  t = index(v, "¦"); if (t > 0) return substr(v, t + length("¦"))   # length("¦") = 1 em UTF-8, 2 em locale C (a imagem)
+  return canon(v)
+}
+function canon(v,  orig, ign, head) {
+  sub(/¦.*$/, "", v)
   orig = v
   if (v ~ /^(Not Answered Yet|On queue|Running)/) return orig
   ign = ""
@@ -107,7 +122,8 @@ penalty_codes_normalize() {
 
 VERDICT_CANON_JQ='def vcanon:
   if . == null then null else
-  . as $orig
+  (split("¦")[0]) as $orig
+  | $orig
   | if test("^(Not Answered Yet|On queue|Running)") then $orig
     else
       (if test(" \\(Ignored\\)$") then " (Ignored)" else "" end) as $ign
@@ -124,4 +140,8 @@ VERDICT_CANON_JQ='def vcanon:
             else $orig end
         end
     end
-  end;'
+  end;
+def vteam:
+  if . == null then null
+  elif test("¦") then (split("¦") | .[1:] | join("¦"))
+  else vcanon end;'

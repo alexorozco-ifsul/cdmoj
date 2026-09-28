@@ -4,8 +4,13 @@
 import { apiGet, apiGetText, apiGetTextMeta } from '/shared/api.js';
 import { status, logout } from '/shared/auth.js';
 import { el, fmtDate } from '/shared/ui.js';
-import { flagManifest } from '/shared/flags.js';
+import { flagManifest, flagName } from '/shared/flags.js';
+import { mountContestUserChip } from '/shared/contest-shell.js';
+import { mountSiteFooter } from '/shared/site-footer.js';
 import { parseICPC, renderICPC } from './score-icpc.js';
+// a LÓGICA dos filtros (enriquecer times, casar bandeira/sede/escola) mora em score-filters.js —
+// fonte única com a Participação Virtual; aqui ficam só o ESTADO da página e a barra
+import * as F from './score-filters.js';
 import { parseOBI, renderOBI } from './score-obi.js';
 import { parseGeneric, renderGeneric } from './score-generic.js';
 import { T, setLang, getLang } from '/shared/i18n.js';
@@ -18,7 +23,6 @@ let isAuth = false;
 let regions = [];
 let teamsMeta = [];      // regras regex -> país/escola
 let teamsDir = {};       // /contest/teams: login -> {team,univ_short,univ_full,flag,region,has_logo}
-let flagNames = {};      // code(lower) -> nome (p/ título da bandeira e rótulo do filtro)
 let activeCountry = '';
 let activeSchool = '';
 let anonMode = false;       // placar anônimo (agregado, sem desempenho individual)
@@ -104,13 +108,7 @@ function startCountdown() {
 // ---- regiões -----------------------------------------------------------------
 // t casa com a região ativa? Por NOME (t._region, vindo do /contest/teams, == sede
 // explícita do time) OU pelo regex no login (clássico) — qualquer um serve.
-function regionMatch(t) {
-  if (!activeRegion) return true;
-  if (activeRegion.regex) { const re = safeRe(activeRegion.regex); if (re && re.test(t.username || '')) return true; }
-  if (activeRegion.name && (t._region || '') &&
-      String(t._region).toLowerCase() === String(activeRegion.name).toLowerCase()) return true;
-  return false;
-}
+function regionMatch(t) { return F.regionMatch(t, activeRegion); }
 function setRegion(r) {
   activeRegion = (r && (r.name || r.regex)) ? { name: r.name || '', regex: r.regex || '' } : null;
   if (activeRegion) localStorage.setItem('moj_score_region_' + CONTEST, JSON.stringify(activeRegion));
@@ -119,94 +117,26 @@ function setRegion(r) {
 }
 // sedes para o <select>: a ÁRVORE do regions.json (achatada, subregião indentada — é a curadoria
 // do organizador e pode filtrar por regex) mais as sedes que aparecem no placar e não estão lá.
-function regionOptions() {
-  const out = [];
-  const walk = (list, depth) => (list || []).forEach(r => {
-    if (r.regex || r.name) out.push({ name: r.name || '', regex: r.regex || '', depth });
-    if (Array.isArray(r.subregions) && r.subregions.length) walk(r.subregions, depth + 1);
-  });
-  walk(regions, 0);
-  const seen = new Set(out.map(o => (o.name || '').toLowerCase()));
-  ((parsed && parsed.teams) || []).forEach(t => {
-    const n = t._region || ''; if (!n || seen.has(n.toLowerCase())) return;
-    seen.add(n.toLowerCase()); out.push({ name: n, regex: '', depth: 0 });
-  });
-  return out;
-}
+function regionOptions() { return F.regionOptions(regions, (parsed && parsed.teams) || []); }
 
 // ---- país / escola (teams-meta) ---------------------------------------------
-function safeRe(rx) { try { return new RegExp(rx, 'i'); } catch { return null; } }
 // EXPLÍCITO primeiro (/contest/teams — o `.team` por-usuário + assets): preenche o que o
 // TXT não trouxe, marca a sede (t._region, filtro por nome) e aponta o BRASÃO p/ a rota
 // team-logo. O teams-meta (regex) roda depois, só nos vazios.
 // O 📷 VOLTOU (R4, 2026-08-30 — revoga a decisão de 2026-08-24 de tirá-lo): photoUrl é
 // preenchido de has_photo e o render só o mostra com o placar ABERTO (opts.showPhotos =
 // !frozenView) — durante o freeze a foto denunciaria quem está presente/ativo.
-function applyTeamsDir(p) {
-  if (!p || !(p.mode === 'icpc' || p.mode === 'obi')) return;
-  let anyFlag = false;
-  p.teams.forEach(t => {
-    // o TXT do placar já traz bandeira e sigla: quem não está no diretório (time removido do
-    // store, vindo de USERS_FROM…) precisa entrar nos filtros do mesmo jeito.
-    if (!t._country && t.flag) { t._country = t.flag; t.flagTitle = t.flagTitle || flagNames[String(t.flag).toLowerCase()] || t.flag; }
-    if (!t._school && t.univShort) t._school = t.univShort;
-    const d = teamsDir[t.username || ''];
-    if (!d) return;
-    if (d.flag) {
-      if (!t.flag) { t.flag = d.flag; anyFlag = true; }
-      t._country = d.flag;
-      t.flagTitle = flagNames[String(d.flag).toLowerCase()] || d.flag;
-    }
-    if (d.univ_short && !t.univShort) t.univShort = d.univ_short;
-    if (d.univ_full && !t.univFull) t.univFull = d.univ_full;
-    if (d.region) t._region = d.region;
-    t._school = t._school || t.univShort || '';
-    if (d.has_logo && !t.schoolLogo) {
-      t.schoolLogo = '/api/v1/contest/team-logo?contest=' + encodeURIComponent(CONTEST) + '&user=' + encodeURIComponent(t.username || '');
-    }
-    if (d.has_photo) {
-      t.photoUrl = '/api/v1/contest/team-photo?contest=' + encodeURIComponent(CONTEST) + '&user=' + encodeURIComponent(t.username || '');
-    }
-    if (d.ai) t.aiDeclared = true;
-  });
-  if (anyFlag && p.mode === 'obi') p.hasFlag = true;
-}
-function applyTeamsMeta(p) {
-  if (!p || !(p.mode === 'icpc' || p.mode === 'obi') || !teamsMeta.length) return;
-  let anyFlag = false;
-  const compiled = teamsMeta.map(r => ({ ...r, _re: safeRe(r.regex || '') }));
-  p.teams.forEach(t => {
-    const u = t.username || '';
-    t._country = t._country || ''; t._school = t._school || t.univShort || '';
-    const rule = compiled.find(r => r._re && r._re.test(u));
-    if (!rule) return;
-    if (rule.country) {
-      if (!t.flag) { t.flag = rule.country; anyFlag = true; }
-      t._country = rule.country;
-      t.flagTitle = flagNames[String(rule.country).toLowerCase()] || rule.country;
-    }
-    if (rule.school && !t.univShort) t.univShort = rule.school;
-    if (rule.school_full && !t.univFull) t.univFull = rule.school_full;
-    if (rule.logo && !t.schoolLogo) t.schoolLogo = rule.logo;   // brasão por-time (teamsDir) vence
-    t._school = rule.school || t.univShort || '';
-  });
-  if (anyFlag && p.mode === 'obi') p.hasFlag = true;
-}
+function applyTeamsDir(p) { F.applyTeamsDir(p, teamsDir, CONTEST); }
+function applyTeamsMeta(p) { F.applyTeamsMeta(p, teamsMeta); }
 // casamento ESTRITO (igual ao do relatório): quem não tem o dado NÃO casa. Era
 // `t._country !== undefined && …`, então time sem bandeira aparecia em QUALQUER filtro de
 // bandeira — pedir "Santa Catarina" trazia de volta todo mundo sem bandeira.
-const eqi = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+const eqi = F.eqi;
 // Bandeira casa por HIERARQUIA (2026-08-30): valor sem hífen é PAÍS e agrega os estados
 // (br casa br E br-*) — time brasileiro declara bandeira de ESTADO e "filtrar o Brasil"
 // tem de juntá-los; valor com hífen (br-pr) segue exato. Mesma regra do by_country das
 // estatísticas (prefixo) e do filtro do relatório.
-function countryMatch(t) {
-  if (!activeCountry) return true;
-  const c = String(t._country || '').toLowerCase();
-  if (!c) return false;
-  if (activeCountry.includes('-')) return c === activeCountry;
-  return c === activeCountry || c.startsWith(activeCountry + '-');
-}
+function countryMatch(t) { return F.countryMatch(t, activeCountry); }
 function combinedFilterFn() {
   if (!activeRegion && !activeCountry && !activeSchool) return null;
   return (t) => {
@@ -327,7 +257,7 @@ function renderFilters() {
   realBar.innerHTML = '';
   while (bar.firstChild) realBar.append(bar.firstChild);
 }
-function flagLabel(c) { return flagNames[String(c).toLowerCase()] || String(c).toUpperCase(); }
+function flagLabel(c) { return flagName(c); }
 // contador: quantos times a seleção deixou visíveis. Com filtro ativo o placar RENUMERA
 // (R1, 2026-08-30 — revoga o "nunca renumera"): nº grande = posição no recorte, .plg = a
 // geral; no ICPC a ★ passa a ser a do recorte, e o contador avisa.
@@ -433,7 +363,7 @@ async function fetchGenPlace() {
   const data = lines.slice(1).filter(Boolean);
   if (!data.length) return;
   let p = null;
-  if (/^icpc/.test(mode)) p = parseICPC(data, BALLOONS, mode.split(/\s+/).includes('s'));
+  if (/^icpc/.test(mode)) p = parseICPC(data, BALLOONS, mode.split(/\s+/).includes('s'), mode.split(/\s+/).includes('g'));
   else if (/^obi/.test(mode)) p = parseOBI(data);
   if (!p) return;
   const m = {};
@@ -487,7 +417,7 @@ async function pollScore() {
     document.getElementById('scoreContainer').innerHTML = `<span class="muted">${T('Placar ainda não gerado.', 'Scoreboard not generated yet.')}</span>`;
   } else if (/^icpc/.test(mode)) {
     // flag `s` na linha do modo = células em SEGUNDOS (R6) — o parse exibe minutos
-    parsed = parseICPC(dataLines, BALLOONS, mode.split(/\s+/).includes('s'));
+    parsed = parseICPC(dataLines, BALLOONS, mode.split(/\s+/).includes('s'), mode.split(/\s+/).includes('g'));
   } else if (/^obi/.test(mode)) {
     parsed = parseOBI(dataLines);
   } else {
@@ -517,9 +447,19 @@ async function boot() {
   document.getElementById('contestTitle').textContent = basic.contest_name || 'Contest';
   document.getElementById('backBtn').href = '/contest/?c=' + encodeURIComponent(CONTEST);
   startCountdown();
+  // PARTICIPAÇÃO VIRTUAL: prova encerrada + módulo ligado ⇒ link p/ a página (no site PRINCIPAL:
+  // por subdomínio o token do treino não existe aqui). Conveniência — quem decide é a API de lá.
+  if ((basic.modules || []).includes('virtual') && basic.end_time && Date.now() / 1000 > basic.end_time) {
+    const sub = location.host.toLowerCase().startsWith(String(CONTEST).toLowerCase() + '.');
+    const base = sub ? location.protocol + '//' + location.host.replace(/^[^.]+\./, '') : '';
+    document.getElementById('virtualLink').href = base + '/treino/virtual/?c=' + encodeURIComponent(CONTEST);
+    document.getElementById('virtualNotice').classList.remove('hidden');
+  }
 
   const st = await status(CONTEST);
   isAuth = !!st.logged_in;
+  mountContestUserChip(st);   // nome · login no cabeçalho, como nas outras páginas (issue #29)
+  mountSiteFooter().catch(() => {});
   document.getElementById('publicNotice').classList.toggle('hidden', isAuth);
 
   // nav + balões + regiões + times (auth quando possível; tolerante a falha)
@@ -546,8 +486,8 @@ async function boot() {
           stage: [st2.name, st2.venue].filter(Boolean).join(', ') + (st2.when ? ' — ' + st2.when : '') }; }));
     if (!Object.keys(classified).length) classified = null;
   }
-  (mani.countries || []).forEach(c => { flagNames[c.code] = c.name; });
-  (mani.br_states || []).forEach(s => { flagNames['br-' + s.code] = s.name; });
+  // (nome da bandeira: flagName de shared/flags.js — fonte única; o mapa manual daqui colidia
+  //  UF com país, issue #21)
 
   // controles (busca, bandeira, universidade, sede e coorte vivem na barra: renderFilters)
   document.getElementById('noAnim').addEventListener('change', (e) => { noAnim = e.target.checked; });

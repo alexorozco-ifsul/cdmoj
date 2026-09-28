@@ -9,25 +9,49 @@ import { createEditor } from '/shared/editor.js';
 import { makeLangPicker } from '/shared/contest-config/lang-picker.js';
 import { openHtmlReport } from '/shared/submission-links.js';
 import { T } from '/shared/i18n.js';
+import { STMT_LANGS, STMT_SHORT, stmtName } from '/shared/statement-langs.js';
+import { decorateSamples } from '/shared/statement-samples.js';
+import { makeTestRun, testsTable } from '/problemas/testrun.js';
+import { expectPill, expectWant, expectGot, summaryText, validatorText, pendingLabel } from '/problemas/readiness.js';
+import { makeIssues } from '/problemas/issues.js';
 
 const CONTEST = 'treino';
 let MODE = 'new', ID = '', REPO = '', OWNER = '', EDITABLE = true, REPOS = [], loadedPublic = false;
 let langPicker = null;                                       // restrição de linguagem de submissão por-problema
 let enunEd = null, editEd = null;                            // enunciado (modo single) + resolução/editorial
-let descEd = null, entEd = null, saiEd = null, obsEd = null;  // editores modulares (lazy, modo "separado")
-let stmtMode = 'single';                                      // 'single' | 'modular'
+// modo "separado" (Descrição/Entrada/Saída/Observações) é POR IDIOMA (pedido do Ribas, 15/09): o PT usa
+// os mounts fixos do HTML (#enunModular); cada tradução ganha o seu bloco, criado ao separar.
+let stmtModeOf = {};                                          // lang -> 'single' | 'modular' (ausente = single)
+let modEds = {};                                              // lang -> {descricao, entrada, saida, observacoes} (CodeMirror)
+let modBoxes = {};                                            // lang -> contêiner das 4 seções (pt = #enunModular)
+let transSingle = {};                                         // lang -> mount do editor único da tradução
 let PENDING_EDITORIAL = '';                                  // editorial carregado, aplicado quando a aba Resolução abre
+// TRADUÇÕES do enunciado/editorial (docs/enunciado.<lang>.md, docs/solucao.<lang>.md, docs/notes/<sample>.<lang>.md,
+// titles{<lang>} no meta): TRANS[lang] = {title, enunciado_md, editorial_md, notes:{sampleN: md}}; a nota
+// traduzida vive no DOM do exemplo (.exexpl-l[data-lang]) e é colhida no save; idioma removido vai como null.
+let TRANS = {}; const TRANS_REMOVED = new Set();
+let curStmtLang = 'pt', curEdLang = 'pt';                     // idioma ativo na aba Enunciado / Resolução
+let transEd = {}, transEdEd = {};                             // lang -> CodeMirror (enunciado / editorial traduzidos)
 let scrEntries = [];   // scripts/ (correção especial) — EDITÁVEL na sub-aba "⚙ correção" (Soluções & Correção) via `scripts_files` (round-trip completo: conteúdo/exec/symlink; binário preservado)
 let SCR_TEMPLATES = null;   // cache de GET /problems/script-templates (carrega 1x)
+let ISSUES = null;          // aba "🐞 Issues" (problemas/issues.js): a revisão da banca; issue aberta = não pronto
+let TRUN = null;            // sub-aba "🧪 testar no juiz" (problemas/testrun.js): solução avulsa no juiz, fora do pacote
 let COLLS = [];
 let collFilter = { q: '', mine: false, manage: false, course: false };  // filtro dos chips de coleção
 let CAN_CREATE = false;
 let FMT = 'md';                       // formato do enunciado (md|org|tex) — preservado no save
 let SCORE = { enabled: false, groups: [] };   // pontuação por grupos (espelho do DOM)
 let VAL = { validated: 'na', calibrated: 'na' };   // estado p/ a barra de prontidão
+let PSTAT = null;   // a linha deste problema no /problems/status?id= (ready/pending/sols/inputs)
 let LASTVAL = null, LASTINFO = null, LASTCALIB = null;   // últimos dados de validação/calibração
 let RUNNING = '';                                        // '', 'calibrate' ou 'publish' — em execução no juiz
-let calibTimer = null, calibPrevMax = 0;                 // polling do resultado (atualiza sozinho)
+let calibTimer = null, calibPollMs = 0, calibStart = 0, calibBusy = false;   // polling do resultado
+let CALIB_LIVE = [];                                     // [{host,since,state}] EM VOO agora, do servidor
+let SAVED_AT = 0;                                        // epoch do último Salvar (versão nova do pacote)
+// REVISÃO do pacote que este editor carregou (source.rev). Vai como `base_rev` no Salvar e no envio de
+// .tar: se outra pessoa (web ou CLI) mudou o problema depois, o servidor responde 409 `stale_rev` e a
+// tela oferece recarregar ou salvar por cima — ninguém apaga o trabalho do outro sem saber.
+let REV = '';
 let JUDGES = [];                                          // juízes do registro (calibração direcionada)
 const OPEN_LOGS = new Set();                              // hosts com "ver log" aberto (sobrevive ao re-render do polling)
 const OPEN_SOLS = new Set();                              // soluções com a tabela de testes aberta (idem)
@@ -74,20 +98,39 @@ function confUpsert(text, key, value) {
   else { const v = /[\s+]/.test(value) ? `"${value}"` : value, line = key + '=' + v; if (idx >= 0) lines[idx] = line; else lines.push(line); }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n');
 }
-const CF_TEXT = [['cf_memlimit', 'MEMLIMITMB'], ['cf_stack', 'STACKLIMITMB'], ['cf_calibrafactor', 'TLMOD[calibrafactor]'], ['cf_calibrationtl', 'CALIBRATIONTL'], ['cf_ulimit_u', 'ULIMITS[-u]'], ['cf_ulimit_f', 'ULIMITS[-f]'], ['cf_maxparallel', 'MAXPARALLELTESTS']];
-const CF_YN = [['cf_allowparallel', 'ALLOWPARALLELTEST'], ['cf_tlererun', 'TLERERUN'], ['cf_stopwa', 'STOPWHEN_WA'], ['cf_stoptle', 'STOPWHEN_TLE'], ['cf_stopre', 'STOPWHEN_RE']];
+const CF_TEXT = [['cf_memlimit', 'MEMLIMITMB'], ['cf_stack', 'STACKLIMITMB'], ['cf_calibrafactor', 'TLMOD[calibrafactor]'], ['cf_calibrationtl', 'CALIBRATIONTL'], ['cf_ulimit_u', 'ULIMITS[-u]'], ['cf_ulimit_f', 'ULIMITS[-f]'], ['cf_maxparallel', 'MAXPARALLELTESTS'], ['cf_cpuneeded', 'CPUNEEDED']];
+// [id, chave, DEFAULT quando a chave está AUSENTE] — TRI-ESTADO (24/09/2026): chave ausente = o default
+// do juiz (ALLOWPARALLELTEST/TLERERUN ausentes = ligados; STOPWHEN/SAMENUMA ausentes = desligados). O
+// checkbox mostra o efetivo, e salvar só ESCREVE a chave quando o valor difere do default ou quando ela
+// já estava no conf — antes, qualquer clique na aba gravava TODOS os checkboxes como =y/=n explícitos
+// (e um ALLOWPARALLELTEST ausente aparecia DESMARCADO, embora signifique ligado).
+const CF_YN = [['cf_allowparallel', 'ALLOWPARALLELTEST', 'y'], ['cf_tlererun', 'TLERERUN', 'y'], ['cf_stopwa', 'STOPWHEN_WA', 'n'], ['cf_stoptle', 'STOPWHEN_TLE', 'n'], ['cf_stopre', 'STOPWHEN_RE', 'n'], ['cf_samenuma', 'SAMENUMA', 'n']];
 const CF_FLAG = [['cf_allowtle', 'ALLOWTLEDURINGCALIBRATION']];   // y ou ausente
+// SAMPLE=no: o problema declara que NÃO tem exemplos (função, interativo, linguagem própria…) — o
+// enunciado não mostra a caixa e não há exemplo p/ baixar; ausente = tem exemplos (sample*). A
+// mesma regra do mojtools/statement-langs.sh (stmt_no_samples) — mexeu numa, mexa na outra.
+const sampleOff = (text) => /^(no|n|nao|não|false|0)$/i.test((confVal(text, 'SAMPLE') || '').trim());
+function applySampleMode() {
+  const off = $('cf_nosample').checked;
+  if ($('sampleOffNote')) $('sampleOffNote').hidden = !off;
+}
+const ynOf = (text, k, def) => { const v = (confVal(text, k) || '').trim().toLowerCase(); return v === 'y' || v === 'n' ? v : def; };
 function confToFields(text) {
   CF_TEXT.forEach(([id, k]) => { $(id).value = confVal(text, k) || ''; });
-  CF_YN.forEach(([id, k]) => { $(id).checked = (confVal(text, k) || '').toLowerCase() === 'y'; });
+  CF_YN.forEach(([id, k, def]) => { $(id).checked = ynOf(text, k, def) === 'y'; });
   CF_FLAG.forEach(([id, k]) => { $(id).checked = (confVal(text, k) || '').toLowerCase() === 'y'; });
+  $('cf_nosample').checked = sampleOff(text); applySampleMode();
 }
 function syncConfFromFields() {
   let c = $('confRaw').value;
   CF_TEXT.forEach(([id, k]) => { c = confUpsert(c, k, $(id).value.trim()); });
-  CF_YN.forEach(([id, k]) => { c = confUpsert(c, k, $(id).checked ? 'y' : 'n'); });
+  CF_YN.forEach(([id, k, def]) => {
+    const v = $(id).checked ? 'y' : 'n', present = confVal(c, k) !== null;
+    c = confUpsert(c, k, (v === def && !present) ? null : v);   // igual ao default e ausente: fica ausente
+  });
   CF_FLAG.forEach(([id, k]) => { c = confUpsert(c, k, $(id).checked ? 'y' : null); });
-  $('confRaw').value = c;
+  c = confUpsert(c, 'SAMPLE', $('cf_nosample').checked ? 'no' : null);
+  $('confRaw').value = c; applySampleMode();
 }
 const hiddenFile = (multiple) => { const i = el('input', { type: 'file' }); if (multiple) i.multiple = true; i.hidden = true; return i; };
 function langSelect(value) { const s = el('select', { class: 'small' }); LANG_OPTS.forEach(([id, l]) => s.append(el('option', { value: id }, l))); s.value = value || ''; return s; }
@@ -100,15 +143,21 @@ function setupTabs() {
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
   document.querySelectorAll('.tabpane').forEach(p => { p.hidden = (p.dataset.pane !== name); });
-  if (name === 'resol') ensureEditorial();   // editor da resolução é carregado ao abrir a aba
+  if (name === 'resol') { ensureEditorial(); renderEdLangBar(); }   // editor da resolução é carregado ao abrir a aba
   if (name === 'hist') loadHistory();        // histórico git é carregado ao abrir a aba
+  if (name === 'issues' && ISSUES) ISSUES.load();   // issues: carregadas ao abrir a aba
 }
 
-// ---- enunciado: um editor só (padrão) ou seções separadas (opt-in) ------------------------
+// ---- enunciado: um editor só (padrão) ou seções separadas (opt-in), em QUALQUER idioma ---------
 // Template de problema NOVO: já vem com as seções esperadas pelo portão de validação.
 const STMT_TEMPLATE = '(descreva o problema)\n\n## Entrada\n\n(descreva a entrada)\n\n## Saída\n\n(descreva a saída)\n\n## Observações\n\n(restrições e limites)\n';
+// cabeçalhos que cada idioma escreve ao juntar (o validador aceita entrada|input e saída|salida|output)
+const SEC_HEAD = { pt: { entrada: 'Entrada', saida: 'Saída', observacoes: 'Observações' },
+                   en: { entrada: 'Input', saida: 'Output', observacoes: 'Notes' },
+                   es: { entrada: 'Entrada', saida: 'Salida', observacoes: 'Observaciones' } };
+const SEC_KEYS = ['descricao', 'entrada', 'saida', 'observacoes'];
 const noAccent = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
-// divide um enunciado em {descrição, entrada, saída, observações} por cabeçalhos `## ` reconhecidos
+// divide um enunciado em {descrição, entrada, saída, observações} por cabeçalhos `## ` reconhecidos (pt/en/es)
 function splitStatement(md) {
   md = String(md || '').replace(/^\s*%[^\n]*\n?/, '');     // remove "% Título" legado
   const sec = { descricao: [], entrada: [], saida: [], observacoes: [] };
@@ -119,7 +168,7 @@ function splitStatement(md) {
       const t = noAccent(m[1]).toLowerCase();
       let k = null;
       if (/^(entrada|input)\b/.test(t)) k = 'entrada';
-      else if (/^(saida|output)\b/.test(t)) k = 'saida';
+      else if (/^(saida|salida|output)\b/.test(t)) k = 'saida';
       else if (/^(observ|notas|restri|note|constraint)/.test(t)) k = 'observacoes';
       if (k) { cur = k; continue; }    // cabeçalho reconhecido troca de seção (descarta a linha do '##')
     }
@@ -128,44 +177,222 @@ function splitStatement(md) {
   const j = (a) => a.join('\n').replace(/^\n+|\n+$/g, '');
   return { descricao: j(sec.descricao), entrada: j(sec.entrada), saida: j(sec.saida), observacoes: j(sec.observacoes) };
 }
-// recombina os 4 campos num enunciado canônico (omite seções vazias; SEM `% Título`)
-function combineStatement(s) {
-  const p = [];
+// recombina os 4 campos num enunciado canônico no idioma (omite seções vazias; SEM `% Título`)
+function combineStatement(s, lang) {
+  const H = SEC_HEAD[lang] || SEC_HEAD.pt; const p = [];
   if ((s.descricao || '').trim()) p.push(s.descricao.trim());
-  if ((s.entrada || '').trim()) p.push('## Entrada\n\n' + s.entrada.trim());
-  if ((s.saida || '').trim()) p.push('## Saída\n\n' + s.saida.trim());
-  if ((s.observacoes || '').trim()) p.push('## Observações\n\n' + s.observacoes.trim());
+  if ((s.entrada || '').trim()) p.push(`## ${H.entrada}\n\n` + s.entrada.trim());
+  if ((s.saida || '').trim()) p.push(`## ${H.saida}\n\n` + s.saida.trim());
+  if ((s.observacoes || '').trim()) p.push(`## ${H.observacoes}\n\n` + s.observacoes.trim());
   return p.length ? p.join('\n\n') + '\n' : '';
 }
-// enunciado atual conforme o modo — fonte única p/ save, preview e prontidão
-const currentStatement = () => stmtMode === 'modular'
-  ? combineStatement({ descricao: descEd ? descEd.getValue() : '', entrada: entEd ? entEd.getValue() : '',
-                       saida: saiEd ? saiEd.getValue() : '', observacoes: obsEd ? obsEd.getValue() : '' })
-  : (enunEd ? enunEd.getValue() : '');
-async function ensureModularEditors() {
-  if (!descEd) descEd = await createEditor($('descMount'), { doc: '', cm: 'markdown', images: true });
-  if (!entEd) entEd = await createEditor($('entMount'), { doc: '', cm: 'markdown' });
-  if (!saiEd) saiEd = await createEditor($('saiMount'), { doc: '', cm: 'markdown' });
-  if (!obsEd) obsEd = await createEditor($('obsMount'), { doc: '', cm: 'markdown' });
-  ['descMount', 'entMount', 'saiMount', 'obsMount'].forEach(id => $(id).addEventListener('input', updateReady));
+const stmtModeOfLang = (l) => stmtModeOf[l] || 'single';
+// enunciado atual de um idioma conforme o modo — fonte única p/ save, preview, árvore e prontidão
+function statementOf(l) {
+  if (stmtModeOfLang(l) === 'modular' && modEds[l]) {
+    const e = modEds[l]; const s = {}; SEC_KEYS.forEach(k => { s[k] = e[k].getValue(); });
+    return combineStatement(s, l);
+  }
+  if (l === 'pt') return enunEd ? enunEd.getValue() : '';
+  return transEd[l] ? transEd[l].getValue() : (TRANS[l] ? TRANS[l].enunciado_md || '' : '');
+}
+const currentStatement = () => statementOf('pt');
+const transStatement = (l) => statementOf(l);
+// cria (uma vez) os 4 editores do idioma: PT nos mounts fixos do HTML; tradução num bloco próprio
+async function ensureModular(l) {
+  if (modEds[l]) return;
+  let box; const mounts = {};
+  if (l === 'pt') {
+    box = $('enunModular');
+    Object.assign(mounts, { descricao: $('descMount'), entrada: $('entMount'), saida: $('saiMount'), observacoes: $('obsMount') });
+  } else {
+    const H = SEC_HEAD[l] || SEC_HEAD.pt;
+    const field = (k, label, sec) => { mounts[k] = el('div', { class: 'editor-mount' + (sec ? ' sec' : '') }); return el('div', { class: 'field' }, el('label', {}, label), mounts[k]); };
+    box = el('div', {},
+      field('descricao', T('Descrição', 'Description')),
+      field('entrada', T(`Entrada (vira ## ${H.entrada})`, `Input (becomes ## ${H.entrada})`), true),
+      field('saida', T(`Saída (vira ## ${H.saida})`, `Output (becomes ## ${H.saida})`), true),
+      field('observacoes', T(`Observações (vira ## ${H.observacoes}) — opcional`, `Notes (becomes ## ${H.observacoes}) — optional`), true));
+    box.style.display = 'none';
+    (transWrap(l) || $('transEdMounts')).append(box);
+  }
+  modBoxes[l] = box; modEds[l] = {};
+  for (const k of SEC_KEYS) {
+    modEds[l][k] = await createEditor(mounts[k], { doc: '', cm: 'markdown', images: k === 'descricao' });
+    mounts[k].addEventListener('input', l === 'pt' ? updateReady : updatePkgInfo);
+  }
+}
+// mostra o editor certo do idioma ativo (único × separado) e o rótulo do botão
+function showStmtEditors() {
+  const l = curStmtLang, mod = stmtModeOfLang(l) === 'modular', pt = l === 'pt';
+  $('enunMount').style.display = (pt && !mod) ? '' : 'none';
+  $('enunModular').style.display = (pt && mod) ? '' : 'none';
+  if (!pt) {
+    [...$('transEdMounts').children].forEach(d => { d.style.display = d.dataset.lang === l ? '' : 'none'; });
+    if (transSingle[l]) transSingle[l].style.display = mod ? 'none' : '';
+    if (modBoxes[l]) modBoxes[l].style.display = mod ? '' : 'none';
+  }
+  const btn = $('stmtToggle');
+  if (btn) btn.textContent = mod ? T('⊟ Juntar num só', '⊟ Merge into one') : T('✂ Separar em seções', '✂ Split into sections');
 }
 async function toggleStmtMode() {
-  const btn = $('stmtToggle');
-  if (stmtMode === 'single') {
-    await ensureModularEditors();
-    const s = splitStatement(enunEd ? enunEd.getValue() : '');
-    descEd.setValue(s.descricao); entEd.setValue(s.entrada); saiEd.setValue(s.saida); obsEd.setValue(s.observacoes);
-    $('enunMount').style.display = 'none'; $('enunModular').style.display = '';
-    stmtMode = 'modular'; if (btn) btn.textContent = T('⊟ Juntar num só', '⊟ Merge into one');
+  const l = curStmtLang;
+  if (l !== 'pt' && !transEd[l]) return;
+  if (stmtModeOfLang(l) === 'single') {
+    const s = splitStatement(statementOf(l));            // ainda único: lê o texto inteiro
+    await ensureModular(l);
+    SEC_KEYS.forEach(k => modEds[l][k].setValue(s[k]));
+    stmtModeOf[l] = 'modular';
   } else {
-    if (enunEd) enunEd.setValue(currentStatement());   // ainda modo modular -> combina os 4
-    $('enunModular').style.display = 'none'; $('enunMount').style.display = '';
-    stmtMode = 'single'; if (btn) btn.textContent = T('✂ Separar em seções', '✂ Split into sections');
+    const md = statementOf(l);                            // ainda separado: combina os 4
+    (l === 'pt' ? enunEd : transEd[l]).setValue(md);
+    stmtModeOf[l] = 'single';
   }
-  updateReady();
+  showStmtEditors(); updateReady(); updatePkgInfo();
 }
 async function ensureEditorial() {
   if (!editEd) editEd = await createEditor($('editMount'), { doc: PENDING_EDITORIAL || '', cm: 'markdown', images: true });
+}
+
+// ---- idiomas do enunciado (traduções) --------------------------------------------------------
+const transLangs = () => STMT_LANGS.filter(l => l !== 'pt' && TRANS[l]);
+function stmtChip(l, active, onclick, add) {
+  const b = el('button', { type: 'button', class: 'stmt-chip' + (active ? ' active' : '') + (add ? ' add' : ''),
+    title: add ? T('adicionar ', 'add ') + stmtName(l) : stmtName(l), onclick }, (add ? '+ ' : '') + STMT_SHORT[l]);
+  return b;
+}
+function renderStmtLangBar() {
+  const bar = $('stmtLangBar'); if (!bar) return; bar.innerHTML = '';
+  bar.append(stmtChip('pt', curStmtLang === 'pt', () => switchStmtLang('pt')));
+  STMT_LANGS.filter(l => l !== 'pt').forEach(l => {
+    if (TRANS[l]) bar.append(stmtChip(l, curStmtLang === l, () => switchStmtLang(l)));
+    else bar.append(stmtChip(l, false, () => { addTransLang(l); switchStmtLang(l); }, true));
+  });
+}
+function addTransLang(l) {
+  if (TRANS[l]) return;
+  TRANS[l] = { title: '', enunciado_md: '', editorial_md: '', notes: {} }; TRANS_REMOVED.delete(l);
+  refreshExampleTrans(); renderEdLangBar(); updatePkgInfo();
+}
+function removeTransLang(l) {
+  if (!TRANS[l]) return;
+  if (!confirm(T(`Remover a tradução ${STMT_SHORT[l]} (enunciado, editorial, explicações e título)? Efetiva ao salvar.`, `Remove the ${STMT_SHORT[l]} translation (statement, editorial, explanations and title)? Applied on save.`))) return;
+  delete TRANS[l]; TRANS_REMOVED.add(l);
+  delete transEd[l]; delete transEdEd[l]; delete modEds[l]; delete modBoxes[l]; delete transSingle[l]; delete stmtModeOf[l];
+  [...$('transEdMounts').children].forEach(d => { if (d.dataset.lang === l) d.remove(); });
+  [...$('transEdEdMounts').children].forEach(d => { if (d.dataset.lang === l) d.remove(); });
+  if (curEdLang === l) curEdLang = 'pt';
+  switchStmtLang('pt'); refreshExampleTrans(); renderEdLangBar(); updatePkgInfo();
+}
+async function switchStmtLang(l) {
+  if (l !== 'pt' && !TRANS[l]) l = 'pt';
+  // guarda o título do idioma que sai (o campo é compartilhado)
+  if (curStmtLang !== 'pt' && TRANS[curStmtLang]) TRANS[curStmtLang].title = $('transTitle').value;
+  curStmtLang = l; renderStmtLangBar();
+  const pt = l === 'pt';
+  $('transMount').style.display = pt ? 'none' : '';
+  $('transHint').style.display = pt ? 'none' : '';
+  if (!pt) {
+    $('transTitle').value = TRANS[l].title || '';
+    $('transTitle').placeholder = $('ptitle').value || 'Hello World';
+    if (!transEd[l]) {
+      // um EMBRULHO por idioma (dataset.lang): dentro, o editor único e, ao separar, o bloco das 4 seções
+      const wrap = el('div', {}); wrap.dataset.lang = l;
+      const m = el('div', { class: 'editor-mount' }); m.style.height = '36rem'; m.style.minHeight = '36rem';
+      wrap.append(m); $('transEdMounts').append(wrap); transSingle[l] = m;
+      transEd[l] = await createEditor(m, { doc: TRANS[l].enunciado_md || '', cm: 'markdown', images: true });
+      m.addEventListener('input', updatePkgInfo);
+    }
+  }
+  showStmtEditors();
+}
+const transWrap = (l) => [...$('transEdMounts').children].find(d => d.dataset.lang === l) || null;
+const transEditorial = (l) => (transEdEd[l] ? transEdEd[l].getValue() : (TRANS[l] ? TRANS[l].editorial_md || '' : ''));
+// nota traduzida de cada exemplo: um textarea por idioma dentro do exemplo (aba Testes); a chave é
+// a POSIÇÃO (sampleN), a mesma que o servidor dá aos exemplos ao salvar
+function refreshExampleTrans() {
+  const langs = transLangs();
+  [...$('examples').querySelectorAll('.ex')].forEach((row, i) => {
+    let box = row.querySelector('.exexpl-trans');
+    if (!box) { box = el('div', { class: 'exexpl-trans' }); const btn = row.querySelector('button'); if (btn) btn.before(box); else row.append(box); }
+    const have = {}; [...box.querySelectorAll('textarea.exexpl-l')].forEach(t => { have[t.dataset.lang] = t.value; });
+    box.innerHTML = '';
+    langs.forEach(l => {
+      const initial = have[l] !== undefined ? have[l] : ((TRANS[l].notes || {})['sample' + (i + 1)] || '');
+      const ta = el('textarea', { class: 'exexpl-l', placeholder: T('vazio = mostra a explicação em português', 'empty = shows the Portuguese explanation'), oninput: updatePkgInfo }, initial);
+      ta.dataset.lang = l;
+      box.append(el('div', {}, el('label', { class: 'small' }, T('explicação em ', 'explanation in ') + STMT_SHORT[l] + ' (' + stmtName(l) + ')'), ta));
+    });
+  });
+}
+function collectTransNotes(l) {
+  const out = {};
+  [...$('examples').querySelectorAll('.ex')].forEach((row, i) => {
+    const ta = row.querySelector(`textarea.exexpl-l[data-lang="${l}"]`);
+    if (ta && ta.value.trim()) out['sample' + (i + 1)] = ta.value;
+  });
+  return out;
+}
+const collectTranslations = () => {
+  const out = {};
+  transLangs().forEach(l => { out[l] = { title: (curStmtLang === l ? $('transTitle').value : TRANS[l].title || '').trim(),
+    enunciado_md: transStatement(l), editorial_md: transEditorial(l), notes: collectTransNotes(l) }; });
+  TRANS_REMOVED.forEach(l => { if (!TRANS[l]) out[l] = null; });
+  return out;
+};
+// editorial por idioma (aba Resolução): PT = editMount; traduções = um mount por idioma. A barra é a
+// MESMA do enunciado (pedido do Ribas, 24/09): PT + os idiomas que existem + "+ EN/+ ES" p/ os que
+// faltam — adicionar aqui cria a tradução (addTransLang) sem exigir o enunciado traduzido; o servidor
+// grava só docs/solucao.<l>.md. (Antes a barra só listava idiomas com enunciado e sumia sem eles.)
+function renderEdLangBar() {
+  const bar = $('edLangBar'); if (!bar) return; bar.innerHTML = '';
+  if (curEdLang !== 'pt' && !TRANS[curEdLang]) curEdLang = 'pt';
+  bar.append(stmtChip('pt', curEdLang === 'pt', () => switchEdLang('pt')));
+  STMT_LANGS.filter(l => l !== 'pt').forEach(l => {
+    if (TRANS[l]) bar.append(stmtChip(l, curEdLang === l, () => switchEdLang(l)));
+    else bar.append(stmtChip(l, false, () => { addTransLang(l); switchEdLang(l); }, true));
+  });
+  const rm = $('edRemove');
+  if (rm) {
+    // style.display, não só `hidden`: o display do .btn vence o atributo e sobrava um botão vazio em PT
+    rm.hidden = curEdLang === 'pt'; rm.style.display = rm.hidden ? 'none' : '';
+    if (curEdLang !== 'pt') rm.textContent = T(`✕ remover o editorial em ${STMT_SHORT[curEdLang]}`, `✕ remove the ${STMT_SHORT[curEdLang]} editorial`);
+  }
+}
+// esvazia SÓ o editorial do idioma ativo (enunciado, notas e título traduzidos ficam — apagar a tradução
+// inteira é o "✕ remover este idioma" da aba Enunciado). Vazio = o servidor apaga docs/solucao.<l>.md.
+function removeEdLang() {
+  const l = curEdLang; if (l === 'pt' || !TRANS[l]) return;
+  if (!confirm(T(`Apagar o editorial em ${STMT_SHORT[l]}? O enunciado traduzido fica. Efetiva ao salvar.`, `Delete the ${STMT_SHORT[l]} editorial? The translated statement stays. Applied on save.`))) return;
+  if (transEdEd[l]) transEdEd[l].setValue('');
+  TRANS[l].editorial_md = '';
+  updatePkgInfo();
+}
+async function switchEdLang(l) {
+  if (l !== 'pt' && !TRANS[l]) l = 'pt';
+  curEdLang = l; renderEdLangBar();
+  $('editMount').style.display = l === 'pt' ? '' : 'none';
+  [...$('transEdEdMounts').children].forEach(d => { d.style.display = d.dataset.lang === l ? '' : 'none'; });
+  if (l === 'pt') return;
+  if (!transEdEd[l]) {
+    const m = el('div', { class: 'editor-mount' }); m.dataset.lang = l; $('transEdEdMounts').append(m);
+    transEdEd[l] = await createEditor(m, { doc: TRANS[l].editorial_md || '', cm: 'markdown', images: true });
+    m.addEventListener('input', updatePkgInfo);
+  }
+}
+async function edPreview() {
+  const btn = $('edPreview'); btn.disabled = true; setMsg(T('Renderizando…', 'Rendering…'));
+  try {
+    const md = curEdLang === 'pt' ? (editEd ? editEd.getValue() : PENDING_EDITORIAL) : transEditorial(curEdLang);
+    const pbody = { kind: 'editorial', markdown: md, lang: curEdLang };
+    if (ID) pbody.id = ID;
+    const j = await apiPost('/problems/preview', pbody, { contest: CONTEST, auth: true });
+    const html = b64ToUtf8(j.html_b64 || ''); const pb = $('previewBody');
+    try { const d = new DOMParser().parseFromString(html, 'text/html'); pb.innerHTML = d.body ? d.body.innerHTML : html; } catch { pb.innerHTML = html; }
+    decorateSamples(pb);   // o preview é o HTML servido: os botões "Copiar" aparecem como para o aluno
+    $('previewModal').style.display = ''; setMsg('');
+  } catch (e) { setMsg((e instanceof ApiError ? e.message : T('Falha ao renderizar', 'Failed to render')), 'error'); }
+  finally { btn.disabled = false; }
 }
 
 // ---- barra de prontidão -------------------------------------------------------------------
@@ -178,27 +405,95 @@ function readyItems() {
   const limOK = !!($('cf_memlimit').value.trim() || $('cf_calibrafactor').value.trim());
   const items = [
     { tab: 'enun', label: T('Enunciado', 'Statement'), s: hasEnun ? 'ok' : 'todo' },
-    { tab: 'tests', label: T('Exemplos', 'Samples'), s: nEx ? 'ok' : 'todo' },
+    $('cf_nosample').checked
+      ? { tab: 'limits', label: T('Sem exemplos (SAMPLE=no)', 'No samples (SAMPLE=no)'), s: 'na' }
+      : { tab: 'tests', label: T('Exemplos', 'Samples'), s: nEx ? 'ok' : 'todo' },
     { tab: 'tests', label: T('Testes', 'Tests'), s: nTs ? 'ok' : 'todo' },
     { tab: 'sols', label: T('Solução good', 'good solution'), s: nGood ? 'ok' : 'todo' },
   ];
   if (SCORE.enabled) items.push({ tab: 'tests', label: T('Pontuação', 'Scoring'), s: (SCORE.groups.length && scoreSum() > 0) ? 'ok' : 'todo' });
   items.push({ tab: 'limits', label: T('Limites', 'Limits'), s: limOK ? 'ok' : 'na' });
-  items.push({ tab: 'pub', label: T('Validado', 'Validated'), s: VAL.validated });
-  items.push({ tab: 'pub', label: T('Calibrado', 'Calibrated'), s: VAL.calibrated });
+  // "Validado" enganava: é a conferência ESTÁTICA do pacote (arquivos, seções, testes emparelhados,
+  // exemplos) — não roda solução nenhuma. Quem roda é a calibração: TL + Soluções + Entradas.
+  items.push({ tab: 'pub', label: T('Pacote', 'Package'), s: VAL.validated === 'todo' ? 'bad' : VAL.validated,
+    title: T('Conferência estática do pacote: enunciado, exemplos, testes emparelhados, solução good presente. Não roda nada — quem roda as soluções é a calibração.',
+             'Static check of the package: statement, samples, paired tests, good solution present. It runs nothing — calibration is what runs the solutions.') });
+  items.push({ tab: 'pub', label: T('Calibrado', 'Calibrated'), s: VAL.calibrated,
+    title: T('Um juiz mediu o tempo-limite rodando as soluções good.', 'A judge measured the time limit by running the good solutions.') });
+  items.push({ tab: 'pub', ...solsReady() });
+  const inp = inputsReady(); if (inp) items.push({ tab: 'pub', ...inp });
+  if (ID && PSTAT) {
+    const ni = PSTAT.open_issues || 0;
+    items.push({ tab: 'issues', label: ni ? T(`Issues (${ni} abertas)`, `Issues (${ni} open)`) : 'Issues', s: ni ? 'bad' : 'ok',
+      title: T('Issues abertas precisam ser resolvidas (fechadas) para o problema ficar pronto.', 'Open issues must be resolved (closed) for the problem to be ready.') });
+  }
   items.push({ tab: 'pub', label: T('Público', 'Public'), s: loadedPublic ? 'ok' : 'na' });
   return items;
+}
+// relê a linha deste problema no Painel (pending/ready) — depois de mexer nas issues
+async function refreshPstat() {
+  if (!ID) return;
+  try {
+    const st = await apiGet('/problems/status?id=' + encodeURIComponent(ID), { contest: CONTEST, auth: true });
+    PSTAT = (st.problems || []).find(p => p.id === ID) || PSTAT; updateReady();
+  } catch { /* best-effort: a barra fica como estava */ }
+}
+// SOLUÇÕES × o que a categoria pede (o `sols` do /problems/status, calculado no servidor)
+function solsReady() {
+  const st = PSTAT && PSTAT.sols && PSTAT.sols.state;
+  const title = T('Cada solução fez o que a categoria dela pede? (good/pass aceitas no tempo, slow estoura o tempo, wrong é reprovada) — conferido na calibração.',
+                  'Did each solution do what its category requires? (good/pass accepted in time, slow exceeds the time, wrong is rejected) — checked by calibration.');
+  const label = T('Soluções', 'Solutions');
+  if (VAL.calibrated === 'run') return { label, s: 'run', title };
+  if (st === 'ok' || st === 'note') return { label, s: 'ok', title };
+  if (st === 'bad') return { label: label + ` (${PSTAT.sols.bad} ✗)`, s: 'bad', title };
+  if (st === 'partial' || st === 'stale') return { label, s: 'todo', title: title + '\n' + pendingLabel('sols_unchecked') };
+  return { label, s: 'na', title };
+}
+// ENTRADAS: o validador de entrada (scripts/validator.cpp) que a calibração rodou; sem validador = cinza
+function inputsReady() {
+  const i = PSTAT && PSTAT.inputs; if (!i) return null;
+  const label = T('Entradas', 'Inputs');
+  const title = T('O validador de entrada (scripts/validator.cpp, testlib) aprovou todos os testes?', 'Did the input validator (scripts/validator.cpp, testlib) accept every test?');
+  if (i.state === 'ok') return { label, s: 'ok', title };
+  if (i.state === 'invalid') return { label: label + ` (${i.invalid} ✗)`, s: 'bad', title };
+  if (i.state === 'error') return { label, s: 'bad', title: validatorText(i) };
+  if (i.state === 'none') return { label, s: 'na', title: validatorText(i) };
+  return { label, s: 'na', title };
+}
+// o selo final: PRONTO ou a lista de pendências (as mesmas que a confirmação de publicar mostra)
+function readySeal() {
+  if (!ID || !PSTAT || !Array.isArray(PSTAT.pending)) return null;
+  const p = PSTAT.pending;
+  if (!p.length) return el('span', { class: 'rdy seal ok', title: T('Pacote conferido, calibrado, soluções e entradas conforme, sem issue aberta.', 'Package checked, calibrated, solutions and inputs as expected, no open issue.') },
+    el('span', { class: 'dot' }), el('span', {}, T('✓ Pronto', '✓ Ready')));
+  return el('span', { class: 'rdy seal todo', title: p.map(pendingLabel).join('\n') },
+    el('span', { class: 'dot' }), el('span', {}, T(`${p.length} pendência${p.length === 1 ? '' : 's'}`, `${p.length} pending`)));
 }
 function updateReady() {
   const box = $('ready'); if (!box) return;
   box.innerHTML = '';
-  readyItems().forEach(it => box.append(el('span', { class: 'rdy ' + it.s, title: T('ir para a aba', 'go to the tab'), onclick: () => showTab(it.tab) },
+  readyItems().forEach(it => box.append(el('span', { class: 'rdy ' + it.s, title: it.title || T('ir para a aba', 'go to the tab'), onclick: () => showTab(it.tab) },
     el('span', { class: 'dot' }), el('span', {}, it.label))));
+  const seal = readySeal(); if (seal) { seal.onclick = () => showTab('pub'); box.append(seal); }
   const nEx = $('examples').querySelectorAll('.ex').length, nTs = $('tests').querySelectorAll('.ex').length;
   $('tabTestsMini').textContent = (nEx + nTs) ? `(${nEx}+${nTs})` : '';
   const ns = SOL_CATS.reduce((a, [c]) => a + (solEditors[c] || []).length, 0);
   $('tabSolsMini').textContent = ns ? `(${ns})` : '';
+  // CALIBRAR enquanto já há uma em voo: o servidor deduplica contra o que está na FILA, então o
+  // clique não faria nada — o botão diz isso em vez de fingir que disparou. Quem SALVOU depois do
+  // pedido continua podendo pedir (a que está rodando pegou a versão anterior).
+  const cb = $('calibrate');
+  if (cb) {
+    const busy = calibRunning() && !savedSinceCalib();
+    cb.disabled = !!busy;
+    cb.title = busy ? T('Já há uma calibração deste problema em andamento — o resultado aparece sozinho.',
+                        'A calibration of this problem is already running — the result shows up by itself.') : '';
+  }
 }
+// salvou DEPOIS que a calibração em voo começou? então pedir outra é legítimo (é outra versão)
+const savedSinceCalib = () => CALIB_LIVE.length > 0 && SAVED_AT > 0
+  && SAVED_AT > Math.min(...CALIB_LIVE.map(c => c.since || 0));
 
 // ---- exemplos (sample, aparecem no enunciado) --------------------------------------------
 function exampleRow(input = '', output = '', explanation = '') {
@@ -211,7 +506,7 @@ function exampleRow(input = '', output = '', explanation = '') {
     el('button', { class: 'btn ghost', type: 'button', onclick: () => { row.remove(); updatePkgInfo(); } }, T('remover exemplo', 'remove sample')));
   return row;
 }
-const addExample = (i = '', o = '', x = '') => { $('examples').append(exampleRow(i, o, x)); updatePkgInfo(); };
+const addExample = (i = '', o = '', x = '') => { $('examples').append(exampleRow(i, o, x)); refreshExampleTrans(); updatePkgInfo(); };
 const collectExamples = () => [...$('examples').querySelectorAll('.ex')].map(r => ({
   input: r.querySelector('.exin').value, output: r.querySelector('.exout').value,
   explanation: r.querySelector('.exexpl') ? r.querySelector('.exexpl').value : '' })).filter(e => e.input !== '' || e.output !== '');
@@ -357,6 +652,7 @@ function showSolCat(cat) {
   solTab = cat;
   document.querySelectorAll('.subtab').forEach(t => t.classList.toggle('on', t.dataset.cat === cat));
   document.querySelectorAll('.solpanel').forEach(p => { p.hidden = (p.dataset.cat !== cat); });
+  if (cat === 'trun' && TRUN) TRUN.show();
 }
 function updateSolCounts() {
   SOL_CATS.forEach(([cat]) => { const e = $('solcount-' + cat); if (e) { const n = (solEditors[cat] || []).length; e.textContent = n ? String(n) : ''; } });
@@ -376,7 +672,10 @@ async function renderSols(sols) {
   // o painel (#scrPanel, data-cat="scr") vive FORA do wrap p/ sobreviver ao re-render
   nav.append(el('span', { class: 'subsep' }, '·'),
     el('button', { class: 'subtab', type: 'button', 'data-cat': 'scr', title: T('modo de correção: checker, comparador, interativo… (scripts/ do pacote)', 'grading mode: checker, comparator, interactive… (package scripts/)'), onclick: () => showSolCat('scr') },
-      el('span', { class: 'sol-badge sb-scr' }, T('⚙ correção', '⚙ grading')), el('span', { class: 'subcount', id: 'solcount-scr' })));
+      el('span', { class: 'sol-badge sb-scr' }, T('⚙ correção', '⚙ grading')), el('span', { class: 'subcount', id: 'solcount-scr' })),
+    // sub-aba do TEST-RUN (solução avulsa no juiz, fora do pacote): painel #trunPanel, também fora do wrap
+    el('button', { class: 'subtab', type: 'button', 'data-cat': 'trun', title: T('roda uma solução avulsa no juiz, fora do pacote (o moj testrun da CLI)', 'runs a loose solution on the judge, outside the package (the CLI moj testrun)'), onclick: () => showSolCat('trun') },
+      el('span', { class: 'sol-badge sb-scr' }, T('🧪 testar no juiz', '🧪 test on the judge'))));
   wrap.append(nav);
   for (const [cat] of SOL_CATS) {
     const [, btxt] = SOL_BADGE[cat] || ['', ''];
@@ -410,6 +709,8 @@ async function addSol(cat, fn, code, expand) {
   fnInput.addEventListener('change', () => { langSel.value = cmFor(fnInput.value); remount(); updatePkgInfo(); });
   const row = el('div', { class: 'solrow' },
     el('div', { class: 'row', style: 'gap:.5rem;align-items:center;flex-wrap:wrap' }, expandBtn, el('span', { class: 'small muted' }, T('arquivo', 'file')), fnInput, langSel,
+      el('button', { class: 'btn ghost', type: 'button', title: T('testar esta versão no juiz, sem salvar (sub-aba 🧪)', 'test this version on the judge, without saving (🧪 sub-tab)'),
+        onclick: async () => { if (!TRUN) return; showSolCat('trun'); await TRUN.prefill(fnInput.value.trim(), entry.ed ? entry.ed.getValue() : entry.code); } }, '🧪'),
       el('button', { class: 'btn ghost', type: 'button', onclick: () => { row.remove(); solEditors[cat] = (solEditors[cat] || []).filter(x => x !== entry); updateSolCounts(); updatePkgInfo(); } }, T('remover', 'remove'))),
     mount);
   entry.row = row;
@@ -482,6 +783,7 @@ async function loadScriptTemplates() {
 // os demais; dois do MESMO slot = o último vence naquele slot)
 function slotOfPath(p) {
   if (p === 'compare.sh' || p === 'checker.cpp') return 'compare';
+  if (p === 'validator.cpp') return 'validator';   // validador de ENTRADA: não julga, compõe com tudo
   if (p === 'summary.sh') return 'summary';
   if (/\/compile\.sh$/.test(p)) return 'compile';
   if (/\/(run|prep)\.sh$/.test(p) || !p.includes('/')) return 'run';   // symlink de lang = run
@@ -553,9 +855,17 @@ function buildTree() {
     ];
     scrNode = dirNode('scripts/', ...scrKids);
   }
-  const docsKids = [leaf('enunciado.md', stmtMode === 'modular' ? $('descMount') : $('enunMount'))];
-  if (exRows.some(r => r.querySelector('.exexpl') && r.querySelector('.exexpl').value.trim())) docsKids.push(leaf('sample-notes.json', $('examples'), () => showTab('tests')));
-  if (editEd ? editEd.getValue().trim() : (PENDING_EDITORIAL || '').trim()) docsKids.push(leaf('solucao.md', $('editMount'), () => showTab('resol')));
+  const docsKids = [leaf('enunciado.md', stmtModeOfLang('pt') === 'modular' ? $('descMount') : $('enunMount'), () => switchStmtLang('pt'))];
+  transLangs().forEach(l => docsKids.push(leaf(`enunciado.${l}.md`, $('transMount'), () => { showTab('enun'); switchStmtLang(l); })));
+  // notas: docs/notes/<sample>.md (PT) e <sample>.<lang>.md (traduzidas) — o formato de autoria (não há mais JSON)
+  const noteKids = [];
+  exRows.forEach((r, i) => {
+    const ta = r.querySelector('.exexpl'); if (ta && ta.value.trim()) noteKids.push(leaf(`sample${i + 1}.md`, r, () => showTab('tests')));
+    [...r.querySelectorAll('textarea.exexpl-l')].forEach(t => { if (t.value.trim()) noteKids.push(leaf(`sample${i + 1}.${t.dataset.lang}.md`, r, () => showTab('tests'))); });
+  });
+  if (noteKids.length) docsKids.push(dirNode('notes/', ...noteKids));
+  if (editEd ? editEd.getValue().trim() : (PENDING_EDITORIAL || '').trim()) docsKids.push(leaf('solucao.md', $('editMount'), () => { showTab('resol'); switchEdLang('pt'); }));
+  transLangs().forEach(l => { if (transEditorial(l).trim()) docsKids.push(leaf(`solucao.${l}.md`, $('transEdEdMounts'), () => { showTab('resol'); switchEdLang(l); })); });
   const tree = ul(
     dirNode('docs/', ...docsKids),
     leaf('conf', $('confRaw'), () => { const d = $('confRaw').closest('details'); if (d) d.open = true; }),
@@ -607,12 +917,12 @@ async function renderForm(d) {
   // automaticamente pois itera LANGUAGES). Picker vazio no save = [] = irrestrito.
   langPicker = makeLangPicker(d.languages || []);
   $('plangs').innerHTML = ''; $('plangs').append(langPicker.el);
-  // enunciado: volta sempre p/ o modo "um editor só"; problema NOVO já vem com o template de seções
-  stmtMode = 'single';
+  // enunciado: volta sempre p/ o modo "um editor só" (em todo idioma); problema NOVO já vem com o
+  // template de seções. Os editores PT das seções ficam (mounts fixos); os das traduções vão com o DOM.
+  stmtModeOf = {}; Object.keys(modEds).forEach(l => { if (l !== 'pt') { delete modEds[l]; delete modBoxes[l]; } }); transSingle = {};
   $('enunMount').style.display = ''; $('enunModular').style.display = 'none';
   if ($('stmtToggle')) $('stmtToggle').textContent = T('✂ Separar em seções', '✂ Split into sections');
-  ['descMount', 'entMount', 'saiMount', 'obsMount'].forEach(id => { $(id).innerHTML = ''; });
-  descEd = entEd = saiEd = obsEd = null;
+  if (modEds.pt) SEC_KEYS.forEach(k => modEds.pt[k].setValue(''));
   const initMd = (d.enunciado_md && d.enunciado_md.trim()) ? d.enunciado_md : (MODE === 'new' ? STMT_TEMPLATE : '');
   $('enunMount').innerHTML = '';
   enunEd = await createEditor($('enunMount'), { doc: initMd, cm: 'markdown', images: true });
@@ -620,8 +930,16 @@ async function renderForm(d) {
   PENDING_EDITORIAL = d.editorial_md || '';
   renderScripts(d.scripts_files || []);
   $('editMount').innerHTML = ''; editEd = null;
+  // traduções: o servidor manda translations{<lang>:{title,enunciado_md,editorial_md?,notes?}}
+  TRANS = {}; TRANS_REMOVED.clear(); transEd = {}; transEdEd = {}; curStmtLang = 'pt'; curEdLang = 'pt';
+  $('transEdMounts').innerHTML = ''; $('transEdEdMounts').innerHTML = '';
+  Object.entries(d.translations || {}).forEach(([l, t]) => {
+    if (!STMT_LANGS.includes(l) || l === 'pt' || !t) return;
+    TRANS[l] = { title: t.title || '', enunciado_md: t.enunciado_md || '', editorial_md: t.editorial_md || '', notes: t.notes || {} };
+  });
   $('examples').innerHTML = ''; (d.examples || []).forEach(e => $('examples').append(exampleRow(e.input, e.output, e.explanation)));
   if (!(d.examples || []).length) $('examples').append(exampleRow());
+  refreshExampleTrans(); renderStmtLangBar(); switchStmtLang('pt'); renderEdLangBar();
   // pontuação (antes dos testes, p/ os seletores de grupo já terem opções)
   $('scoreGroups').innerHTML = '';
   const sc = d.score || { enabled: false, groups: [] };
@@ -644,6 +962,7 @@ const collectFields = () => {
     languages: langPicker ? langPicker.get() : [],
     enunciado_md: currentStatement(), enunciado_format: FMT, examples: collectExamples(),
     editorial_md: editEd ? editEd.getValue() : PENDING_EDITORIAL,
+    ...((transLangs().length || TRANS_REMOVED.size) ? { translations: collectTranslations() } : {}),   // ausente = não mexe
     tests: collectTests(), sols: collectSols(), conf_text: $('confRaw').value,
     score: { enabled, groups: enabled ? collectGroups() : [] },
     scripts_files: collectScripts(),   // correção especial — substitui scripts/ inteiro (round-trip)
@@ -655,11 +974,17 @@ async function preview() {
   try {
     // id junto: o servidor semeia as IMAGENS de docs/ do pacote no render — `![](fig.png)`
     // aparece no preview igual ao servido (imagem colada é data:URI e nunca dependeu disso)
-    const pbody = { enunciado_md: currentStatement(), enunciado_format: FMT, examples: collectExamples(), title: $('ptitle').value.trim() };
+    // idioma ativo: texto, título e explicações traduzidas (ausente = a PT, como o servido faz)
+    const l = curStmtLang; const exs = $('cf_nosample').checked ? [] : collectExamples();   // SAMPLE=no: o servido não tem exemplos
+    if (l !== 'pt') { const nt = collectTransNotes(l); exs.forEach((e, i) => { if (nt['sample' + (i + 1)]) e.explanation = nt['sample' + (i + 1)]; }); }
+    const pbody = l === 'pt'
+      ? { enunciado_md: currentStatement(), enunciado_format: FMT, examples: exs, title: $('ptitle').value.trim(), lang: 'pt' }
+      : { enunciado_md: transStatement(l), enunciado_format: 'md', examples: exs, title: ($('transTitle').value || $('ptitle').value).trim(), lang: l };
     if (ID) pbody.id = ID;
     const j = await apiPost('/problems/preview', pbody, { contest: CONTEST, auth: true });
     const html = b64ToUtf8(j.html_b64 || ''); const pb = $('previewBody');   // .statement-content (CSS unificado), não iframe
     try { const d = new DOMParser().parseFromString(html, 'text/html'); pb.innerHTML = d.body ? d.body.innerHTML : html; } catch { pb.innerHTML = html; }
+    decorateSamples(pb);   // o preview é o HTML servido: os botões "Copiar" aparecem como para o aluno
     $('previewModal').style.display = ''; setMsg('');
   } catch (e) { setMsg((e instanceof ApiError ? e.message : T('Falha ao renderizar', 'Failed to render')), 'error'); }
   finally { btn.disabled = false; }
@@ -667,35 +992,77 @@ async function preview() {
 
 // ---- validação & calibração (painel + prontidão, best-effort) -----------------------------
 async function loadValidation() {
-  if (!ID) { VAL = { validated: 'na', calibrated: 'na' }; LASTVAL = LASTINFO = LASTCALIB = null; renderVal(); updateReady(); return; }
+  if (!ID) { VAL = { validated: 'na', calibrated: 'na' }; LASTVAL = LASTINFO = LASTCALIB = PSTAT = null; renderVal(); updateReady(); return; }
   const g = (pfx) => apiGet(pfx + encodeURIComponent(ID), { contest: CONTEST, auth: true }).catch(() => null);
-  const [val, info, calib] = await Promise.all([     // 3 GETs em paralelo (antes era sequencial)
-    g('/problems/validation?id='), g('/problems/get?id='), g('/problems/calib?id='),
+  const [val, info, calib, st] = await Promise.all([     // 4 GETs em paralelo (antes era sequencial)
+    g('/problems/validation?id='), g('/problems/get?id='), g('/problems/calib?id='), g('/problems/status?id='),
   ]);
-  LASTVAL = val; LASTINFO = info; LASTCALIB = calib;
-  const nHosts = ((calib && calib.hosts) || []).length;
-  VAL.validated = (RUNNING === 'publish') ? 'run' : ((val && Array.isArray(val.checks) && val.checks.length) ? (val.ok ? 'ok' : 'todo') : 'na');
-  VAL.calibrated = RUNNING ? 'run' : (nHosts ? 'ok' : 'na');
+  // a linha deste problema no Painel: sols/inputs/pending/ready (a MESMA regra que o Painel e a CLI usam)
+  if (st && Array.isArray(st.problems)) PSTAT = st.problems.find(p => p.id === ID) || PSTAT;
+  if (PSTAT && $('tabIssuesMini')) $('tabIssuesMini').textContent = PSTAT.open_issues ? `(${PSTAT.open_issues})` : '';
+  // ERRO DE REDE NÃO APAGA A TELA: um 500/timeout num tick deixava LASTCALIB=null e os cartões dos
+  // juízes SUMIAM até o tick seguinte (o `.catch(() => null)` acima é best-effort de propósito).
+  if (val) LASTVAL = val;
+  if (info) LASTINFO = info;
+  if (calib) { LASTCALIB = calib; CALIB_LIVE = Array.isArray(calib.calibrating) ? calib.calibrating : []; }
+  const nHosts = ((LASTCALIB && LASTCALIB.hosts) || []).length;
+  // o SERVIDOR é quem sabe se ainda está calibrando; 'publish' segue até os checks chegarem
+  if (RUNNING === 'calibrate' && !calibRunning()) RUNNING = '';
+  if (RUNNING === 'publish' && LASTVAL && Array.isArray(LASTVAL.checks) && LASTVAL.checks.length && !calibRunning()) RUNNING = '';
+  VAL.validated = (RUNNING === 'publish') ? 'run' : ((LASTVAL && Array.isArray(LASTVAL.checks) && LASTVAL.checks.length) ? (LASTVAL.ok ? 'ok' : 'todo') : 'na');
+  VAL.calibrated = (RUNNING || calibRunning()) ? 'run' : (nHosts ? 'ok' : 'na');
   maybeRenderVal(); updateReady();   // só reconstrói o painel se algo mudou (não a cada poll)
 }
 // dispara Calibrar/Validar e fica buscando o resultado sozinho (a calibração roda no juiz).
-// "pronto" = algum juiz reportou DEPOIS do disparo (independe do relógio do cliente).
-const maxCalibAt = () => Math.max(0, ...(((LASTCALIB && LASTCALIB.hosts) || []).map(h => h.at || 0)));
-function startPolling() {
-  if (calibTimer) { clearInterval(calibTimer); calibTimer = null; }
-  let tries = 0;
-  calibTimer = setInterval(async () => {
-    tries++;
-    await loadValidation();   // atualiza o painel ao vivo
-    const fresh = maxCalibAt() > calibPrevMax;
-    const validated = RUNNING === 'publish' && LASTVAL && Array.isArray(LASTVAL.checks) && LASTVAL.checks.length;
-    if (RUNNING && (fresh || validated)) { RUNNING = ''; updateReady(); renderVal(); setMsg(T('Resultado chegou ✓', 'Result arrived ✓'), 'v-ok'); }
-    if (tries >= 20) {        // ~80s: para de buscar (segue refrescando até lá p/ pegar todos os juízes)
-      clearInterval(calibTimer); calibTimer = null;
-      if (RUNNING) { RUNNING = ''; await loadValidation(); setMsg(T('Ainda processando — recarregue se faltar algum juiz.', 'Still processing — reload if some judge is missing.'), ''); }
-    }
-  }, 4000);
+//
+// QUEM DIZ QUE ACABOU É O SERVIDOR (`/problems/calib`: `being_calibrated` + `calibrating[]`), nunca
+// o relógio do cliente. Antes a parada era "20 ticks de 4 s" (80 s) + "algum juiz reportou um `at`
+// maior", e isso errava de quatro jeitos ao mesmo tempo (relatos do José Leite e do Arthur Botelho,
+// 21/09/2026): (1) calibração real leva MINUTOS — medi 3 a 7 min no acervo da Maratona —, então aos
+// 80 s o aviso sumia e o polling parava PARA SEMPRE, sem re-arme; (2) a âncora `calibPrevMax` lia o
+// LASTCALIB em memória, que é null enquanto o boot não terminou ⇒ o 1º tick achava "novo" o `at`
+// ANTIGO e declarava pronto em 4 s — era literalmente "a mensagem aparece e some"; (3) com N juízes,
+// o primeiro a reportar encerrava tudo; (4) calibração que termina SEM TL novo (good que falhou, o
+// caso de quem está consertando solução) não mexia no `at` e NUNCA era detectada.
+const calibRunning = () => CALIB_LIVE.length > 0;
+const CALIB_CEIL_MS = 15 * 60 * 1000;   // teto honesto: acima do UPD_TTL do servidor nada fica em voo
+function stopPolling() { if (calibTimer) { clearInterval(calibTimer); calibTimer = null; } }
+function armPolling(ms) { stopPolling(); calibPollMs = ms; calibTimer = setInterval(pollTick, ms); }
+// começa (ou mantém) o polling quando há algo em voo — inclusive ao ABRIR a página com uma
+// calibração já rodando, que antes não aparecia em lugar nenhum
+function ensurePolling() {
+  if (!(RUNNING || calibRunning())) { stopPolling(); return; }
+  if (!calibTimer) { calibStart = Date.now(); armPolling(4000); }
 }
+async function pollTick() {
+  if (calibBusy) return;                    // SERIALIZADO: resposta velha não sobrescreve a nova
+  calibBusy = true;
+  const was = RUNNING || calibRunning();
+  try { await loadValidation(); } catch { /* best-effort: a próxima volta tenta de novo */ }
+  finally { calibBusy = false; }
+  const now = RUNNING || calibRunning();
+  if (was && !now) {                        // transição rodando -> parado = acabou de verdade
+    stopPolling(); renderVal(); updateReady();
+    setMsg(T('Calibração concluída ✓', 'Calibration finished ✓'), 'v-ok');
+    return;
+  }
+  if (!now) { stopPolling(); return; }
+  const elapsed = Date.now() - calibStart;
+  if (elapsed > CALIB_CEIL_MS) {            // não some em silêncio: diz onde olhar (e volta no foco)
+    stopPolling();
+    setMsg(T('Ainda calibrando depois de 15 min — acompanhe no Painel de problemas.',
+             'Still calibrating after 15 min — follow it on the problems panel.'), '');
+    return;
+  }
+  if (elapsed > 60000 && calibPollMs === 4000) armPolling(8000);   // primeiro minuto rápido, depois calmo
+}
+function startPolling() { stopPolling(); calibStart = Date.now(); armPolling(4000); }
+// aba em segundo plano AFUNILA o setInterval (~1/min): ao voltar, confere na hora e re-arma — era
+// por isso que "às vezes funciona, às vezes não" dependia de a aba estar visível
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !ID) return;
+  loadValidation().then(() => { if (RUNNING || calibRunning()) { if (!calibTimer) { calibStart = Date.now(); armPolling(4000); } } });
+});
 const tlLine = (tl) => Object.entries(tl || {}).filter(([k]) => k !== 'default').map(([k, v]) => `${k}: ${v}s`).join(' · ');
 // abre o report.html (rico) de uma solução, gerado na calibração daquele juiz, numa nova aba
 async function openCalibReport(host, name) {
@@ -714,15 +1081,6 @@ const TL_LANG_NAME = { c: 'C', cpp: 'C++', cc: 'C++', cxx: 'C++', py: 'Python', 
   asm: 'Assembly', gas: 'Assembly', default: T('default (demais)', 'default (others)') };
 const tlLangName = (k) => TL_LANG_NAME[k] || k;
 const tlSecs = (v) => { if (v == null || v === '') return '—'; const n = +v; return (Number.isFinite(n) ? +n.toFixed(4) : v) + 's'; };
-// a solução se comportou como a CATEGORIA espera? (good/pass aceitam; wrong falha; slow estoura
-// o tempo). null = sem expectativa (categoria desconhecida). O mesmo juízo do calibreitor.
-function solOk(s) {
-  const v = s.verdict || '';
-  if (s.category === 'good' || s.category === 'pass') return v.startsWith('Accepted');
-  if (s.category === 'wrong') return !v.startsWith('Accepted');
-  if (s.category === 'slow') return v.includes('Time Limit');
-  return null;
-}
 // calibração POR EXTENSO de um juiz (h.sols): solução a solução, teste a teste — o mesmo
 // vetor do `moj calib` / `moj --json calib` (integração com ferramentas externas).
 function solsBlock(h) {
@@ -732,21 +1090,11 @@ function solsBlock(h) {
   sols.forEach(s => {
     const key = h.host + '|' + (s.category || '?') + '/' + (s.file || '?');
     const tests = s.tests || [];
-    const ok = solOk(s);
+    // o juízo é do SERVIDOR (lib/calib-expect.sh: código de cada teste × categoria × TL efetivo)
+    const pill = expectPill(s.expect);
     const tdet = el('div', { style: 'display:' + (OPEN_SOLS.has(key) ? '' : 'none') });
-    if (tests.length) {
-      const tb = el('tbody', {});
-      tests.forEach(t => tb.append(el('tr', {},
-        el('td', {}, t.name || ''),
-        el('td', { class: (t.code === 'AC' || t.code === 'AC,PE') ? '' : 'bad' }, t.code || '—'),
-        el('td', { class: 'num' }, t.time == null ? '—' : (+t.time).toFixed(2) + 's'),
-        el('td', { class: 'num' }, t.tl == null ? '—' : tlSecs(t.tl)))));
-      tdet.append(el('table', { class: 'soltests' },
-        el('thead', {}, el('tr', {},
-          el('th', {}, T('teste', 'test')), el('th', {}, T('resultado', 'result')),
-          el('th', {}, T('tempo', 'time')), el('th', {}, 'TL'))),
-        tb));
-    } else tdet.append(el('p', { class: 'muted', style: 'margin:.1rem 0 .3rem 1.2rem' }, T('sem testes registrados.', 'no recorded tests.')));
+    if (tests.length) tdet.append(testsTable(tests));   // o MESMO visual do test-run (problemas/testrun.js)
+    else tdet.append(el('p', { class: 'muted', style: 'margin:.1rem 0 .3rem 1.2rem' }, T('sem testes registrados.', 'no recorded tests.')));
     const lbl = (open) => (open ? T('ocultar testes', 'hide tests') : T('testes', 'tests')) + ' (' + tests.length + ')';
     const tg = el('a', { href: '#', onclick: (e) => {
       e.preventDefault();
@@ -755,16 +1103,40 @@ function solsBlock(h) {
       tdet.style.display = open ? '' : 'none'; tg.textContent = lbl(open);
     } }, lbl(OPEN_SOLS.has(key)));
     const repName = (s.category || '') + '-' + (s.file || '');
+    const want = expectWant(s.category), got = expectGot(s.expect);
     box.append(el('div', { class: 'solrow' },
-      ok == null ? el('span', { class: 'muted' }, '•') : el('span', { class: 'pill ' + (ok ? 'ok' : 'no') }, ok ? 'ok' : T('revisar', 'review')),
+      pill ? el('span', { class: 'pill ' + pill.cls, title: pill.title || '' }, pill.label) : el('span', { class: 'muted' }, '•'),
       el('b', {}, (s.category || '?') + '/' + (s.file || '?')),
       el('span', { class: 'muted' }, s.verdict || ''),
       tg,
       (h.reports || []).includes(repName)
         ? el('a', { href: '#', style: 'white-space:nowrap', onclick: (e) => { e.preventDefault(); openCalibReport(h.host, repName); } }, '📄 report')
-        : null), tdet);
+        : null,
+      // o que a categoria pede × o que aconteceu, DENTRO da caixa da solução (quebra de linha no flex)
+      (want || got) ? el('div', { class: 'solexp' },
+        want ? el('div', {}, want) : null,
+        got ? el('div', { class: s.expect && s.expect.state === 'ok' ? '' : 'got' }, T('obtido: ', 'got: ') + got) : null) : null),
+      tdet);
   });
   return box;
+}
+// VALIDADOR DE ENTRADA de um juiz (hosts[].validator): a linha de resumo + as entradas reprovadas com a
+// mensagem da testlib (dobradas). null = o juiz não rodou validador (calibração rápida / mojtools velho).
+function validatorBlock(h) {
+  const v = h.validator; if (!v) return null;
+  const bad = (v.tests || []).filter(t => t.code !== 'OK');
+  const cls = v.state === 'ok' ? 'ok' : (v.state === 'none' ? '' : 'no');
+  const line = el('div', { class: 'solrow' },
+    cls ? el('span', { class: 'pill ' + cls }, v.state === 'ok' ? '✓' : '✗') : el('span', { class: 'muted' }, '•'),
+    el('b', {}, T('Entradas', 'Inputs')), el('span', { class: v.state === 'none' ? 'muted' : '' }, validatorText(v)));
+  if (!bad.length) return el('div', { class: 'small', style: 'margin-top:.3rem' }, line);
+  const tb = el('tbody', {});
+  bad.forEach(t => tb.append(el('tr', {}, el('td', {}, t.name || ''), el('td', { class: 'bad' }, t.code || ''),
+    el('td', { class: 'vmsg' }, t.msg || ''))));
+  return el('div', { class: 'small', style: 'margin-top:.3rem' }, line,
+    el('details', { style: 'margin-left:1.2rem' }, el('summary', {}, T('entradas reprovadas', 'rejected inputs') + ` (${bad.length})`),
+      el('table', { class: 'soltests' }, el('thead', {}, el('tr', {}, el('th', {}, T('teste', 'test')),
+        el('th', {}, T('resultado', 'result')), el('th', {}, T('mensagem do validador', 'validator message')))), tb)));
 }
 // quadro-resumo: tempo-limite por linguagem em cada juiz; o "servido" (o que o aluno vê) em negrito
 function tlSummaryTable(hosts, served) {
@@ -801,14 +1173,28 @@ function tlSummaryTable(hosts, served) {
 }
 // assinatura do que o painel mostra: só reconstrói quando MUDA — senão o polling (a cada 4s)
 // destruía o DOM e o scroll do log "voltava pro topo" / o botão de fechar brigava com o re-render.
+// "· judge-sp1, há 3 min" — de `calibrating[]` (fila + em execução, inclusive a dirigida)
+const minsSince = (t) => Math.max(0, Math.floor((Date.now() / 1000 - (t || 0)) / 60));
+function calibWhere() {
+  if (!CALIB_LIVE.length) return '';
+  const named = CALIB_LIVE.filter(c => c.host);
+  const parts = (named.length ? named : CALIB_LIVE).map(c => {
+    const m = c.since ? (T(', há ', ', ') + minsSince(c.since) + T(' min', ' min ago')) : '';
+    if (!c.host) return T('na fila', 'queued') + m;
+    return c.host + (c.state === 'queued' ? T(' (na fila)', ' (queued)') : '') + m;
+  });
+  return ' · ' + parts.join(' · ') + '.';
+}
 function valRenderSig() {
   const hosts = (LASTCALIB && LASTCALIB.hosts) || [];
   const checks = (LASTVAL && LASTVAL.checks) || [];
   const served = (LASTINFO && (LASTINFO.time_limits || LASTINFO.tl)) || {};
   return JSON.stringify({
     run: RUNNING,
+    live: CALIB_LIVE.map(c => `${c.host}|${c.state}|${minsSince(c.since)}`),
     checks: checks.map(c => `${c.name}:${c.ok}:${c.detail || ''}`),
-    hosts: hosts.map(h => `${h.host}|${h.at}|${(h.log || '').length}|${(h.reports || []).length}|${tlLine(h.tl)}|${(h.sols || []).map(s => `${s.category}/${s.file}:${s.verdict}:${(s.tests || []).length}`).join(',')}`),
+    hosts: hosts.map(h => `${h.host}|${h.at}|${h.stale}|${(h.log || '').length}|${(h.reports || []).length}|${tlLine(h.tl)}|${(h.sols || []).map(s => `${s.category}/${s.file}:${s.verdict}:${(s.tests || []).length}:${(s.expect || {}).why}`).join(',')}|${JSON.stringify(h.validator || null)}`),
+    summary: JSON.stringify((LASTCALIB && LASTCALIB.summary) || null),
     served: Object.entries(served).map(([k, v]) => `${k}=${v}`),
     ovr: Object.entries((LASTINFO && LASTINFO.tl_override) || {}).map(([k, v]) => `${k}=${v}`),
   });
@@ -822,13 +1208,20 @@ function renderVal() {
   const hosts = (calib && calib.hosts) || [];
   const served = (info && (info.time_limits || info.tl)) || {};   // o que o aluno vê (json servido)
   const checks = (val && Array.isArray(val.checks)) ? val.checks : [];
-  if (!ID || (!checks.length && !hosts.length && !RUNNING)) { box.style.display = 'none'; return; }
+  if (!ID || (!checks.length && !hosts.length && !RUNNING && !calibRunning())) { box.style.display = 'none'; return; }
   box.style.display = '';
   box.append(el('h3', {}, T('Validação & calibração', 'Validation & calibration')));
-  if (RUNNING) box.append(el('div', { class: 'running' }, el('span', { class: 'spin' }),
-    el('span', {}, (RUNNING === 'publish' ? T('Validando e calibrando no juiz…', 'Validating and calibrating on the judge…') : T('Calibrando no juiz…', 'Calibrating on the judge…')) + T(' a página atualiza sozinha quando terminar.', ' the page updates itself when done.'))));
-  // resultado do quality gate (botão Validar)
+  // o aviso conta ONDE e HÁ QUANTO TEMPO: uma calibração leva minutos, e "Calibrando no juiz…" sem
+  // mais nada, por 7 min, é indistinguível de "travou" (relatos de 21/09/2026)
+  if (RUNNING || calibRunning()) box.append(el('div', { class: 'running' }, el('span', { class: 'spin' }),
+    el('span', {}, (RUNNING === 'publish' ? T('Validando e calibrando no juiz…', 'Validating and calibrating on the judge…') : T('Calibrando no juiz…', 'Calibrating on the judge…'))
+      + calibWhere() + T(' a página atualiza sozinha quando terminar.', ' the page updates itself when done.'))));
+  // resultado do quality gate (botão Validar) — é do PACOTE: o "validado" antigo levava o autor a achar
+  // que as soluções tinham sido conferidas (relato do Arthur Botelho, 22/09/2026)
   if (checks.length) {
+    box.append(el('div', { class: 'small', style: 'margin:.3rem 0 0' }, el('b', {}, T('Pacote', 'Package')), ' — ',
+      T('conferência estática: enunciado, exemplos, testes com entrada e saída, solução good presente. Não roda solução nenhuma — quem roda é a calibração (abaixo).',
+        'static check: statement, samples, tests with input and output, good solution present. It runs no solution — calibration does (below).')));
     const list = el('ul', { class: 'checks' });
     checks.forEach(c => list.append(el('li', {}, el('span', { class: 'pill ' + (c.ok ? 'ok' : 'no') }, c.ok ? 'ok' : T('falha', 'fail')), ' ' + (c.name || '') + (c.detail ? (' — ' + c.detail) : ''))));
     box.append(list);
@@ -848,6 +1241,13 @@ function renderVal() {
         T('É ele que o juiz cobra e que o estudante lê. Os tempos dos cartões abaixo são a MEDIÇÃO da calibração, que roda sem o override de propósito — servem para você ver a folga de cada solução.',
           'That is what the judge enforces and what the student reads. The times in the cards below are the calibration MEASUREMENT, which deliberately runs without the override — they show you the headroom of each solution.'))));
     box.append(el('div', { class: 'small muted', style: 'margin:.5rem 0 .2rem' }, `${T('Calibrado em ', 'Calibrated on ')}${hosts.length} ${T('juiz(es) — abra "ver log" para o comportamento de cada solução:', 'judge(s) — open "view log" to see each solution behavior:')}`));
+    // SOLUÇÕES × o que a categoria pede, somado entre os juízes da versão atual (o mesmo número do Painel)
+    const smt = summaryText(calib && calib.summary);
+    if (smt) {
+      const sm = calib.summary;
+      box.append(el('div', { class: 'solsum ' + (sm.bad ? 'bad' : ((sm.missing || []).length ? 'todo' : 'ok')) },
+        el('b', {}, T('Soluções: ', 'Solutions: ')), smt));
+    }
     hosts.forEach(h => {
       const isOpen = OPEN_LOGS.has(h.host);
       const det = el('div', { style: 'margin-top:.3rem;display:' + (isOpen ? '' : 'none') });
@@ -864,15 +1264,30 @@ function renderVal() {
         el('span', { style: 'flex:1' }), toggle);
       // sols estruturado: solução a solução, teste a teste (cada linha já linka o seu report);
       // juiz antigo sem o vetor cai na lista de reports + log texto de sempre
-      const sols = solsBlock(h);
+      // juiz que calibrou OUTRA versão do pacote: não desenha a lista de soluções (ela é de antes da
+      // última mexida — foi o que fez um autor ver solução removida ainda sendo julgada, 20/09/2026)
+      let sols = solsBlock(h);
+      if (h.stale) {
+        head.append(el('span', { class: 'verdict v-warn', style: 'font-size:.72rem;padding:.1rem .45rem',
+          title: T('Este juiz calibrou uma versão anterior do pacote — as soluções mudaram desde então.',
+                   'This judge calibrated an earlier version of the package — the solutions changed since then.') },
+          T('desatualizado — recalibre', 'outdated — recalibrate')));
+        // a lista NÃO pode aparecer como se fosse a de agora (é de antes do último Salvar: foi assim
+        // que um autor viu solução removida ainda sendo julgada, 20/09) — mas esconder tudo deixava a
+        // tela vazia depois de cada Salvar, e o autor lendo "nenhum log atualiza" (relato de 21/09).
+        // Fica DOBRADA e rotulada: quem quiser ver o que rodou antes, abre.
+        if (sols) sols = el('details', { class: 'small', style: 'margin-top:.25rem;opacity:.75' },
+          el('summary', {}, T('calibração da versão anterior', 'calibration of the previous version')
+            + (h.at ? (T(' · há ', ' · ') + minsSince(h.at) + T(' min', ' min ago')) : '')), sols);
+      }
       const reps = el('div', { class: 'small', style: 'margin-top:.25rem' });
       if (!sols && (h.reports || []).length) {
         reps.append(el('span', { class: 'muted' }, T('report por solução: ', 'report per solution: ')));
         h.reports.forEach(rn => reps.append(el('a', { href: '#', style: 'margin-right:.7rem;white-space:nowrap', onclick: (e) => { e.preventDefault(); openCalibReport(h.host, rn); } }, '📄 ' + rn)));
       }
-      box.append(el('div', { class: 'judgecard' }, head, sols, reps, det));
+      box.append(el('div', { class: 'judgecard' }, head, sols, h.stale ? null : validatorBlock(h), reps, det));
     });
-  } else if (!RUNNING) box.append(el('p', { class: 'small muted' }, T('Ainda não calibrado — clique “Calibrar” na barra de baixo.', 'Not calibrated yet — click “Calibrate” on the bottom bar.')));
+  } else if (!RUNNING && !calibRunning()) box.append(el('p', { class: 'small muted' }, T('Ainda não calibrado — clique “Calibrar” na barra de baixo.', 'Not calibrated yet — click “Calibrate” on the bottom bar.')));
   // sem juízes calibrados mas com TL servido (legado): mostra o tempo-limite usado na correção
   if (!hosts.length && Object.keys(served).length) box.append(el('div', { class: 'small', style: 'margin-top:.4rem' }, T('Tempo-limite usado na correção: ', 'Time limit used for grading: ') + tlLine(served)));
   box.querySelectorAll('.caliblog').forEach(p => { if (CALIB_SCROLL[p.dataset.host]) p.scrollTop = CALIB_SCROLL[p.dataset.host]; });   // restaura o scroll
@@ -980,7 +1395,7 @@ async function loadHistory(force) {
 async function uploadTar(file) {
   if (!file) return;
   let body;
-  if (ID) body = { id: ID };
+  if (ID) body = { id: ID, ...(REV ? { base_rev: REV } : {}) };
   else {
     const prob = $('prob').value.trim(); REPO = $('repo').value;
     if (!REPO || !/^[a-z0-9][a-z0-9._-]*$/.test(prob)) { setMsg(T('Para enviar um .tar novo, escolha o diretório e o nome do problema.', 'To upload a new .tar, choose the directory and the problem name.'), 'error'); return; }
@@ -993,7 +1408,12 @@ async function uploadTar(file) {
     ID = j.id; MODE = 'edit'; history.replaceState({}, '', '?id=' + encodeURIComponent(ID));
     $('prob').disabled = true; $('title').textContent = T('Editar: ', 'Edit: ') + ID;
     await loadSource(ID); HIST_LOADED = false; setMsg(T('Pacote enviado e recarregado ✓', 'Package uploaded and reloaded ✓'), 'v-ok');
-  } catch (e) { setMsg((e instanceof ApiError ? e.message : T('Falha no upload', 'Upload failed')) + (e.code ? ` (${e.code})` : ''), 'error'); }
+  } catch (e) {
+    if (e instanceof ApiError && e.code === 'stale_rev') {
+      setMsg(T('Não enviado: o problema mudou desde que você o abriu.', 'Not uploaded: the problem changed since you opened it.'), 'error');
+      showConflict(e, async () => { try { await apiPost('/problems/upload', { ...body, force: true }, { contest: CONTEST, auth: true }); await loadSource(ID); HIST_LOADED = false; setMsg(T('Pacote enviado e recarregado ✓', 'Package uploaded and reloaded ✓'), 'v-ok'); } catch (x) { setMsg(x.message || String(x), 'error'); } });
+    } else setMsg((e instanceof ApiError ? e.message : T('Falha no upload', 'Upload failed')) + (e.code ? ` (${e.code})` : ''), 'error');
+  }
 }
 
 // ---- compartilhamento ---------------------------------------------------------------------
@@ -1091,6 +1511,18 @@ function renderPubState() {
 async function togglePublic() {
   if (MODE !== 'edit' || !ID) { setMsg(T('Salve o problema primeiro para poder publicar.', 'Save the problem first to be able to publish.'), 'error'); return; }
   const makePublic = !loadedPublic;
+  // NÃO PRONTO sinaliza e confirma (decisão do Ribas, 24/09/2026): nada bloqueia, mas quem publica vê
+  // as pendências antes (as do /problems/status, frescas — o Painel pode ter mudado desde o load)
+  if (makePublic) {
+    try {
+      const st = await apiGet('/problems/status?id=' + encodeURIComponent(ID), { contest: CONTEST, auth: true });
+      PSTAT = (st.problems || []).find(p => p.id === ID) || PSTAT; updateReady();
+    } catch { /* sem o status, segue só com a confirmação de sempre */ }
+    const pend = (PSTAT && PSTAT.pending) || [];
+    if (pend.length && !confirm(T('O problema ainda NÃO está pronto:\n\n', 'The problem is NOT ready yet:\n\n')
+        + pend.map(c => '• ' + pendingLabel(c)).join('\n')
+        + T('\n\nPublicar mesmo assim?', '\n\nPublish anyway?'))) return;
+  }
   if (makePublic && !confirm(T('⚠ TORNAR PÚBLICO publica "', '⚠ MAKING PUBLIC publishes "') + ID + T('" no TREINO LIVRE — fica visível a TODOS.\n\nProblemas de prova devem ficar PRIVADOS até a prova passar. Confirmar a publicação?', '" in FREE TRAINING — visible to EVERYONE.\n\nExam problems must stay PRIVATE until the exam is over. Confirm publication?'))) return;
   const btn = $('pubToggle'); btn.disabled = true;
   try {
@@ -1102,7 +1534,32 @@ async function togglePublic() {
 }
 
 // ---- salvar / ações -----------------------------------------------------------------------
-async function save() {
+// ---- conflito de edição (409 stale_rev) --------------------------------------------------------
+function hideConflict() { const b = $('revConflict'); if (b) b.remove(); }
+// a caixa fica logo acima da mensagem do Salvar: quem mudou, quando, e as duas saídas
+function showConflict(e, retry) {
+  hideConflict();
+  const d = (e && e.data) || {}, who = d.changed_by || T('outra pessoa', 'someone else');
+  const when = d.changed_at ? new Date(d.changed_at * 1000).toLocaleString() : '';
+  const box = el('div', { id: 'revConflict', class: 'error-box', style: 'margin:.5rem 0' },
+    el('b', {}, T('Este problema foi alterado depois que você o abriu.', 'This problem was changed after you opened it.')),
+    el('div', { class: 'small', style: 'margin:.25rem 0 .5rem' },
+      T(`Quem alterou: ${who}` + (when ? ` · ${when}` : '') + '. Se você salvar agora, as mudanças dessa pessoa se perdem.',
+        `Changed by: ${who}` + (when ? ` · ${when}` : '') + '. If you save now, their changes are lost.')),
+    el('div', { class: 'row', style: 'gap:.5rem;flex-wrap:wrap' },
+      el('button', { class: 'btn', onclick: async () => {
+        if (!confirm(T('Recarregar o problema? As SUAS alterações não salvas se perdem.', 'Reload the problem? YOUR unsaved changes are lost.'))) return;
+        try { await loadSource(ID); setMsg(T('Recarregado com a versão atual ✓', 'Reloaded with the current version ✓'), 'v-ok'); }
+        catch (x) { setMsg(x.message || String(x), 'error'); }
+      } }, T('Recarregar (perde as suas mudanças)', 'Reload (discard your changes)')),
+      el('button', { class: 'btn ghost danger', onclick: async () => {
+        if (!confirm(T(`Salvar por cima? As mudanças de ${who} se perdem.`, `Save over it? The changes by ${who} are lost.`))) return;
+        hideConflict(); await retry();
+      } }, T('Salvar por cima', 'Save over it'))));
+  const m = $('msg'); m.parentNode.insertBefore(box, m);
+}
+
+async function save(opts = {}) {
   REPO = $('repo').value;
   if (!REPO) {
     showTab('enun'); const fld = $('repo'); if (fld) flash(fld.closest('.field') || fld);
@@ -1121,20 +1578,36 @@ async function save() {
       ID = j.id; MODE = 'edit'; history.replaceState({}, '', '?id=' + encodeURIComponent(ID));
       $('prob').disabled = true; $('title').textContent = T('Editar: ', 'Edit: ') + ID;
       fillRepoSelect();   // criado: a org vira selo fixo (parte do id) e "+ nova org" some
-    } else await apiPost('/problems/edit', { id: ID, ...f }, { contest: CONTEST, auth: true });
+      REV = j.rev || '';
+      if (TRUN) TRUN.refresh();   // com id, o test-run fica disponível
+    } else {
+      const j = await apiPost('/problems/edit', { id: ID, ...f, ...(REV ? { base_rev: REV } : {}), ...(opts.force ? { force: true } : {}) },
+        { contest: CONTEST, auth: true });
+      REV = j.rev || REV;
+    }
+    hideConflict();
     HIST_LOADED = false;   // salvar = commit novo; a aba Histórico recarrega na próxima abertura
+    SAVED_AT = Math.floor(Date.now() / 1000);   // versão NOVA do pacote: a calibração em voo ficou velha
+    updateReady();
     setMsg(T('Salvo ✓', 'Saved ✓'), 'v-ok');   // SALVAR não mexe em público — publicar é ação explícita (botão na aba Publicação)
-  } catch (e) { setMsg((e instanceof ApiError ? e.message : T('Falha ao salvar', 'Failed to save')) + (e.code ? ` (${e.code})` : ''), 'error'); }
+  } catch (e) {
+    if (e instanceof ApiError && e.code === 'stale_rev') { setMsg(T('Não salvo: o problema mudou desde que você o abriu.', 'Not saved: the problem changed since you opened it.'), 'error'); showConflict(e, () => save({ force: true })); }
+    else setMsg((e instanceof ApiError ? e.message : T('Falha ao salvar', 'Failed to save')) + (e.code ? ` (${e.code})` : ''), 'error');
+  }
   finally { $('save').disabled = false; }
 }
 async function act(action, label) {
   if (!ID) { setMsg(T('Salve o problema primeiro.', 'Save the problem first.'), 'error'); return; }
   setMsg(label + '…');
   try {
-    await apiPost('/problems/' + action, { id: ID }, { contest: CONTEST, auth: true });
+    const j = await apiPost('/problems/' + action, { id: ID }, { contest: CONTEST, auth: true });
     RUNNING = (action === 'validate') ? 'publish' : 'calibrate';   // 'publish' = nome interno do estado
-    calibPrevMax = maxCalibAt();
-    setMsg(label + T(' iniciado ✓ — veja o andamento em “Validação & calibração” (aba Publicação).', ' started ✓ — see progress in “Validation & calibration” (Publication tab).'), 'v-ok');
+    // o servidor DEDUPLICA (já havia calibração deste problema na fila) e dizia isso na resposta,
+    // que a tela jogava fora: o autor lia "iniciado ✓" 5 vezes seguidas e achava que nenhuma pegou
+    const dup = j && j.status === 'already_queued';
+    setMsg(dup ? T('Já havia uma calibração na fila para este problema — acompanhe abaixo.',
+                   'There was already a calibration queued for this problem — follow it below.')
+               : label + T(' iniciado ✓ — veja o andamento em “Validação & calibração” (aba Publicação).', ' started ✓ — see progress in “Validation & calibration” (Publication tab).'), 'v-ok');
     showTab('pub'); renderVal(); updateReady(); startPolling();
   } catch (e) { setMsg(e.message, 'error'); }
 }
@@ -1165,9 +1638,12 @@ async function calibrateHosts(hosts) {
   if (!hosts.length) { setMsg(T('Escolha ao menos um juiz online.', 'Choose at least one online judge.'), 'error'); return; }
   setMsg(T('Calibrando em ', 'Calibrating on ') + hosts.length + T(' juiz(es)…', ' judge(s)…'));
   try {
-    await apiPost('/problems/request-calibration', { id: ID, hosts }, { contest: CONTEST, auth: true });
-    RUNNING = 'calibrate'; calibPrevMax = maxCalibAt();
-    setMsg(T('Calibração disparada em ', 'Calibration triggered on ') + hosts.length + T(' juiz(es) — acompanhe abaixo.', ' judge(s) — follow below.'), 'v-ok');
+    const j = await apiPost('/problems/request-calibration', { id: ID, hosts }, { contest: CONTEST, auth: true });
+    RUNNING = 'calibrate';
+    const novos = ((j && j.hosts) || []).filter(h => h.status !== 'already_queued').length;
+    setMsg(novos ? (T('Calibração disparada em ', 'Calibration triggered on ') + novos + T(' juiz(es) — acompanhe abaixo.', ' judge(s) — follow below.'))
+                 : T('Esses juízes já tinham uma calibração deste problema na fila — acompanhe abaixo.',
+                     'Those judges already had a calibration of this problem queued — follow it below.'), 'v-ok');
     showTab('pub'); renderVal(); updateReady(); startPolling();
   } catch (e) { setMsg(e.message, 'error'); }
 }
@@ -1211,10 +1687,11 @@ async function delProblem() {
 
 async function loadSource(id, j) {
   if (!j) j = await apiGet('/problems/source?id=' + encodeURIComponent(id), { contest: CONTEST, auth: true });
-  EDITABLE = j.editable; OWNER = j.owner || ''; REPO = id.split('#')[0];
+  EDITABLE = j.editable; OWNER = j.owner || ''; REPO = id.split('#')[0]; REV = j.rev || ''; hideConflict();
   $('title').textContent = T('Editar: ', 'Edit: ') + id;
   $('prob').value = id.split('#').slice(1).join('#'); $('prob').disabled = true;
   fillRepoSelect(); await renderForm(j);
+  if (TRUN) TRUN.refresh();   // execuções lembradas DESTE problema
   if ($('delprob')) $('delprob').style.display = EDITABLE ? '' : 'none';   // remover só p/ quem pode editar
   if (!EDITABLE) {
     showNote('⚠ ' + (j.note || T('Somente leitura.', 'Read only.')) + T(' Os botões de salvar estão desativados (mas dá p/ baixar o pacote).', ' The save buttons are disabled (but you can download the package).'));
@@ -1226,22 +1703,51 @@ async function loadSource(id, j) {
 // ---- ligação de eventos (SEMPRE antes do carregamento async; uma falha de load nunca
 //      desliga os botões — era a causa do "nenhum botão faz nada") ---------------------------
 function bindHandlers() {
+  // 🧪 testar no juiz: o painel vive ao lado do #scrPanel (fora do #solsWrap, que o renderSols refaz)
+  TRUN = makeTestRun({
+    id: () => ID,
+    get: (p) => apiGet(p, { contest: CONTEST, auth: true }),
+    post: (p, b) => apiPost(p, b, { contest: CONTEST, auth: true }),
+    report: async (run) => {
+      const r = await fetch('/api/v1/problems/test-run-report?run=' + encodeURIComponent(run), { headers: { Authorization: 'Bearer ' + getToken(CONTEST) } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    },
+    openHtmlReport, createEditor, cmFor, fileToBase64, textToBase64, hiddenFile: () => hiddenFile(false),
+  });
+  $('scrPanel').after(TRUN.panel); TRUN.refresh();
+  // 🐞 issues: a aba tem o painel do módulo; mexer numa issue muda o "pronto" (relê o status)
+  ISSUES = makeIssues({
+    id: () => ID,
+    apiGet: (p) => apiGet(p, { contest: CONTEST, auth: true }),
+    apiPost: (p, b) => apiPost(p, b, { contest: CONTEST, auth: true }),
+    onCount: (n) => {
+      $('tabIssuesMini').textContent = n ? `(${n})` : '';
+      if (!PSTAT || (PSTAT.open_issues || 0) !== n) refreshPstat();
+    },
+  });
+  $('issuesPane').append(ISSUES.panel);
+  $('edRemove').onclick = removeEdLang;
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') TRUN.onVisible(); });
   $('addex').onclick = () => addExample();
   $('addtest').onclick = addTest;
   $('testpair').addEventListener('change', (e) => loadTestPairs(e.target.files));
-  $('save').onclick = save;
+  $('save').onclick = () => save();   // (sem o evento como opts)
   if ($('delprob')) $('delprob').onclick = delProblem;
   $('publish').onclick = () => act('validate', T('Validar', 'Validate'));   // rota nova (publish = alias deprecado)
   $('calibrate').onclick = () => act('request-calibration', T('Calibração', 'Calibration'));
   $('newdir').onclick = newDir;
   if ($('moveorg')) $('moveorg').onclick = moveProblem;
   $('preview').onclick = preview;
+  $('edPreview').onclick = edPreview;
+  $('transTitle').addEventListener('input', () => { if (TRANS[curStmtLang]) TRANS[curStmtLang].title = $('transTitle').value; });
+  $('transRemove').onclick = () => removeTransLang(curStmtLang);
   $('previewClose').onclick = () => { $('previewModal').style.display = 'none'; $('previewBody').innerHTML = ''; };
   $('download').onclick = download;
   $('uploadTar').addEventListener('change', (e) => { uploadTar(e.target.files[0]); e.target.value = ''; });
   $('repo').onchange = async () => { REPO = $('repo').value; updateRepoHint(); renderPubState(); await loadShare(); };
   $('shareAdd').onclick = async () => { const u = $('shareLogin').value.trim(); if (u) { await share([u], []); $('shareLogin').value = ''; } };
-  [...CF_TEXT, ...CF_YN, ...CF_FLAG].forEach(([id]) => $(id).addEventListener('change', () => { syncConfFromFields(); updateReady(); }));
+  [...CF_TEXT, ...CF_YN, ...CF_FLAG, ['cf_nosample']].forEach(([id]) => $(id).addEventListener('change', () => { syncConfFromFields(); updateReady(); }));
   $('confRaw').addEventListener('change', () => { confToFields($('confRaw').value); updateReady(); });
   $('newCollBtn').onclick = newColl;
   $('pcolls').addEventListener('change', () => { renderCollChips(); renderCollManage(); });
@@ -1279,6 +1785,7 @@ async function boot() {
   bindHandlers();           // 1) liga TUDO antes de qualquer await de dados
   setupTabs();
   if (location.hash === '#hist') showTab('hist');   // link direto p/ a aba Histórico (painel)
+  if (location.hash === '#issues') showTab('issues');   // link direto p/ as issues (chip 🐞 do Painel)
   if (location.hash === '#pub') {                   // link direto p/ Publicação (gestão → "editar linguagens")
     showTab('pub');
     setTimeout(() => { const p = $('plangs'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 300);
@@ -1333,7 +1840,9 @@ async function boot() {
   } else if (!EDITABLE) { if ($('newCollBtn')) $('newCollBtn').disabled = true; }
 
   updateReady();
-  loadValidation();         // best-effort: painel de validação/calibração + prontidão
+  // se JÁ existe calibração em voo quando a página abre (o autor recarregou no meio, ou pediu pela
+  // CLI), a tela mostra e acompanha — antes recarregar deixava o autor sem sinal nenhum
+  loadValidation().then(ensurePolling);   // best-effort: painel de validação/calibração + prontidão
   loadJudges();             // lista de juízes p/ a calibração direcionada
 }
 boot();

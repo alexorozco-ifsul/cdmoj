@@ -13,20 +13,22 @@ import { T } from '/shared/i18n.js';
 
 const enc = encodeURIComponent;
 
-export function makeSettingsTab(CONTEST) {
+export function makeSettingsTab(CONTEST, opts = {}) {
   const G = { contest: CONTEST, auth: true };
+  const has = typeof opts.has === 'function' ? opts.has : () => true;
   const panel = el('div', { class: 'section' });
 
   // rótulo + índices dos filhos do editor (modo admin) + começa aberta?
+  // (2026-09-18: a caixa "mostrar o código a todos" — antigo índice 6 — foi REMOVIDA; tudo acima dele desceu 1)
   const GROUPS = () => [
-    // 28,29,30 = o bloco do FUSO da prova, acrescentado no fim do editor (ver a nota lá:
+    // 27,28,29 = o bloco do FUSO da prova, acrescentado no fim do editor (ver a nota lá:
     // campo novo entra no fim justamente para não deslocar estes índices)
-    { label: T('🕒 Identidade e janela', '🕒 Identity and window'), idx: [0, 1, 2, 3, 28, 29, 30], open: true },
-    { label: T('👁 O que o time vê durante a prova', '👁 What the team sees during the contest'), idx: [6, 7, 8, 9, 10, 11, 12] },
-    { label: T('⚖️ Julgamento (linguagens, pool, veredicto manual)', '⚖️ Judging (languages, pool, manual verdict)'), idx: [13, 14, 19, 20, 21, 22, 23, 24] },
-    // 31,32,33 = o bloco "balões durante o freeze", também acrescentado no fim do editor
-    { label: T('🏅 Placar, freeze e penalidade', '🏅 Scoreboard, freeze and penalty'), idx: [15, 18, 25, 26, 27, 31, 32, 33, 34, 35, 36] },
-    { label: T('🔒 Acesso ao contest', '🔒 Contest access'), idx: [4, 5, 16, 17] },
+    { label: T('🕒 Identidade e janela', '🕒 Identity and window'), idx: [0, 1, 2, 3, 27, 28, 29], open: true },
+    { label: T('👁 O que o time vê durante a prova', '👁 What the team sees during the contest'), idx: [6, 7, 8, 9, 10, 11] },
+    { label: T('⚖️ Julgamento (linguagens, pool, veredicto manual)', '⚖️ Judging (languages, pool, manual verdict)'), idx: [12, 13, 18, 19, 20, 21, 22, 23] },
+    // 30,31,32 = o bloco "balões durante o freeze", também acrescentado no fim do editor
+    { label: T('🏅 Placar, freeze e penalidade', '🏅 Scoreboard, freeze and penalty'), idx: [14, 17, 24, 25, 26, 30, 31, 32, 33, 34, 35] },
+    { label: T('🔒 Acesso ao contest', '🔒 Contest access'), idx: [4, 5, 15, 16] },
   ];
 
   async function load() {
@@ -49,9 +51,13 @@ export function makeSettingsTab(CONTEST) {
       panel.append(el('details', { class: 'fgroup', open: true },
         el('summary', {}, T('Outras opções', 'Other options')), ed.el));
     }
-    panel.append(el('div', { class: 'small muted', style: 'margin:.4rem 0' },
-      T('O "gate de login por substring de UA" fica em Acesso só por compatibilidade: quem configura o gate por sede é Pessoas › Máquinas & gate, que enxerga o esperado × visto de cada time.',
-        'The "login gate by UA substring" stays under Access only for compatibility: the per-site gate is configured in People › Machines & gate, which shows expected × seen per team.')));
+    // o campo LEGADO do gate por substring de UA é do módulo `maquinas`: sem ele, nem o campo nem
+    // a nota aparecem (o nó fica no editor — getValue() continua lendo o valor salvo)
+    const uaField = panel.querySelector('[data-k="login_ua_substring"]');
+    if (uaField) uaField.hidden = !has('maquinas');
+    if (has('maquinas')) panel.append(el('div', { class: 'small muted', style: 'margin:.4rem 0' },
+      T('O "gate de login por substring de UA" fica em Acesso só por compatibilidade: quem configura o gate por sede é Máquinas › Gate & trava, que enxerga o esperado × visto de cada time.',
+        'The "login gate by UA substring" stays under Access only for compatibility: the per-site gate is configured in Machines › Gate & lock, which shows expected × seen per team.')));
 
     const msg = el('div', { class: 'small' });
     const save = el('button', { class: 'btn' }, T('Salvar configurações', 'Save settings'));
@@ -71,7 +77,7 @@ export function makeSettingsTab(CONTEST) {
       save.disabled = false;
     });
     panel.append(el('div', { class: 'row', style: 'margin-top:.7rem' }, save, msg));
-    panel.append(await timeOverridesPanel(CONTEST, G));
+    // (a ⏱ prorrogação por sede/grupo mora em Evento › Sedes & escolas — módulo `sedes`)
   }
   return { panel, load };
 }
@@ -102,7 +108,7 @@ export async function timeOverridesPanel(CONTEST, G) {
       en.addEventListener('input', () => { r.end = dtToEpoch(en.value); });
       rs.addEventListener('input', () => { r.reason = rs.value; });
       list.append(el('div', { class: 'row', style: 'gap:.4rem;margin:.25rem 0;flex-wrap:wrap' }, rx, en, rs,
-        el('button', { class: 'btn danger ghost', title: T('remover', 'remove'), onclick: () => { rules.splice(i, 1); render(); } }, '✕')));
+        el('button', { class: 'btn ghost danger', title: T('remover', 'remove'), onclick: () => { rules.splice(i, 1); render(); } }, '✕')));
     });
     if (!rules.length) list.append(el('div', { class: 'muted small' }, T('Nenhuma regra ativa (todos seguem o fim normal).', 'No active rule (everyone follows the normal end).')));
   };

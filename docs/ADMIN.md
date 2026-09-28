@@ -131,7 +131,7 @@ Em produção prefira os **units systemd de usuário** (`server/etc/systemd/`,
 
 ## 4. Segredos (resumo)
 
-Dois tokens **compartilhados** (600, sob `run/secrets/`), nunca versionados, nunca na imagem:
+Tokens **compartilhados** (600, sob `run/secrets/`), nunca versionados, nunca na imagem:
 
 - **`worker.token`** (`mojw_…`) — autentica os **juízes** (`Authorization: Bearer mojw_…`). Gere no
   host da API (§2) e **espelhe o MESMO valor** em cada juiz (`judge/etc/worker.token`). Sem ele os
@@ -142,6 +142,20 @@ Dois tokens **compartilhados** (600, sob `run/secrets/`), nunca versionados, nun
     > /home/ribas/moj/run/secrets/bot.token && chmod 600 /home/ribas/moj/run/secrets/bot.token
   ```
   (O bot ainda precisa do token da API do Telegram em `mojinho-bot/token` e de `mojinho-bot/bot.conf`.)
+- **`animeitor.cred`** (`usuario:token`, **a chave do MOJ no Animeitor**) — quem cria a credencial é o
+  dono do Animeitor (Emilio Wuerges; do lado dele é uma entrada `[[tokens]]` com `name = "moj"`). Com o
+  arquivo presente, **todo contest** fala com o telão (`$ANIMEITOR_URL`, padrão
+  `https://animeitor.naquadah.com.br`) sem configurar nada, e a chave **nunca aparece** na tela; o
+  `.animeitor`/admin pode gravar uma chave própria, que vence. A chave do MOJ **só** vai ao servidor
+  padrão. Instalar (no host, no `run/` que os containers montam — a API e o alimentador leem o mesmo
+  arquivo; `ANIMEITOR_CRED_FILE` muda o caminho):
+  ```bash
+  install -Dm600 <(printf 'moj:%s\n' "<token>") <raiz>/run/secrets/animeitor.cred
+  chown <dono do run> <raiz>/run/secrets/animeitor.cred
+  ```
+  O token vem por canal privado e **nunca** entra em repo, doc, commit ou mensagem de grupo. Trocar =
+  sobrescrever o arquivo (vale na próxima requisição e na próxima volta do alimentador). Ver
+  `docs/ANIMEITOR.md` › Chave do MOJ.
 - **Chave do webcast** (`mojwc_…`) — NÃO se gera à mão: sai da página `/contest/animeitor/`
   (guardada em `contests/<c>/webcast.json`, modo 600), que é da conta `.animeitor` **e também do
   admin do contest** — a porta do admin é o cartão *🎥 Telão (Animeitor)* na Central › Gerar (ou o
@@ -299,8 +313,56 @@ curl -s -H "$H" $B/api/v1/            # {"success":true,"name":"MOJ API","versio
       confere que a API responde e o `/index/status` está são.)
 - [ ] Um **juiz** aparece online (`/api/v1/judge/list` ou o painel `/treino/admin/`).
 
+## 9. Retenção e espaço em disco
+
+O que cresce em produção (medição de 16/09/2026: 185 GB usados de 290):
+
+| O que | Onde | Quem controla |
+|---|---|---|
+| Resultados processados | `run/spool/submissions-done/` | o `judged` guarda o result **sem** o report (`report_html_b64` sai na hora de mover) e apaga o que tem mais de **7 dias** (`SPOOL_DONE_KEEP_DAYS`, default 7; `0` desliga). |
+| Reports de julgamento | `contests/<c>/users/<login>/mojlog/<id>.html.gz` | gravados **comprimidos** (gzip) desde 16/09/2026; o servidor entrega com `Content-Encoding: gzip`. Cada bloco do report tem teto de **64 KB** (`REPORT_MAX_BYTES`, no juiz). |
+| Índice de problemas | `contests/treino/var/jsons{,-private}/<id>.json` | a cópia pública é **hardlink** da privada; exemplo do enunciado acima de 256 KB entra truncado no HTML (`STMT_SAMPLE_MAX_BYTES`) e acima de 4 MB não vai como dado (`STMT_SAMPLE_JSON_MAX_BYTES`). |
+| PDFs da impressão, lixeira | `print-requests/*.combined.pdf`, `contests/.trash/` | caches regeneráveis: `cache-purge.sh`. |
+
+Ferramentas (todas **dry-run por padrão**; `--apply` executa):
+
+- `server/bin/mojlog-compress.sh --all --apply` — comprime reports antigos que ainda estão em `.html`
+  (lossless; pode rodar a qualquer hora, com `nice`). Em produção rode dentro do container da API.
+- `server/bin/cache-purge.sh --apply` — apaga PDFs da impressão de contests encerrados há mais de 7 dias
+  (`--pdf-days`), entradas da lixeira com mais de 60 dias (`--trash-days`) e tmp órfãos. O PDF volta
+  sozinho na próxima impressão.
+- `server/bin/mojlog-prune.sh --ended-days N [--contest <c>] --apply` — **apaga** os reports de contests
+  encerrados há mais de N dias. Veredicto, `results/<id>.json` e o código-fonte ficam; a web passa a
+  dizer "report removido pela política de retenção". Nunca toca no treino (ele não tem `CONTEST_END`
+  numérico) nem na lixeira.
+
+**Política automática (decisão de 16/09/2026):** o timer `moj-housekeeping.timer` roda todo dia às
+03:30 `mojlog-prune.sh --ended-days 180 --apply` (reports de contests encerrados há mais de **6
+meses**) e `cache-purge.sh --apply`. Instale no host, como root: `bash server/bin/install-housekeeping.sh`
+(idempotente; `journalctl -u moj-housekeeping` mostra cada rodada; cada contest atingido ganha uma
+linha em `var/admin-audit.log`). Para preservar os reports de um contest específico além do prazo,
+mantenha uma cópia (`contest-backup`) antes da data.
+
 ## Ponteiros
 
 Arquitetura: [`OVERVIEW.md`](OVERVIEW.md) · Fluxo de submissão: [`FLOW.md`](FLOW.md) · Rotas:
 [`API.md`](API.md) · Deploy técnico + nginx/subdomínios: [`DEPLOY.md`](DEPLOY.md) · Units bare-metal:
 `server/etc/systemd/README.md` · Juízes: `judge/README.md` · Pull/segredos: `server/judge-gw/PULL.md`.
+
+## 10. Posse que ficou num login antigo (troca de username)
+
+Desde 2026-09-18 a troca de username leva a **posse** junto: dono de problema, de contest, de coleção e as
+permissões de criar contest. Quem trocou de username **antes** disso ficou com a posse no login antigo: os
+problemas não aparecem em "Meus" e o dono dos contests é um login que não existe mais.
+
+Para consertar uma conta:
+
+1. Rode em **dry-run** e leia o que aponta para o login antigo:
+   `podman exec systemd-moj-api bash /opt/moj/cdmoj/server/bin/owner-rename.sh <login-antigo> <login-novo>`
+2. Rode de novo com `--apply`.
+3. Confira a última linha: tudo em zero.
+
+A ferramenta **recusa** quando o login novo não existe, e quando o login antigo **ainda existe**. No segundo
+caso não houve troca de username: são duas contas, e a posse entre contas diferentes não se transfere por
+aqui. Rodar duas vezes é inofensivo. Cada problema ganha um commit `dono: <antigo> -> <novo>`.
+

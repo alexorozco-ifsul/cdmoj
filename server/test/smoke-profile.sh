@@ -60,6 +60,13 @@ ck "account password" '[[ "$(jq -r .password "$T/users/alice/account.json")" == 
 call /treino/profile/password POST '{"old_password":"ERRADA","new_password":"x"}'
 ck "senha velha errada -> 403" '[[ "$OUT" == *"Status: 403"* ]]'
 
+# PARTICIPAÇÃO VIRTUAL gravada: o estado anda com o dir do usuário, o SNAPSHOT fica no contest
+# chaveado pelo login — tem de seguir o rename (vr_rename_login, lib/virtual.sh)
+mkdir -p "$T/users/alice/virtual" "$FIX/vprova/virtual/runs"
+printf '{"contest":"vprova","state":"finished"}' > "$T/users/alice/virtual/vprova.json"
+printf '{"login":"alice","name":"Alice","solved":1,"penalty":10,"runs":[]}' > "$FIX/vprova/virtual/runs/alice.json"
+# …e quem tinha a alice entre os "meus escolhidos" do virtual passa a ter o login novo
+mkdir -p "$T/users/bob/virtual"; printf '{"version":1,"logins":["alice","alicea"]}' > "$T/users/bob/virtual/_friends.json"
 echo "== troca de username (rename = mv do diretório) =="
 call /treino/profile/username POST '{"new_username":"alice2"}'
 ck "username trocado"     '[[ "$(jq -r .new_username <<<"$BODY")" == "alice2" ]]'
@@ -69,6 +76,8 @@ ck "history preservado (2 linhas)" '[[ "$(wc -l < "$T/users/alice2/history")" ==
 ck "history do bob intacto" '[[ "$(wc -l < "$T/users/bob/history")" == 1 ]]'
 ck "submissão preservada" '[[ -f "$T/users/alice2/submissions/abc123.c" ]]'
 ck "remaining = 1"        '[[ "$(jq -r .username_changes_remaining <<<"$BODY")" == 1 ]]'
+ck "lista de escolhidos de OUTRA conta seguiu o rename (sem casar prefixo)" '[[ "$(jq -c .logins "$T/users/bob/virtual/_friends.json")" == "[\"alice2\",\"alicea\"]" ]]'
+ck "snapshot de participação virtual seguiu o rename" '[[ -f "$FIX/vprova/virtual/runs/alice2.json" && ! -e "$FIX/vprova/virtual/runs/alice.json" && "$(jq -r .login "$FIX/vprova/virtual/runs/alice2.json")" == alice2 ]]'
 
 # TODAS as sessões da conta seguem o rename — não só a que pediu a troca. Era o furo: a aba
 # do outro computador continuava com o login velho e a próxima submissão por ela RECRIAVA o

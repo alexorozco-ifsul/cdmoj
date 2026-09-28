@@ -41,7 +41,7 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
   const PL = PRIORITY_LABEL();
   const priority = el('select', {}, ...prios.map((p) => el('option', { value: p }, PL[p] || p)));
   priority.value = prios.includes(s.priority) ? s.priority : 'lista-publica';
-  const loginEnabled = mkBool(s.login_enabled !== false), showCode = mkBool(s.show_code ?? s.showcode),
+  const loginEnabled = mkBool(s.login_enabled !== false),
     showLog = mkBool(s.show_log !== false), showEditor = mkBool(s.show_editor !== false),
     allowLate = mkBool(s.allow_late), scoreAnon = mkBool(s.score_anon),
     showTL = mkBool(s.show_tl !== false), allowBackup = mkBool(s.allow_backup !== false),
@@ -52,6 +52,9 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
     el('option', { value: 'fill' }, T('Célula pintada com a cor do balão', 'Cell filled with the balloon colour')));
   blnStyle.value = s.balloon_style === 'fill' ? 'fill' : 'icon';
   const ua = el('input', { value: s.login_ua_substring || '', placeholder: T('substring do UA (vazio = sem gate)', 'UA substring (empty = no gate)') });
+  // data-k: o settings-tab esconde este campo sem o módulo `maquinas` (por chave, não por índice)
+  const uaField = field(T('Gate de login por substring de UA (só não-privilegiados)', 'Login gate by UA substring (only non-privileged)'), ua);
+  uaField.dataset.k = 'login_ua_substring';
   const penMin = el('input', { type: 'number', min: '0', step: '1', style: 'max-width:100px',
     value: String(Number.isInteger(s.penalty_minutes) ? s.penalty_minutes : 20) });
   // quórum da correção manual: quantos juízes validam cada veredicto (1..5; default 2)
@@ -102,18 +105,17 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
     isCreate ? el('div', { class: 'grid2' }, field(T('Idioma', 'Language'), locale), field(T('Prioridade no julgamento', 'Judging priority'), priority)) : field(T('Idioma', 'Language'), locale),
     chk(T('Login habilitado', 'Login enabled'), loginEnabled),
     chk(T('Permitir auto-cadastro de novos usuários (late users)', 'Allow self-registration of new users (late users)'), allowLate),
-    chk(T('Mostrar o código das submissões (a todos)', "Show submissions' code (to everyone)"), showCode),
     chk(T('Usuário pode ver o log de julgamento', 'User can see the judging log'), showLog),
     showLogHint,
     chk(T('Editor de código no browser disponível', 'In-browser code editor available'), showEditor),
     chk(T('Mostrar o tempo-limite dos problemas aos usuários', "Show problems' time limit to users"), showTL),
     chk(T('Permitir backup de arquivos pelos usuários', 'Allow file backup by users'), allowBackup),
     chk(T('Permitir pedidos de impressão pelos usuários (.staff)', 'Allow print requests by users (.staff)'), allowPrint),
-    chk(T('Veredicto manual (juízes validam cada veredicto; o daemon o segura até o acordo)', 'Manual verdict (judges validate each verdict; the daemon holds it until agreement)'), manualVerdict),
+    chk(T('Veredicto manual (os juízes validam o que a tabela "O que vai para revisão" marca — painel Juízes; o resto sai automático)', 'Manual verdict (the judges validate what the "What goes to review" table checks — Judges panel; the rest is automatic)'), manualVerdict),
     field(T('Nº de juízes que validam cada veredicto (1–5; 1 = revisão simples)', 'Judges required to validate each verdict (1–5; 1 = single review)'), revJudges),
     chk(T('Placar anônimo (esconde desempenho individual)', 'Anonymous scoreboard (hides individual performance)'), scoreAnon),
     chk(T('🕵️ SUPER SECRETO — fora da home/arquivo/status; placar e visual exigem login (a tela de login continua funcionando p/ quem tem o link)', '🕵️ SUPER SECRET — off the home/archive/status; scoreboard and view require login (the login screen still works for whoever has the link)'), secret),
-    field(T('Gate de login por substring de UA (só não-privilegiados)', 'Login gate by UA substring (only non-privileged)'), ua),
+    uaField,
     penaltySec,
     el('h3', { style: 'margin:1rem 0 .3rem' }, T('💻 Linguagens permitidas no contest', '💻 Languages allowed in the contest')),
     el('p', { class: 'muted small' }, T('Marque as permitidas. Nenhuma marcada = todas. (Pode ser refinado por problema na aba Problemas.)', 'Check the allowed ones. None checked = all. (Can be refined per problem in the Problems tab.)')),
@@ -158,7 +160,7 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
       // DESCONGELAR. Omitir a chave fazia o salvar responder ✓ sem tirar o freeze.
       freeze: freeze.value ? dtToEpoch(freeze.value) : 0,
       locale: locale.value, tz: tz.value.trim(), login_enabled: loginEnabled.checked,
-      show_code: showCode.checked, show_log: showLog.checked, show_editor: showEditor.checked,
+      show_log: showLog.checked, show_editor: showEditor.checked,
       allow_late: allowLate.checked, score_anon: scoreAnon.checked, show_tl: showTL.checked,
       allow_backup: allowBackup.checked, allow_print: allowPrint.checked,
       manual_verdict: manualVerdict.checked, secret: secret.checked, login_ua_substring: ua.value,

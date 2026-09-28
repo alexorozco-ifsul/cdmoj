@@ -85,10 +85,13 @@ moj-problems/<org>/<prob>/
 ├── tags                      assuntos, uma tag por linha                    453
 ├── conf                      limites e ajustes de execução                  453
 ├── docs/
-│   ├── enunciado.md          o enunciado (também aceita .org e .tex)        453  (obrigatório)
+│   ├── enunciado.md          o enunciado em português (também .org e .tex)  453  (obrigatório)
+│   ├── enunciado.en.md       o enunciado em inglês (idem enunciado.es.md)   opcional
 │   ├── notes/sample1.md      explicação de cada exemplo (markdown; 1/sample) opcional
+│   ├── notes/sample1.en.md   a explicação traduzida (cai na PT se faltar)   opcional
 │   ├── <figura>.png          imagens do enunciado/notas (o render embute)   opcional
-│   └── solucao.md            editorial, só para o autor                     opcional
+│   ├── solucao.md            editorial, só para o autor                     opcional
+│   └── solucao.en.md         o editorial traduzido (idem solucao.es.md)     opcional
 ├── tests/
 │   ├── input/sample1         exemplo (aparece no enunciado)                 obrigatório, >= 1
 │   ├── output/sample1        resposta do exemplo
@@ -103,6 +106,7 @@ moj-problems/<org>/<prob>/
 │   └── upcoming/             soluções em rascunho                              1  (opcional)
 └── scripts/                  correção especial                               79  (opcional)
     ├── compare.sh            comparador próprio (checker)                    18
+    ├── validator.cpp         validador de ENTRADA (testlib)                  opcional
     └── <lang>/compile.sh     compilação própria (submissão de função)       201
 ```
 
@@ -120,6 +124,9 @@ Dois arquivos aparecem no acervo mas **não** fazem parte do formato:
 O texto do problema. Aceita três formatos, procurados nesta ordem: `enunciado.md`, `enunciado.org`,
 `enunciado.tex`. O `.md` é o canônico e o recomendado.
 
+**Como escrever o texto** — Markdown, fórmulas em TeX, parênteses, casos, matrizes, o que evitar e
+como cada construção sai no PDF do caderno, com exemplos: **[ENUNCIADO](ENUNCIADO.md)**.
+
 Três regras que o portão de qualidade cobra:
 
 1. **As seções `## Entrada` e `## Saída` são obrigatórias.** Sem elas o problema não passa na
@@ -129,7 +136,9 @@ Três regras que o portão de qualidade cobra:
    (seção 5), e o renderizador injeta um `<h1>` a partir dele.
 3. **Os exemplos não vão no texto.** Eles são montados a partir de `tests/input/sample*` e
    `tests/output/sample*` e injetados no fim do HTML. Se você escrever um exemplo à mão dentro do
-   enunciado, ele vai aparecer duplicado. (A validação avisa, mas não bloqueia.)
+   enunciado, ele vai aparecer duplicado. (A validação avisa, mas não bloqueia.) A exceção é o
+   problema **sem exemplo** (`SAMPLE=no` no `conf`, seção 4, "Problema sem exemplo"): nele o
+   exemplo vai no texto, numa seção `## Exemplo`, e a validação não avisa.
 
 **Imagens — dois jeitos, ambos viram HTML autocontido** (o renderizador roda com
 `--embed-resources` e embute tudo em base64):
@@ -173,7 +182,47 @@ antigos, mas **nunca mais é escrito** — qualquer salvamento converte para `do
 
 Opcional. É o **editorial**: a explicação da ideia da solução, para o autor e para quem for reusar o
 problema. **O aluno nunca vê este arquivo.** O `gen-problem-json.sh` o ignora de propósito. É o
-lugar certo para escrever "a solução é uma DP em O(n log n)" sem medo.
+lugar certo para escrever "a solução é uma DP em O(n log n)" sem medo. O documento de editorial
+de um contest lê este arquivo (ou a tradução `solucao.<lang>.md`, abaixo).
+
+### Idiomas: `enunciado.<lang>.md`, `notes/<sample>.<lang>.md`, `solucao.<lang>.md`
+
+Um problema pode ter o enunciado em mais de um idioma. As regras são simples:
+
+| Arquivo | O que é | Se faltar |
+|---|---|---|
+| `docs/enunciado.md` | o enunciado em **português**. É o texto principal e é obrigatório | o problema não valida |
+| `docs/enunciado.<lang>.md` | a tradução. `<lang>` é `en` ou `es`. Só markdown | o problema tem um idioma só |
+| `docs/notes/<sample>.<lang>.md` | a explicação traduzida do exemplo | o exemplo mostra a explicação em português |
+| `docs/solucao.<lang>.md` | o editorial traduzido | o documento de editorial usa o português |
+| `titles` no `.moj-meta.json` | o título de cada tradução (seção 5) | o título em português |
+
+Os exemplos vêm dos testes e aparecem em todos os idiomas, com os rótulos do idioma
+(Exemplos/Entrada/Saída/Explicação · Examples/Input/Output/Explanation ·
+Ejemplos/Entrada/Salida/Explicación). As figuras ficam em `docs/` e servem a todos os idiomas.
+
+A validação trata cada tradução como o português: ela tem de renderizar e tem de ter as seções de
+entrada e de saída (`## Input`/`## Output`, `## Entrada`/`## Salida`). Uma tradução sem a
+explicação de um exemplo gera o aviso `nota-sem-traducao(<sample>,<lang>)`. O aviso não bloqueia.
+
+O índice do treino (`var/jsons/<id>.json`) leva `statement_langs` (a lista, português primeiro) e
+`statements{<lang>:{title,html_b64}}`. O português continua em `title` e `statement_html_b64`,
+como sempre. A página do problema mostra um chip por idioma. Em um contest, o admin ou o
+juiz-chefe escolhe os idiomas que a sanfona oferece (`STATEMENT_LANGS`; ver `API.md`).
+
+Um exemplo com mais de **256 KB** entra truncado no HTML do enunciado (só o começo, com o aviso
+"Exemplo grande"); com mais de **4 MB** ele não vai como dado (`{name, size, too_big:true}`). Exemplo é
+para ler: teste grande é teste oculto.
+
+O índice leva também **`samples`**: `[{name, input, output}]`, o texto dos exemplos. A seleção é a
+MESMA do HTML do enunciado (`stmt_sample_names` em `mojtools/statement-langs.sh`: os
+`tests/input/sample*`, ou nenhum com `SAMPLE=no`). Um teste oculto nunca entra nesse campo. É o que alimenta o botão
+**⬇ Exemplos** e o `moj-comp samples`/`fetch`, pela rota `/treino/problem` e pela `/contest/samples`.
+
+Na API de autoria, as traduções viajam no campo `translations` de `/problems/source` e
+`/problems/edit`: `{"<lang>": {title, enunciado_md, editorial_md, notes:{"<sample>": md}}}`.
+Idioma ausente do objeto fica como está. Idioma com valor `null` é apagado por inteiro. A CLI
+(`moj clone`/`push`) e o editor web usam esse campo; você só edita os arquivos.
 
 Não confundir com a mecânica da correção especial, que é assunto do `scripts/` e está documentada em
 `mojtools/docs/correcao-especial.md`.
@@ -191,8 +240,41 @@ O nome do arquivo decide o papel do teste:
 | qualquer outro nome | **teste oculto**: só corrige, o aluno nunca vê |
 
 Os exemplos são todos os arquivos que começam com `sample`, ordenados por `ls -1v` (ou seja,
-`sample2` vem antes de `sample10`, e não depois). É preciso ter **pelo menos um par** de teste, e na
-prática pelo menos um exemplo.
+`sample2` vem antes de `sample10`, e não depois). A validação exige **pelo menos um exemplo**, ou a
+declaração de que o problema não tem exemplo (`SAMPLE=no`, abaixo). **Teste oculto nunca aparece
+como exemplo**, nem quando falta `sample*`.
+
+#### Problema sem exemplo: `SAMPLE=no`
+
+Em alguns problemas, entrada e saída de exemplo não fazem sentido para o aluno:
+
+- **submissão de função**: a entrada do teste é o formato interno do driver, que o aluno não lê;
+- **problema interativo**: a entrada é o cenário secreto do árbitro, e a saída é um marcador;
+- **linguagem própria** (PDDL, SAS, gramáticas): o "exemplo" não é um par entrada/saída;
+- qualquer outro caso em que o exemplo se explica melhor em texto ou figura.
+
+Nesses problemas:
+
+1. Não crie `tests/input/sample*`.
+2. Ponha a linha `SAMPLE=no` no `conf`. No editor web, é a opção **este problema não tem
+   exemplos** da aba **Limites**. Na CLI, `moj edit` → 8 (conf) → 6. O `moj interactive` já grava a
+   linha.
+3. Explique o exemplo no texto do enunciado, numa seção `## Exemplo`: uma figura, uma chamada da
+   função e o que ela devolve, a transcrição da conversa com o árbitro.
+
+O efeito de `SAMPLE=no`:
+
+- o enunciado não mostra a caixa de exemplos;
+- o campo `samples` do índice fica vazio: não há botão **⬇ Exemplos** no treino, nem link
+  **Exemplos** no contest (`has_samples:false` em `/contest/problems`), e o `moj-comp samples` não
+  baixa nada. Vale mesmo se existirem arquivos `sample*`: eles continuam corrigindo, como qualquer
+  teste, mas nenhum deles vira exemplo;
+- a linha `SAMPLE` **não** entra no tl-checksum: marcar ou desmarcar não pede recalibração.
+
+Valores aceitos: `no`, `n`, `nao`, `não`, `false`, `0` (com ou sem aspas). Sem a linha, o problema
+tem exemplos (`tests/input/sample*`). Até 2026-09-23 existiam dois legados que saíram: o arquivo
+`samples` na raiz do pacote (vazio = sem exemplos) e o fallback que mostrava os dois primeiros testes
+quando faltava `sample*` — em problema de função ele exibia o formato interno do driver.
 
 O nome dos testes ocultos é livre. As convenções que aparecem no acervo são `test-001`, `test-002`
 (estilo APC) e `<prob>_1_1`, `<prob>_1_2` (estilo OBI, que agrupa por subtarefa; ver `tests/score`).
@@ -222,8 +304,27 @@ Regras:
 - Linha começando com `#` é **comentário**. Qualquer outra linha que não seja
   `<globs> - <N> pontos` é **ignorada com aviso** no log do juiz — não vire grupo.
 - O casamento teste→grupo é por **glob mesmo** (`aula_*` casa `aula_2_1`), e **todo teste
-  precisa cair num grupo** (teste órfão zera a submissão; grupo de peso>0 sem teste derruba o
-  veredicto). O `validate-problem.sh` confere tudo isso no upload (check `score_file_sane`).
+  precisa cair num grupo**. O `validate-problem.sh` confere tudo isso no upload (check
+  `score_file_sane`): teste sem grupo, ou grupo de peso>0 sem nenhum teste, é pacote quebrado —
+  se chegar ao juiz mesmo assim, a submissão sai **Judge Error** com nota 0 (erro do pacote, não
+  do aluno). Grupo de **peso 0** sem teste (ex.: `sample* - 0 pontos` num problema `SAMPLE=no`) é
+  aceito e não derruba nada.
+
+**O veredicto é o do pior teste; os grupos decidem só a nota.** Um grupo que caiu por estouro de
+tempo sai **Time Limit Exceeded** com a nota dos grupos que passaram (e não "resposta errada"): é o
+mesmo veredicto que os testes dariam sem grupos. A string que o juiz devolve (e que o history guarda)
+é `<veredicto canônico>,<pontos>p. Pontos | <por grupo> | [quantitativos <código>(<n>) …]`:
+
+```
+Accepted,100p. Pontos | 30 | 70 |
+Time Limit Exceeded,30p. Pontos | 30 | 0 | quantitativos TLE(2) AC(8)
+Judge Error,0p. teste 'extra1' sem grupo em tests/score (erro do pacote)
+```
+
+O que o aluno lê é o prefixo (o servidor o canoniza na leitura) e a nota é o primeiro `NNp` da
+string. Até 24/09/2026 toda falha de grupo saía `Wrong,<n>p` — um TLE chegava ao aluno como "Wrong
+Answer". O histórico gravado antes disso fica como está (`Wrong,…` e o legado `Wrong. Pontos | …`
+seguem lidos como Wrong Answer); um rejulgamento traz o veredicto real.
 
 Quem interpreta é o `mojtools/score-summary.sh`, no juiz. Editar o `tests/score` (ou um
 `tests/output/*`) muda o checksum do pacote — o juiz re-baixa e recalibra sozinho.
@@ -231,19 +332,26 @@ Quem interpreta é o `mojtools/score-summary.sh`, no juiz. Editar o `tests/score
 ### `sols/`
 
 As soluções de referência, separadas por categoria. **A extensão do arquivo é o que define a
-linguagem** (`sol.c` é C, `sol.cpp` é C++, `Main.java` é Java, e assim por diante).
+linguagem** (`sol.c` é C, `sol.cpp` é C++, `Main.java` é Java, e assim por diante). C++ aceita
+quatro extensões: `.cpp`, `.cc`, `.cxx` e `.c++`. O julgador trata as quatro como `cpp`.
 
-| Diretório | O que é | Para que serve |
+| Diretório | O que é | O que a calibração exige dela |
 |---|---|---|
-| `good/` | soluções **corretas** | **obrigatório, pelo menos uma.** É o que a calibração roda para descobrir o tempo-limite, e o que a validação exige que seja aceito |
-| `wrong/` | soluções **erradas** de propósito | conferir que os testes pegam o erro |
-| `slow/` | soluções **lentas** de propósito | conferir que o tempo-limite realmente reprova a solução ruim |
-| `pass/` | soluções que devem passar **raspando** | conferir que o tempo-limite não é apertado demais |
-| `upcoming/` | rascunhos | não entram na conferência |
+| `good/` | soluções **corretas** | **obrigatório, pelo menos uma.** Aceita em todos os testes, dentro do tempo-limite **efetivo** (o que o juiz cobra, com `TLOVERRIDE`). É a que a calibração usa para medir o tempo-limite |
+| `wrong/` | soluções **erradas** de propósito | **reprovada**, de preferência por resposta errada (WA): prova que os testes pegam o erro |
+| `slow/` | soluções **lentas** de propósito | **TLE** em pelo menos 1 teste e aceita nos outros: prova que o tempo-limite reprova a solução ruim |
+| `pass/` | soluções que devem passar **raspando** | aceita em todos os testes, dentro do tempo-limite efetivo: prova que o limite não é apertado demais |
+| `upcoming/` | rascunhos | não roda |
+
+A calibração confere cada solução contra essa tabela (seção 10, "Soluções") e o resultado aparece no
+editor, no Painel e no `moj calib`/`moj check`.
 
 Na prática, ponha uma `good` em cada linguagem que você quer que o aluno possa usar. O tempo-limite é
 calibrado **por linguagem**, e uma linguagem sem solução `good` aceita simplesmente não ganha
 tempo-limite naquele juiz (o aluno não consegue usá-la).
+
+**Salvar QUALQUER solução manda o juiz buscar o pacote de novo** (é o `pkg_version` da seção 10),
+então "Salvar" + "Calibrar" roda o `sols/` que você acabou de escrever. Só `good/` mexe no TL.
 
 ### `scripts/` (correção especial)
 
@@ -259,6 +367,7 @@ Os usos mais comuns:
 | `scripts/compare.sh` | **checker**: a resposta não é única (tolerância de ponto flutuante, várias respostas válidas), então o problema traz o próprio comparador | 18 |
 | `scripts/checker.cpp` | o **fonte** do checker quando ele é [testlib](https://github.com/MikeMirzayanov/testlib) (padrão Polygon/Maratona). Vem junto de um `compare.sh` de 10 linhas — o **stub** — instalado por `mojtools/testlib/install-checker.sh`. **O `testlib.h` NÃO vai no pacote** (é vendorado no mojtools) e o binário do checker **nunca** é commitado (a *bridge* do mojtools o compila no juiz, sob demanda, e cacheia FORA de `scripts/`). |
 | `scripts/arbitro.{cpp,py,sh}` + `scripts/c/{prep,run}.sh` | **problema interativo** (`mojtools/interactive/install-interactive.sh`) | — |
+| `scripts/validator.cpp` | **validador de ENTRADA** ([testlib](https://github.com/MikeMirzayanov/testlib) `registerValidation`, o padrão do Polygon): confere se cada `tests/input/*` segue o formato e os limites do enunciado. **Não julga solução nenhuma.** A calibração completa o roda no juiz (dimensão **Entradas**, seção 10); na sua máquina, `moj validator`. Fica fora do `tl_checksum` (mexer nele não recalibra) e dentro da versão do pacote. Guia: `mojtools/docs/validador-testlib.md` | — |
 
 O contrato do comparador: recebe `$1` = saída do aluno, `$2` = saída esperada, `$3` = entrada, e
 responde pelo código de saída (`4` = aceito, `5` = aceito com erro de formatação, `6` = resposta
@@ -283,11 +392,13 @@ caminhos (`moj push` e `moj upload`) — não é o umask do processo que decide.
 `tl-checksum` inclui o **modo** de `scripts/*`: se o mesmo conteúdo entrar com modo diferente conforme
 o caminho, o juiz vê "pacote mudou" e **recalibra à toa**.
 
-**Mexer em `scripts/` obriga a recalibrar** (seção 10).
+**Mexer em `scripts/` obriga a recalibrar** (seção 10) — exceto no `scripts/validator.cpp`, que não
+muda o julgamento.
 
 Os arquivos de `scripts/` formam **4 slots independentes que COMPÕEM** — compile
 (submissão de função/ban), run (interativo), compare (checker/tolerância), summary (pontuação)
-— então função + checker especial é combinação normal; só o interativo não mistura.
+— então função + checker especial é combinação normal; só o interativo não mistura. O
+`validator.cpp` não ocupa slot nenhum: compõe com todos.
 O guia-hub é `mojtools/docs/correcao-especial.md` (proibir funções da biblioteca, visão geral);
 os guias longos: `mojtools/docs/submissao-de-funcao.md` (**submissão de função** — templates
 prontos via `moj fn` ou pelo editor web, com a sentinela anti-IO), `checker-testlib.md` e
@@ -310,26 +421,35 @@ ALLOWPARALLELTEST=y
 
 Todas as chaves que o `build-and-test.sh` entende:
 
+> **Tolerância (drift) no relatório.** Um teste aceito com tempo acima do limite passou pela tolerância.
+> O `report.html` mostra esse tempo em **amarelo**, com quanto passou (`0.98s (+0.16s na tolerância)`).
+> Azul é dentro do limite e a cor de TLE é estouro. A tabela de testes do editor (test-run e
+> calibração) usa o mesmo amarelo.
+
 | Chave | Default | O que faz | Uso hoje |
 |---|---|---|---|
 | `TLMOD[calibrafactor]` | `1.35` | multiplicador aplicado ao tempo da solução `good` para virar o tempo-limite. Subir dá folga ao aluno | 453 |
-| `TLMOD[<lang>.drift]` | `0` | tolerância de variação de tempo naquela linguagem antes de dar TLE | 404 (`java`) |
+| `TLMOD[<lang>.drift]` | `0` | tolerância (em segundos) acima do tempo-limite antes de dar TLE, naquela linguagem: o teste só é TLE quando `tempo − TL > tolerância` | 404 (`java`) |
+| `TLMOD[default.drift]` | — | a mesma tolerância para **toda** linguagem que não tem a sua (`TLMOD[<lang>.drift]` vence). Vale no julgamento e na conferência das soluções da calibração (uma `good` dentro da tolerância não é "divergente") | 0 |
 | `TLMOD[<lang>.sum]` | `0` | soma um valor fixo (em segundos) ao tempo-limite daquela linguagem | 405 (`spim`) |
 | `TLMOD[<lang>.mult]` | `1` | multiplica o tempo-limite daquela linguagem | 0 |
 | `ULIMITS[-u]` | `1024` | número máximo de processos. Java e outras runtimes precisam de mais (o acervo usa `10000`) | 453 |
 | `ULIMITS[-s]` | `131072` (128 MB, em KB) | tamanho da pilha. Prefira `STACKLIMITMB` | 0 |
 | `ULIMITS[-f]` | `256000` | tamanho máximo de arquivo que o programa pode escrever | 0 |
-| `ALLOWPARALLELTEST` | ligado | `n` força os testes a rodarem um de cada vez (necessário quando o problema é sensível a tempo) | 453 |
+| `ALLOWPARALLELTEST` | ligado (ausente = `y`) | `y` = o juiz **pode** rodar vários testes desta submissão ao mesmo tempo, cada um nas suas k CPUs, quando tem CPU ociosa (política do admin; em prova fica desligada); `n` = um teste por vez. **Não muda o tempo-limite**: a calibração é sempre um teste por vez. Ver "Problemas paralelos" abaixo | 453 |
 | `STACKLIMITMB` | 128 | pilha em MB. Vence o `ULIMITS[-s]`. A JVM espelha isso no `-Xss` | 0 |
 | `MEMLIMITMB` | sem limite por RSS | limite de memória em MB, medido pelo **pico de RSS**. Ligar isso desliga o limite de memória virtual (que penalizaria injustamente JVM e Go). A JVM usa este valor no `-Xmx` | 0 |
 | `COMPILEMEMLIMIT` | `2048` | memória em MB liberada para a **compilação** (o `kotlinc` passa de 600 MB) | 0 |
-| `MAXPARALLELTESTS` | nº de CPUs | teto de testes em paralelo | 0 |
+| `MAXPARALLELTESTS` | teto do juiz (4) | teto de testes ao mesmo tempo deste problema (inteiro ≥ 1); nunca passa do teto do juiz (`parallel_max`, default 4) nem de `nproc/k` rodando à mão | 0 |
+| `CPUNEEDED` | `1` | **CPUs que cada teste precisa** (1..64; problema paralelo — OpenMP/MPI/pthreads). O juiz junta k slots para cada teste e a jaula entra com `MOJ_TEST_CPUS`/`OMP_NUM_THREADS` = k. Mudar recalibra. Ver "Problemas paralelos" | 0 |
+| `SAMENUMA` | `n` | com `CPUNEEDED>1`, `y` = as k CPUs de cada teste no mesmo nó NUMA | 0 |
 | `STOPWHEN_WA` | não para | `y` interrompe no primeiro Wrong Answer | 0 |
 | `STOPWHEN_TLE` | não para | `y` interrompe no primeiro Time Limit Exceeded | 0 |
 | `STOPWHEN_RE` | não para | `y` interrompe no primeiro Runtime Error | 0 |
 | `TLERERUN` | `y` | repete o teste uma vez antes de confirmar um TLE (evita TLE por ruído da máquina) | 0 |
 | `CALIBRATIONTL` | `5` | tempo-limite usado **durante** a calibração, antes de existir um TL real | 0 |
 | `ALLOWTLEDURINGCALIBRATION` | desligado | `y` aceita solução `good` com TLE como "calibrou" (a linguagem ganha TL mesmo estourando o `CALIBRATIONTL` — casos raros de good deliberadamente no limite) | 0 |
+| `SAMPLE` | exemplos = `tests/input/sample*` | `no` declara que o problema **não tem exemplos** (seção 4, "Problema sem exemplo"): o enunciado sai sem a caixa e nada é oferecido para baixar. Não é lido pelo juiz e não entra no tl-checksum (não pede recalibração) | 0 |
 | `TLOVERRIDE[<lang>]` / `TLOVERRIDE[default]` | sem override | **o autor decide o TL na marra** (segundos, por linguagem + default). A calibração continua rodando (e o histórico dela fica visível), mas o valor FINAL — no julgamento (o juiz aplica DEPOIS dos `TLMOD`, então ele vence tudo) e em TODA exibição (treino, contest, folha de TL da prova, `/problems/tl`) — é `TLOVERRIDE[lang] // TLOVERRIDE[default] // calibrado[lang]`. Só valor numérico literal (`TLOVERRIDE[java]=2.5`); o servidor lê por grep, nunca executa o conf. ⚠ **Use `TLOVERRIDE[py]`, nunca `py3`/`py2`** — são chaves LEGADAS: o servidor as normaliza para `py` ao exibir e o juiz também (desde 2026-08-24), mas antes disso um `TLOVERRIDE[py3]` era EXIBIDO e não era JULGADO. A **gestão de problemas** (Painel, editor, `/problems/{get,status,calib,tl}`) também mostra o efetivo — com um selo ⚡ e o calibrado ao lado; os tempos dos cartões de calibração seguem sendo a MEDIÇÃO, porque a calibração ignora o override de propósito. ⚠ mudar o override muda o tl-checksum ⇒ dispara uma recalibração (inofensiva — o override vence de qualquer jeito) | 0 |
 
 A coluna "uso hoje" conta em quantos dos 453 `conf` do acervo a chave aparece. Um zero não quer dizer
@@ -338,6 +458,38 @@ tiver um motivo (um problema que exige muita memória, ou uma linguagem que prec
 
 `PUBLIC=no` no `conf` é **legado**. Hoje quem decide se o problema é público é o campo `public` do
 `.moj-meta.json`.
+
+#### Problemas paralelos (`CPUNEEDED`, `SAMENUMA`) e testes em paralelo
+
+Duas coisas diferentes com a mesma palavra:
+
+| | O que é | Chave |
+|---|---|---|
+| **teste paralelo** | UM teste usa **k CPUs** ao mesmo tempo (o programa do aluno é paralelo) | `CPUNEEDED=k`, `SAMENUMA=y` |
+| **testes em paralelo** | o juiz roda **vários testes** da mesma submissão ao mesmo tempo, cada um nas suas k CPUs | `ALLOWPARALLELTEST`, `MAXPARALLELTESTS` |
+
+Os juízes oficiais são particionados em **slots de 1 CPU**. Um problema com `CPUNEEDED=k`:
+
+- só é entregue a um juiz com **k slots livres** (com `SAMENUMA=y`, k slots livres **no mesmo nó**);
+  o agente os junta num grupo, pina o teste nele (dentro da jaula `nproc` = k) e os separa no fim;
+- é **calibrado com k CPUs, um teste por vez** — o tempo-limite só vale com o mesmo k, por isso
+  mudar `CPUNEEDED`/`SAMENUMA` recalibra (o `conf` entra no checksum);
+- entrega à jaula `MOJ_TEST_CPUS` e `OMP_NUM_THREADS` (= k, exportados pelo `binfile.sh`): OpenMP se
+  dimensiona sozinho; o `run.sh` de MPI faz `mpirun -np "$MOJ_TEST_CPUS"` — **nunca um `-np` fixo**.
+  Templates prontos: `paralelo-openmp` e `paralelo-mpi` (seletor do editor);
+- com hyperthreading e k ≥ 2 o grupo é de **núcleos inteiros**, na calibração e no julgamento;
+- sem juiz capaz (k maior que qualquer juiz, ou que qualquer nó com `SAMENUMA=y`) o julgamento
+  espera e, passado um tempo, recebe **Judge Error** com o motivo — o Validar avisa antes.
+
+`ALLOWPARALLELTEST` ligado (o default) só diz que o juiz **pode** rodar vários testes ao mesmo
+tempo quando tem CPU ociosa (a política global do admin decide; em prova fica desligada). Cada
+teste continua sozinho nas suas CPUs, o tempo é medido como sempre e um TLE visto assim é refeito
+serialmente antes de valer; `MAXPARALLELTESTS` é o teto por problema. O relatório da submissão
+diz o que aconteceu: "Paralelismo: P teste(s) ao mesmo tempo × k CPU(s) por teste". A validação
+reprova valor inválido nas quatro chaves. O json servível (`var/jsons/<id>.json`) carrega
+`cpu_needed` e `same_numa` — é por ele que o checklist pré-prova do contest (`judges_cpus`) avisa
+quando nenhum juiz do pool tem as CPUs, sem abrir pacote. Guia completo:
+`mojtools/docs/problema-paralelo.md`.
 
 ### `author`
 
@@ -412,10 +564,11 @@ Campo a campo:
 | Campo | Tipo | O que é |
 |---|---|---|
 | `display_title` | texto | **O título do problema.** É a fonte única. Se o autor não mandar um título e o campo ainda não existir, o servidor **deriva** um (do `%` do enunciado, do `#+title:` do org, do `\section{}` do tex, ou, em último caso, do nome do diretório). Por isso o campo nunca fica vazio |
+| `titles` | objeto `{"en": texto, "es": texto}` | o título de cada **tradução** do enunciado (seção 4, "Idiomas"). O servidor só guarda o idioma que tem `docs/enunciado.<lang>.md`. Idioma sem título usa o `display_title`. Na CLI é o campo `titles` do `.moj-id` (`moj title --lang en "Hello World"`) |
 | `owner` | login | o dono do problema |
 | `public` | booleano | se `true`, o problema entra no treino livre. Publicar exige que a **org** permita (seção 7) |
 | `collections` | lista de textos | as coleções em que o problema está (seção 8). Pode estar em várias |
-| `languages` | lista de ids | as linguagens de submissão **permitidas** neste problema. Vazio ou ausente = todas as linguagens padrão. É o que permite um problema só-PDDL, por exemplo. O servidor normaliza (minúsculas, `py2`/`py3` viram `py`, sem repetidos). **A API REJEITA submissão fora da lista** (`400 lang_not_allowed`, no `/submit` e no offline — não é só o filtro do dropdown), essencial em problema de função/ban: sem isso, trocar a extensão burlava o driver |
+| `languages` | lista de ids | as linguagens de submissão **permitidas** neste problema. Vazio ou ausente = todas as linguagens padrão. É o que permite um problema só-PDDL, por exemplo. O servidor normaliza (minúsculas, `py2`/`py3` viram `py`, `cc`/`cxx`/`c++` viram `cpp`, sem repetidos). **A API REJEITA submissão fora da lista** (`400 lang_not_allowed`, no `/submit` e no offline — não é só o filtro do dropdown), essencial em problema de função/ban: sem isso, trocar a extensão burlava o driver |
 | `public_at` | epoch | quando o problema foi publicado **pela primeira vez**. Fica lá mesmo se despublicarem depois. Alimenta a estatística de entrada de problemas públicos |
 | `migrated_at` | epoch | quando o problema veio de uma migração. Só informativo |
 
@@ -443,16 +596,33 @@ ida e volta. O `moj push` **exclui** este arquivo do que sobe.
 
 ```json
 { "id": "apc#seno", "repo": "apc", "prob": "seno", "title": "Seno por série de Taylor",
-  "format": "md", "collections": ["problemas-apc"], "public": true }
+  "format": "md", "collections": ["problemas-apc"], "public": true, "base_rev": "9f2c61d0a8b37e14" }
 ```
 
 | Campo | O que é |
 |---|---|
 | `id`, `repo`, `prob` | qual problema este diretório é (`<org>#<prob>`) |
 | `title` | espelho local do `display_title`. Editar aqui e dar `push` muda o título no servidor. O `push` **recusa** enviar com o título vazio |
+| `titles` | espelho local do `titles` do meta: o título de cada tradução (`{"en": "Hello World"}`). `moj title <dir> --lang en "…"` edita |
+| `trans_rt` | `true` em clone que **conhece** as traduções: o `push` manda `translations` com todos os idiomas, e idioma sem arquivo local vira `null` (apaga no servidor). Clone antigo não apaga a tradução de ninguém |
 | `format` | `md`, `org` ou `tex`, o formato do enunciado deste clone |
 | `collections`, `languages`, `public` | espelhos locais dos campos do `.moj-meta.json`, com ida e volta pelo `push` (e o `moj upload` de diretório leva título/coleções/languages num meta **sintetizado** a partir daqui; `public` nunca sobe). `moj languages <dir>` edita a whitelist sem abrir o arquivo |
 | `scripts_rt` | marca que este clone sabe fazer ida e volta de `scripts/` e `tests/score`. Sem essa marca, o `push` não tem permissão de **apagar** esses arquivos no servidor (protege clones antigos de destruir a correção especial sem querer) |
+| `base_rev` | a revisão do servidor (`rev`) no último `clone`, `pull` ou `push` desta pasta. O `push` e o `upload` a mandam como `base_rev`: se o problema mudou no servidor desde então (editor web, outro autor), o servidor recusa com 409 e nada é gravado. `moj push --overwrite` envia por cima. Vazio = pasta de antes desta trava (o `push` grava por cima, como sempre) |
+
+Ao lado do `.moj-id` a CLI grava o **`.moj-base`**, a *linha de base* da pasta: uma linha
+`<hash>\t<caminho>` para cada arquivo do pacote (o conjunto que o `push` envia), mais uma linha
+`<hash>\t.moj-id` com os campos de autoria do `.moj-id` (título, títulos, linguagens, coleções). É ele
+que o `moj pull` usa para saber o que **você** mudou desde o último `clone`/`pull`/`push`:
+
+- pasta sem mudança sua e servidor com versão nova: o `pull` troca os arquivos do pacote (inclusive
+  apaga os que sumiram no servidor) e mantém os que não são do pacote (um `gerador.py`, por exemplo);
+- pasta com mudança sua: o `pull` **recusa** e lista os arquivos; `moj pull --force` copia a pasta
+  inteira para `<pasta>.local-AAAAMMDD-HHMMSS` e então traz a versão do servidor;
+- pasta sem `.moj-base` (clonada antes do `pull` existir): o `pull` compara com o servidor; se forem
+  iguais, só grava a linha de base; se não, recusa (não dá para saber quem mudou) e sugere `--force`.
+
+O `.moj-base` também não sobe (nem no `push`, nem no tar do `moj upload`).
 
 Resumindo a diferença:
 
@@ -460,7 +630,7 @@ Resumindo a diferença:
 |---|---|---|
 | Onde vive | dentro do pacote, no servidor | no clone local do autor |
 | Quem escreve | o servidor | o `moj-cli` |
-| Vai para o servidor? | **é** o do servidor | **não**, é excluído do envio |
+| Vai para o servidor? | **é** o do servidor | **não**, é excluído do envio (e o `.moj-base` também) |
 | Para que serve | ser o metadado canônico | lembrar de qual problema é o diretório e levar os campos de ida e volta |
 
 Os 336 `.moj-id` que aparecem hoje dentro de `moj-problems/` são **resíduo** de migrações antigas que
@@ -582,19 +752,30 @@ Em uma frase: **a org diz quem manda no problema, a coleção diz onde ele apare
 ## 10. Ciclo de vida de um problema
 
 ```
-  rascunho  ──►  validação  ──►  calibração  ──►  público
- (org privada)   (portão)        (nos juízes)    (treino livre)
+  rascunho  ──►  pacote conferido  ──►  calibrado  ──►  PRONTO  ──►  público
+ (org privada)   (botão Validar:       (no juiz: TL,    (nenhuma      (treino livre)
+                  estático)             soluções,        pendência,
+                                        entradas)        nenhuma issue
+                                                         aberta)
 ```
+
+"Pronto" não é um passo que alguém executa: é o nome do estado em que **todas** as dimensões abaixo
+estão verdes. Publicar continua possível sem ele, mas pede confirmação (subseção "Publicação").
 
 ### Rascunho
 
 O problema nasce na sua org (a pessoal, se você não escolher outra). Ele é privado: ninguém além dos
 membros da org vê que ele existe.
 
-### Validação (o portão de qualidade)
+### Pacote conferido (o botão Validar)
 
-Roda `mojtools/validate-problem.sh`, que grava um relatório em `run/validation/<id>.json`. **Todas**
-as checagens abaixo precisam passar (não existe checagem "opcional" que reprove pela metade):
+Roda `mojtools/validate-problem.sh`, que grava um relatório em `run/validation/<id>.json`. É uma
+conferência **estática** do conteúdo do pacote: arquivos, seções do enunciado, exemplos, testes
+emparelhados. **Não roda solução nenhuma.** Quem roda as soluções é a calibração (abaixo). Por isso a
+tela diz **"Pacote"**, e não mais "Validado": o nome antigo fazia o autor achar que as soluções
+estavam conferidas (relato do Arthur Botelho, 22/09/2026).
+
+**Todas** as checagens abaixo precisam passar (não existe checagem "opcional" que reprove pela metade):
 
 | Checagem | O que exige |
 |---|---|
@@ -602,7 +783,8 @@ as checagens abaixo precisam passar (não existe checagem "opcional" que reprove
 | `has_statement` | existe `docs/enunciado.{md,org,tex}` |
 | `html_builds` | o pandoc consegue renderizar o enunciado |
 | `secao_entrada` | o enunciado tem `## Entrada` |
-| `secao_saida` | o enunciado tem `## Saída` |
+| `secao_saida` | o enunciado tem `## Saída` (aceita `Output` e `Salida`) |
+| `html_builds_<lang>`, `secao_entrada_<lang>`, `secao_saida_<lang>` | o mesmo, para cada tradução `docs/enunciado.<lang>.md` presente |
 | `examples_present` | existe pelo menos um par input/output |
 | `tests_paired` | todo input tem seu output, e vice-versa |
 | `has_good_sol` | existe pelo menos uma solução em `sols/good/` |
@@ -612,9 +794,9 @@ Alguns avisos são **informativos** e não reprovam: LaTeX vazando na prosa do e
 escrito à mão dentro do texto, e checker commitado como binário (padrão antigo, deprecado: mande o
 fonte `scripts/checker.cpp` e deixe a bridge compilar).
 
-Sobre o `good_sol_accepts`: rodar as soluções exige um sandbox de verdade. Na máquina de
-desenvolvimento o `bwrap` é um no-op (`fbwrap`), então a validação **adia** essa checagem para a
-calibração, que roda num juiz real. Isso não é bug.
+Sobre o `good_sol_accepts`: rodar as soluções exige um sandbox de verdade, e o servidor não tem. A
+conferência do pacote **adia** essa checagem para a calibração, que roda num juiz real (o relatório diz
+"verificado na calibração"). O resultado de cada solução aparece na dimensão **Soluções**.
 
 Se a validação passa, ela **indexa** o problema (chama o `gen-problem-json.sh`), que gera o JSON que o
 aluno de fato consome, com o enunciado já em HTML.
@@ -640,31 +822,117 @@ reprovada por ter caído num juiz mais lento. Uma linguagem só ganha tempo-limi
 `good` naquela linguagem foi **aceita** em algum juiz. Sem tempo-limite, a linguagem não fica
 disponível.
 
+A calibração roda **um teste por vez** e, num problema paralelo, cada teste com as **k CPUs** do
+`CPUNEEDED` — exatamente a forma em que o julgamento roda cada teste (por isso o TL de k=2 não
+vale para k=4 e mudar a chave recalibra).
+
+O "Calibrar" explícito (editor, `moj calibrate`, publicar) roda **todas** as soluções. A calibração
+sob demanda, que um juiz faz sozinho na 1ª submissão de um pacote novo, roda **só as `good`** (é
+rápida de propósito): depois dela, as outras categorias aparecem "sem resultado".
+
+### Soluções: cada uma faz o que a categoria pede?
+
+A calibração devolve, por juiz e por solução, o código de **cada teste** (`AC`, `WA`, `TLE`, `MLE`,
+`RE`, `UE`). O **servidor** compara com a categoria (`server/api/v1/lib/calib-expect.sh`, a fonte
+única; o editor, o Painel e a CLI só mostram o resultado) e dá um de quatro estados:
+
+| Estado | Quando |
+|---|---|
+| ✓ **conforme** | a solução fez exatamente o que a categoria pede (tabela da seção `sols/`) |
+| ≈ **conforme, outro motivo** | fez o que a categoria pede, mas não do jeito típico: `wrong` reprovada só por TLE/MLE/RE (sem WA); `slow` com TLE, mas também com WA/RE em outros testes; `good` com TLE e `ALLOWTLEDURINGCALIBRATION=y` |
+| ✗ **divergente** | não fez: `good`/`pass` reprovada **ou mais lenta que o tempo-limite efetivo** (ex.: `TLOVERRIDE` abaixo do tempo medido — no julgamento ela tomaria TLE); `slow` sem TLE; `wrong` aceita |
+| ✗ **não rodou** | CE, UE (erro do corretor/juiz), linguagem indisponível no juiz, ou sem veredicto: a solução não exercitou os testes, então não prova nada |
+
+Duas regras que mudaram em 22/09/2026 (antes o juízo era só da tela e olhava a *string* do veredicto):
+
+- com TLE e WA na mesma solução, a string dizia só "Time Limit Exceeded" e o WA sumia. Hoje uma
+  `slow` assim é ≈, e uma `wrong` assim é ✓ (tem WA);
+- uma `wrong` que **não compila** era "ok" (não foi aceita). Hoje é ✗ **não rodou**.
+
+Em problema pontuado (`tests/score`) a string traz o veredicto do pior teste e a nota dos grupos
+(`Time Limit Exceeded,30p. Pontos | …`; até 24/09/2026 era sempre `Wrong,Np`). De qualquer jeito o
+juízo olha os testes: uma `slow` com TLE é ✓.
+
+O resultado vale para a **versão** do pacote que foi calibrada. Salvar algo que a calibração exercita
+(`sols/`, `tests/`, `scripts/`, `conf`) marca as soluções como **"não conferidas desde a última
+edição"** até a próxima calibração. Salvar o enunciado não marca.
+
+
 ### O checksum, e o que dispara recalibração
 
-O campo `checksum` acima é o que amarra o TL ao pacote. Ele é calculado pelo `tl-checksum.sh` e cobre
-**só o que pode mudar o tempo de execução**:
+São **DOIS carimbos**, calculados pelo mesmo `tl-checksum.sh`, porque as duas perguntas são
+diferentes: *"o tempo-limite medido ainda vale?"* e *"o juiz ainda tem o pacote certo em cache?"*.
 
-| Entra no checksum | Não entra |
-|---|---|
-| `conf` | `docs/enunciado.*` |
-| `tests/input/*` | `tags` |
-| `tests/output/*` (não-vazios) e `tests/score` | `author` |
-| `sols/good/*` | `.moj-meta.json` (título/coleções/tags) |
-| `scripts/*` (conteúdo **e** bit de execução) | |
+| | `tl_checksum` (estreito) | `pkg_version` (largo) |
+|---|---|---|
+| Como se calcula | `tl-checksum.sh <pkg>` | `tl-checksum.sh --all-sols <pkg>` |
+| Cobre | `conf` (menos a linha `SAMPLE`), `tests/input/*`, `tests/output/*` (não-vazios), `tests/score`, `sols/good/*`, `scripts/*` (conteúdo **e** bit de execução) **menos `scripts/validator.cpp`** | tudo o que o estreito cobre **+ `sols/pass`, `sols/slow`, `sols/wrong`, `sols/upcoming` + `scripts/validator.cpp`** |
+| Para que serve | amarra o **TL** ao pacote: é o `checksum` de `run/tl/<id>.json`, o do índice de donos e o que o `/contest/problems` compara | é a **chave do cache do juiz** e a identidade de uma calibração: `/judge/package-meta` o devolve como `checksum` e o agente re-baixa quando muda |
+
+Nenhum dos dois cobre `docs/enunciado.*`, `tags`, `author` nem o `.moj-meta.json`
+(título/coleções/tags).
 
 > `tests/output/*` e `tests/score` entraram no checksum em 2026-07-19: sem eles, um gabarito ou
 > uma pontuação corrigida **nunca chegava ao juiz** (o cache do problema não invalidava).
+>
+> A separação em dois carimbos é de 2026-09-20 (relato do Arthur Botelho). Antes havia só o
+> estreito, e ele fazia os dois papéis: mexer numa solução `pass`/`slow`/`wrong` **não mudava a
+> chave**, então o juiz recalibrava o `sols/` do **cache velho** — julgando solução que o autor já
+> tinha apagado, ignorando a que ele acabou de escrever, e cada juiz com um conjunto diferente sob
+> o mesmo checksum. Alargar o carimbo estreito não serve: ele também é o que diz se o TL vale, e o
+> TL sumiria da prova a cada solução salva.
 
-Se o checksum do pacote deixa de bater com o guardado, o TL é considerado **velho** e some (o problema
-passa a aparecer como "precisa recalibrar"). Ou seja: **corrigir um typo no enunciado não força
-recalibração; trocar um teste, uma solução `good`, o `conf` ou um script força.**
+Se o `tl_checksum` do pacote deixa de bater com o guardado, o TL é considerado **velho** e some (o
+problema passa a aparecer como "precisa recalibrar"). Ou seja: **corrigir um typo no enunciado não
+força recalibração; trocar um teste, uma solução `good`, o `conf` ou um script força.** Salvar uma
+solução `pass`/`slow`/`wrong` **não** invalida o TL, mas manda o juiz buscar o pacote novo — é
+exatamente o que o "Calibrar" precisa para rodar o que você acabou de salvar.
+
+### Entradas: o validador de entrada
+
+Se o pacote tem `scripts/validator.cpp` (seção `scripts/`), a calibração completa o roda no juiz,
+antes das soluções, sobre cada `tests/input/*`: a testlib reprova a entrada que foge do formato ou dos
+limites, com uma mensagem que diz onde (`FAIL Integer parameter [name=N] equals to 1296, violates the
+range [1, 1000]`). O resultado aparece no cartão de cada juiz (linha **Entradas**), no Painel e no
+`moj check`/`moj calib`. Entrada inválida, ou validador que não rodou (não compilou, passou de 5 s numa
+entrada ou de 60 s no total), deixa o problema não pronto. Pacote **sem** validador não é pendência —
+só aparece como "sem validador". A calibração rápida da 1ª submissão não roda o validador.
+
+### Pronto
+
+O problema está **pronto** quando o `/problems/status` não tem nenhuma **pendência** (`pending`):
+
+| Pendência | Significa |
+|---|---|
+| `package_failed` / `package_unchecked` | a conferência do pacote reprovou / nunca rodou (botão Validar) |
+| `uncalibrated` / `needs_recalibration` | sem calibração / o pacote mudou desde a calibração |
+| `good_no_tl:<langs>` | solução `good` sem tempo-limite nessas linguagens (falhou em todos os juízes) |
+| `sols_divergent:<n>` | *n* soluções divergentes ou que não rodaram |
+| `sols_unchecked` | há solução sem resultado (calibração rápida) ou o pacote mudou desde a calibração |
+| `inputs_invalid:<n>` / `inputs_error` | o validador de entrada (`scripts/validator.cpp`, subseção "Entradas") reprovou *n* testes / não rodou |
+| `issues_open:<n>` | *n* issues abertas (subseção "Issues") |
+
+O editor mostra o selo "✓ Pronto" ou "N pendências" na barra de cima. O Painel tem o card "prontos"
+e a coluna Soluções. `moj check` diz "pronto: SIM" ou lista as pendências.
+
+### Issues
+
+A revisão da banca fica em **issues por problema**: qualquer membro da org abre uma issue ("o teste 7
+está fora do limite do enunciado", "o TL do Python está apertado"), comenta e fecha. Enquanto houver
+issue aberta, o problema não está pronto. Web: aba **🐞 Issues** do editor (o Painel mostra 🐞N com link);
+CLI: `moj issues`. As issues **não fazem parte do pacote**: ficam no servidor
+(`contests/treino/var/problem-issues/`), então não mudam o `rev`, não somem num `moj upload` e não vão
+ao juiz. Mover o problema de org leva as issues; apagar o problema as apaga.
 
 ### Publicação
 
-Publicar (`moj publish`, ou o botão no editor) faz o servidor **validar e calibrar**. O problema só
-entra no treino livre se os dois passarem. E, antes de tudo isso, a **org** precisa ter
-`public_allowed: true` (seção 7).
+Publicar (`moj publish`, ou o botão no editor) faz o servidor **conferir o pacote e calibrar**. O
+problema entra no treino livre quando a conferência do pacote passa (é ela que gera o enunciado
+servido). E, antes de tudo isso, a **org** precisa ter `public_allowed: true` (seção 7).
+
+**Publicar um problema que ainda não está pronto pede confirmação** com a lista de pendências (no
+editor, no Painel e no `moj publish`/`moj public on`; `--yes` só mostra a lista e segue). Nada
+**bloqueia** a publicação: é decisão de quem publica.
 
 ## 11. Perguntas frequentes
 
@@ -688,10 +956,31 @@ de testlib em `mojtools/docs/checker-testlib.md`.
 É a submissão de função: `scripts/<lang>/compile.sh`. Mesmo guia.
 
 **Editei o enunciado. Preciso recalibrar?**
-Não. O enunciado não entra no checksum.
+Não. O enunciado não entra no checksum. Tradução também não.
+
+**Como traduzo um problema?**
+Crie `docs/enunciado.en.md` (ou `.es.md`) ao lado do `docs/enunciado.md`. Traduza a explicação de
+cada exemplo em `docs/notes/<sample>.en.md` e o editorial em `docs/solucao.en.md`. Dê o título com
+`moj title . --lang en "Hello World"`. No editor web, use os chips PT · EN · ES da aba Enunciado. O
+português continua obrigatório.
 
 **Onde fica a dificuldade do problema?**
 Em lugar nenhum do pacote. Ela é calculada da taxa de acerto real dos alunos.
+
+**Meu problema é de função (ou interativo). Mostrar a entrada não faz sentido.**
+Não crie `sample*`, ponha `SAMPLE=no` no `conf` (no editor web: aba Limites, "este problema não tem
+exemplos") e explique o exemplo no texto do enunciado, numa seção `## Exemplo`. Ver seção 4,
+"Problema sem exemplo".
+
+**Editei na web. Como trago para a minha pasta?**
+Rode `moj pull` dentro da pasta do problema. Se a pasta tem mudanças suas que não foram enviadas, o
+`pull` recusa. Envie antes (`moj push`) ou rode `moj pull --force`, que guarda a sua pasta numa cópia.
+
+**O `moj push` disse que o problema mudou no servidor.**
+Alguém salvou o problema (web ou outro clone) depois do seu último `clone`/`pull`/`push`. Nada foi
+enviado. Rode `moj pull --force` para trazer a versão nova e reaplique as suas mudanças a partir da
+cópia `.local-*`, ou rode `moj push --overwrite` para enviar a sua versão por cima. O editor web tem a
+mesma trava: ele avisa quem mudou e oferece "Recarregar" ou "Salvar por cima".
 
 **Qual é a diferença entre `.moj-meta.json` e `.moj-id`?**
 Ver a tabela no fim da seção 6. Em uma frase: o primeiro é o metadado do servidor, o segundo é um

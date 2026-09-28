@@ -12,48 +12,61 @@
 import { el } from '/shared/ui.js';
 import { apiGet, apiPost } from '/shared/api.js';
 import { toLocalDT, dtToEpoch } from '/shared/contest-config/index.js';
-import { field } from '/shared/admin-ui.js';
+import { field, swapIf, sigOf } from '/shared/admin-ui.js';
 import { T } from '/shared/i18n.js';
+import { MODULES } from './modules.js';
 
 const enc = encodeURIComponent;
 const ICON = { ok: '🟢', warn: '🟡', fail: '🔴' };
 // id da checagem do preflight -> [grupo, painel] onde ela se resolve
+// (o botão "resolver →" só aparece se o painel-alvo está visível — módulo ligado; ver nav.js)
 const TARGET = {
-  window: ['central', 'regras'], show_log: ['central', 'regras'], show_code: ['central', 'regras'],
+  window: ['central', 'regras'], fim: ['central', 'regras'], show_log: ['central', 'regras'],
   freeze: ['central', 'regras'], mode: ['central', 'regras'], langs: ['central', 'regras'],
   balloons_freeze: ['central', 'regras'],
-  tov: ['central', 'regras'],
+  modules: ['central', 'modulos'],
   problems: ['prova', 'problemas'], pool_problems: ['prova', 'problemas'], pool: ['prova', 'problemas'],
-  next_round: ['prova', 'rodadas'], docs: ['prova', 'documentos'], balloons: ['prova', 'baloes'],
-  users: ['pessoas', 'contas'], cohorts: ['pessoas', 'coortes'], ua_gate: ['pessoas', 'maquinas'],
-  session_single: ['pessoas', 'maquinas'], site_short: ['operacao', 'mlinux'],
-  registration: ['pessoas', 'inscricoes'], reg_invites: ['pessoas', 'inscricoes'],
-  reg_source: ['pessoas', 'inscricoes'], reg_cohorts: ['pessoas', 'coortes'],
-  reg_warmup: ['prova', 'rodadas'],
+  report: ['prova', 'relatorio'],   // postflight (encerrar evento)
+  users: ['pessoas', 'contas'],
+  registration: ['pessoas', 'inscricoes'], reg_invites: ['pessoas', 'inscricoes'], reg_source: ['pessoas', 'inscricoes'],
   print: ['operacao', 'staff'], staff_filters: ['operacao', 'staff'],
-  judges: ['operacao', 'situacao'], daemon: ['operacao', 'situacao'], manual: ['operacao', 'juizes'],
-  report: ['operacao', 'situacao'],   // postflight (encerrar evento)
-  mlinux: ['operacao', 'mlinux'],
+  judges: ['operacao', 'situacao'], judges_cpus: ['operacao', 'situacao'], daemon: ['operacao', 'situacao'], manual: ['operacao', 'juizes'],
+  // módulos de evento
+  next_round: ['evento', 'rodadas'], reg_warmup: ['evento', 'rodadas'],
+  docs: ['evento', 'documentos'], balloons: ['evento', 'baloes'],
+  cohorts: ['evento', 'coortes'], reg_cohorts: ['evento', 'coortes'],
+  tov: ['evento', 'sedes'], classificacao: ['evento', 'classificacao'],
+  ua_gate: ['maquinas', 'gate'], session_single: ['maquinas', 'gate'], site_lock: ['maquinas', 'gate'],
+  site_short: ['maquinas', 'mlinux'], mlinux: ['maquinas', 'mlinux'],
 };
 
 export function makeCentralTab(CONTEST, opts = {}) {
   const G = { contest: CONTEST, auth: true };
   const go = opts.go || (() => {});
+  const has = typeof opts.has === 'function' ? opts.has : () => true;          // módulo ligado?
+  const visible = typeof opts.visible === 'function' ? opts.visible : () => true; // painel visível?
+  const mods = typeof opts.mods === 'function' ? opts.mods : () => [];
   const panel = el('div', {});
   let timer = null;
+  let lastSt = null;   // /contest/admin/settings do último load (o aquecer avisa se a prova já começou)
 
   const gcard = (title, state, ...actions) => el('div', { class: 'gen-card' },
     el('h4', {}, title), el('span', { class: 'st' }, state),
     el('div', { class: 'row', style: 'gap:.35rem;flex-wrap:wrap' }, ...actions));
 
   const num = (n) => (n == null ? '—' : String(n));
+  // EM LUGAR: o tick de 15 s só refaz os cartões quando os NÚMEROS mudam (assinatura sem relógio)
   function renderLive(box, dash) {
     const j = (dash && dash.judges) || null, sub = (dash && dash.submissions) || null, rv = (dash && dash.review) || null;
+    const sig = sigOf(sub && sub.pending, sub && sub.total, j && j.online, j && j.total, sub && sub.response && sub.response.p95_s, rv && rv.pending_total, rv && rv.conflicts);
+    swapIf(box, sig, () => liveBuild(j, sub, rv));
+  }
+  function liveBuild(j, sub, rv) {
     const dc = (val, label, warn) => el('div', { class: 'dash-card' + (warn ? ' warn' : '') },
       el('div', { class: 'dash-val' }, val), el('div', { class: 'dash-lbl' }, label));
-    box.innerHTML = '';
+    const box = el('div', {});
     box.append(el('div', { class: 'row', style: 'gap:.6rem;align-items:baseline' },
-      el('h2', { style: 'margin:.1rem 0' }, T('Ao vivo', 'Live')),
+      el('h2', { style: 'margin:.1rem 0' }, T('📡 Ao vivo', '📡 Live')),
       el('span', { style: 'flex:1' }),
       el('button', { class: 'btn ghost', onclick: () => go('operacao', 'situacao') }, T('ver tudo →', 'see all →'))),
       el('div', { class: 'dash-cards' },
@@ -62,14 +75,49 @@ export function makeCentralTab(CONTEST, opts = {}) {
         dc(j ? `${j.online || 0}/${j.total || 0}` : '—', T('juízes online', 'judges online'), j && j.total > 0 && !j.online),
         dc(num(sub && sub.response && sub.response.p95_s) + 's', T('resposta p95', 'p95 response'), sub && sub.response && sub.response.p95_s > 120),
         dc(num(rv && rv.pending_total), T('na correção manual', 'in manual review'), rv && rv.conflicts > 0)));
+    return box;
+  }
+
+  // "🔥 Aquecer juízes" (item judges_warm): calibração dirigida SÓ p/ os pares juiz×problema frios.
+  // Cada uma ocupa um slot do juiz por alguns minutos — depois do início, a confirmação diz isso.
+  async function warmJudges(btn, msg) {
+    const started = !!(lastSt && lastSt.start && Math.floor(Date.now() / 1000) >= lastSt.start);
+    const ask = started
+      ? T('A prova já começou. Cada calibração ocupa um slot do juiz por alguns minutos, e as submissões esperam atrás dela. Aquecer mesmo assim?',
+          'The contest has already started. Each calibration takes one judge slot for a few minutes, and submissions wait behind it. Warm up anyway?')
+      : T('Mandar cada juiz frio calibrar os problemas que ainda não calibrou? Cada calibração ocupa um slot do juiz por alguns minutos.',
+          'Ask each cold judge to calibrate the problems it has not calibrated yet? Each calibration takes one judge slot for a few minutes.');
+    if (!confirm(ask)) return;
+    btn.disabled = true; msg.textContent = T('⏳ pedindo…', '⏳ requesting…');
+    try {
+      const r = await apiPost('/contest/admin/warm-judges?contest=' + enc(CONTEST), {}, G);
+      const n = (r.sent || []).length;
+      msg.textContent = n
+        ? T(`✓ ${n} calibração(ões) pedida(s) — os juízes pegam no próximo heartbeat; rode o checklist de novo (↻) em alguns minutos.`,
+            `✓ ${n} calibration(s) requested — the judges pick them up on the next heartbeat; run the checklist again (↻) in a few minutes.`)
+        : T('Nada a pedir: os pares frios já estão aquecendo.', 'Nothing to request: the cold pairs are already warming up.');
+    } catch (e) {
+      msg.textContent = T('Falhou: ', 'Failed: ') + ((e && e.message) || T('erro de rede', 'network error'));
+      btn.disabled = false;
+    }
   }
 
   function checkEl(c) {
     const t = TARGET[c.id];
+    // label/detail vêm do servidor em PT; item com label_en/detail_en é bilíngue (preflight.sh add2)
+    const label = c.label_en ? T(c.label, c.label_en) : c.label;
+    const detail = c.detail_en ? T(c.detail || '', c.detail_en) : (c.detail || '');
+    let act = null;
+    if (c.action === 'warm_judges') {
+      const msg = el('span', { class: 'small muted' });
+      const btn = el('button', { class: 'btn' }, T('🔥 Aquecer juízes', '🔥 Warm up judges'));
+      btn.onclick = () => warmJudges(btn, msg);
+      act = el('div', { class: 'row', style: 'gap:.35rem;flex-wrap:wrap;align-items:center;margin-top:.35rem' }, btn, msg);
+    }
     return el('div', { class: 'ck' },
       el('span', { class: 'ico' }, ICON[c.level] || '•'),
-      el('span', { class: 'txt' }, el('b', {}, c.label), el('span', { class: 'small muted' }, c.detail || '')),
-      t ? el('button', { class: 'btn ghost', onclick: () => go(t[0], t[1]) }, T('resolver →', 'fix →')) : null);
+      el('span', { class: 'txt' }, el('b', {}, label), el('span', { class: 'small muted' }, detail), act),
+      t && visible(t[1]) ? el('button', { class: 'btn ghost', onclick: () => go(t[0], t[1]) }, T('resolver →', 'fix →')) : null);
   }
 
   async function load() {
@@ -85,16 +133,19 @@ export function makeCentralTab(CONTEST, opts = {}) {
       apiGet('/contest/admin/finish?contest=' + enc(CONTEST), G).catch((e) => ({ _err: (e && e.message) || T('falha de rede', 'network error') })),
     ]);
 
+    lastSt = st || null;
     // ---------- 1. falta para começar ----------
     const checks = (pre && pre.checks) || [];
     const s = (pre && pre.summary) || { ok: 0, warn: 0, fail: 0 };
+    // O checklist é CONSULTIVO: o MOJ não impede login nem submissão por causa dele. O rótulo dizia
+    // "BLOQUEIAM a prova" e um professor entendeu (com razão) que o sistema travaria — não trava.
     const head = !pre ? el('span', { class: 'pill bad' }, T('não foi possível checar', 'could not check'))
-      : s.fail > 0 ? el('span', { class: 'pill bad' }, T(`${s.fail} item(ns) BLOQUEIAM a prova`, `${s.fail} item(s) BLOCK the contest`))
-        : s.warn > 0 ? el('span', { class: 'pill' }, T(`${s.warn} aviso(s) — nada bloqueia`, `${s.warn} warning(s) — nothing blocks`))
+      : s.fail > 0 ? el('span', { class: 'pill bad' }, T(`${s.fail} item(ns) crítico(s) — confira antes de começar`, `${s.fail} critical item(s) — check before you start`))
+        : s.warn > 0 ? el('span', { class: 'pill' }, T(`${s.warn} aviso(s) — nada crítico`, `${s.warn} warning(s) — nothing critical`))
           : el('span', { class: 'pill ok' }, T('tudo pronto', 'all clear'));
     const box1 = el('div', { class: 'section' },
       el('div', { class: 'row', style: 'gap:.6rem;align-items:baseline' },
-        el('h2', { style: 'margin:.1rem 0' }, T('Falta para começar', 'Before you start')), head,
+        el('h2', { style: 'margin:.1rem 0' }, T('🚦 Falta para começar', '🚦 Before you start')), head,
         el('span', { style: 'flex:1' }),
         el('button', { class: 'btn ghost', title: T('rodar de novo', 'run again'), onclick: load }, '↻')));
     const bad = checks.filter((c) => c.level === 'fail').concat(checks.filter((c) => c.level === 'warn'));
@@ -114,7 +165,7 @@ export function makeCentralTab(CONTEST, opts = {}) {
     const postEnd = !st || !st.end || Math.floor(Date.now() / 1000) > st.end;
     if (fin && fin._err) {
       if (postEnd) panel.append(el('div', { class: 'section' },
-        el('h2', { style: 'margin:.1rem 0' }, T('Depois da prova', 'After the contest')),
+        el('h2', { style: 'margin:.1rem 0' }, T('🏁 Depois da prova', '🏁 After the contest')),
         el('div', { class: 'small error-box' },
           T('Não foi possível consultar o encerramento: ', 'Could not load the finish checklist: ') + fin._err)));
     } else if (fin && (fin.can_finish || postEnd)) {
@@ -128,7 +179,7 @@ export function makeCentralTab(CONTEST, opts = {}) {
       const btn = el('button', { class: 'btn' + (fs.fail ? '' : ' ghost') }, T('🏁 Encerrar evento', '🏁 Finish event'));
       const box = el('div', { class: 'section' },
         el('div', { class: 'row', style: 'gap:.6rem;align-items:baseline' },
-          el('h2', { style: 'margin:.1rem 0' }, T('Depois da prova', 'After the contest')),
+          el('h2', { style: 'margin:.1rem 0' }, T('🏁 Depois da prova', '🏁 After the contest')),
           !fin.can_finish ? el('span', { class: 'pill' }, T('aguardando o fim em todas as sedes', 'waiting for every site to finish'))
             : fs.fail > 0 ? el('span', { class: 'pill bad' }, T(`${fs.fail} item(ns) ainda fechado(s)`, `${fs.fail} item(s) still closed`))
               : el('span', { class: 'pill ok' }, T('resultado liberado', 'results released'))),
@@ -161,7 +212,11 @@ export function makeCentralTab(CONTEST, opts = {}) {
       } else {
         if (!fin.can_finish) {
           btn.disabled = true;
-          btn.title = T('disponível depois do fim para todas as sedes', 'available after every site finishes');
+          // can_finish também espera o fim geral + 1 min quando há freeze (freeze_release_at)
+          const at = +fin.freeze_release_at || 0;
+          btn.title = (at && Math.floor(Date.now() / 1000) < at)
+            ? T('disponível a partir de ', 'available from ') + new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + T(' (fim para todas as sedes + 1 min)', ' (end for every site + 1 min)')
+            : T('disponível depois do fim para todas as sedes', 'available after every site finishes');
         }
         box.append(el('div', { class: 'row', style: 'gap:.5rem;margin-top:.6rem;align-items:center' }, btn, fmsg));
       }
@@ -174,27 +229,28 @@ export function makeCentralTab(CONTEST, opts = {}) {
     const next = rd ? (rd.next || '') : '';
     const blk = (rd && rd.promote_ready && rd.promote_ready.blockers) || [];
     panel.append(el('div', { class: 'section' },
-      el('h2', { style: 'margin:.1rem 0 .5rem' }, T('Gerar', 'Generate')),
+      el('h2', { style: 'margin:.1rem 0 .5rem' }, T('🧰 Gerar', '🧰 Generate')),
+      // cartões de módulo só com o módulo ligado (documentos, rodadas, telão); os comuns sempre
       el('div', { class: 'tcards' },
-        gcard(T('📄 Documentos da prova', '📄 Contest documents'),
+        !has('documentos') ? null : gcard(T('📄 Documentos da prova', '📄 Contest documents'),
           nd ? T(`${nd} gerado(s) · ${npub} publicado(s)`, `${nd} generated · ${npub} published`)
             : T('info sheet, caderno e folha de time limits (PDF+HTML, pt/en)', 'info sheet, booklet and time-limits sheet (PDF+HTML, pt/en)'),
-          el('button', { class: 'btn', onclick: () => go('prova', 'documentos') }, T('abrir', 'open'))),
+          el('button', { class: 'btn', onclick: () => go('evento', 'documentos') }, T('abrir', 'open'))),
         gcard(T('🏷️ Etiquetas de credenciais', '🏷️ Credential badges'),
           T('folhas Pimaco A4 com login e senha', 'Pimaco A4 sheets with login and password'),
           el('a', { class: 'btn', target: '_blank', href: '/contest/badges/?c=' + enc(CONTEST) }, T('abrir', 'open'))),
-        gcard(T('🔁 Promover rodada', '🔁 Promote round'),
+        !has('rodadas') ? null : gcard(T('🔁 Promover rodada', '🔁 Promote round'),
           next ? (blk.length ? T(`próxima: ${next} — ${blk.length} bloqueador(es)`, `next: ${next} — ${blk.length} blocker(s)`)
             : T(`próxima: ${next} — pronta para promover`, `next: ${next} — ready to promote`))
             : T('nenhuma rodada planejada (aquecimento → prova no mesmo contest)', 'no round planned (warm-up → contest in the same contest)'),
-          el('button', { class: 'btn' + (blk.length || !next ? ' ghost' : ''), onclick: () => go('prova', 'rodadas') }, T('abrir', 'open'))),
-        gcard(T('📦 Relatório final', '📦 Final report'),
-          T('tar.gz navegável: placar aberto, runs, clarifications, staff', 'browsable tar.gz: open scoreboard, runs, clarifications, staff'),
-          el('button', { class: 'btn ghost', onclick: () => go('operacao', 'situacao') }, T('em Situação →', 'in Status →'))),
-        gcard(T('🏆 Cerimônia de revelação', '🏆 Reveal ceremony'),
+          el('button', { class: 'btn' + (blk.length || !next ? ' ghost' : ''), onclick: () => go('evento', 'rodadas') }, T('abrir', 'open'))),
+        gcard(T('📑 Relatório da prova', '📑 Contest report'),
+          T('tar.gz navegável e publicação como histórico (/relatorio/<contest>/)', 'browsable tar.gz and publication as history (/relatorio/<contest>/)'),
+          el('button', { class: 'btn', onclick: () => go('prova', 'relatorio') }, T('abrir', 'open'))),
+        !has('telao') ? null : gcard(T('🏆 Cerimônia de revelação', '🏆 Reveal ceremony'),
           T('placar congelado → aberto, de baixo para cima', 'frozen → open scoreboard, bottom-up'),
           el('a', { class: 'btn', target: '_blank', href: '/contest/score/reveal.html?c=' + enc(CONTEST) }, T('abrir', 'open'))),
-        gcard(T('🎥 Telão (Animeitor)', '🎥 Big screen (Animeitor)'),
+        !has('telao') ? null : gcard(T('🎥 Telão (Animeitor)', '🎥 Big screen (Animeitor)'),
           T('fotos e músicas dos times, pacote .zip e as chaves do webcast',
             'team photos and music, .zip package and the webcast keys'),
           el('a', { class: 'btn ghost', target: '_blank', href: '/contest/animeitor/?c=' + enc(CONTEST) }, T('abrir', 'open'))),
@@ -238,13 +294,21 @@ export function makeCentralTab(CONTEST, opts = {}) {
         save.disabled = false;
       });
       panel.append(el('div', { class: 'section' },
-        el('h2', { style: 'margin:.1rem 0 .4rem' }, T('Regras da prova', 'Contest rules')),
+        el('h2', { style: 'margin:.1rem 0 .4rem' }, T('⏱️ Regras da prova', '⏱️ Contest rules')),
         el('div', { class: 'row', style: 'gap:.7rem;flex-wrap:wrap;align-items:flex-end' },
           field(T('início', 'start'), ini), field(T('fim', 'end'), fim), field(T('freeze do placar', 'scoreboard freeze'), fz)),
+        el('div', { class: 'small muted', style: 'margin:.2rem 0' },
+          T('Apagar o freeze descongela o placar. O MOJ só aceita isso a partir do fim da prova para todas as sedes + 1 min (prorrogações incluídas).',
+            'Clearing the freeze unfreezes the scoreboard. The MOJ only accepts this from the end of the contest for every site + 1 min (extensions included).')),
         el('div', { class: 'small muted', style: 'margin:.2rem 0' },
           T('modo: ', 'mode: '), el('span', { class: 'pill' }, (st.mode || 'icpc').toUpperCase()),
           T(' (definido na criação) · linguagens: ', ' (set at creation) · languages: '),
           (st.languages || []).join(', ') || T('todas', 'all')),
+        el('div', { class: 'small muted', style: 'margin:.2rem 0' },
+          T('módulos: ', 'modules: '),
+          ...(mods().length ? MODULES().filter((m) => mods().includes(m.id)).map((m) => el('span', { class: 'pill', style: 'margin-right:.25rem' }, m.icon + ' ' + m.name))
+            : [el('span', { class: 'pill' }, T('nenhum (prova comum)', 'none (plain contest)'))]),
+          ' ', el('a', { href: '#central/modulos', class: 'small' }, T('ligar/desligar →', 'turn on/off →'))),
         el('div', { class: 'row', style: 'gap:.5rem;margin-top:.3rem' }, save, msg,
           el('span', { style: 'flex:1' }),
           el('button', { class: 'btn ghost', onclick: () => go('central', 'regras') }, T('⚙ todas as configurações…', '⚙ all settings…')))));

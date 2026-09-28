@@ -5,6 +5,7 @@ import { status, logout } from '/shared/auth.js';
 import { el, avatarEl } from '/shared/ui.js';
 import { T, setLang } from '/shared/i18n.js';
 import { navLabel } from '/shared/nav-i18n.js';
+import { mountSiteFooter } from '/shared/site-footer.js';
 
 // chip do usuário logado do contest no topbar (avatar + nome) — consistência com o
 // site principal. Inserido à esquerda do botão "Contest"/countdown; idempotente.
@@ -14,8 +15,11 @@ export function mountContestUserChip(st) {
   const anchor = document.getElementById('backBtn') || document.getElementById('contestCountdown');
   if (!anchor || !anchor.parentNode) return;
   anchor.parentNode.insertBefore(
-    el('span', { id: 'contestUserChip', class: 'user-chip small', style: 'margin-right:.3rem', title: st.login },
-      avatarEl(st.login, st.name, 22, st.has_photo), el('span', {}, st.name || st.login)),
+    // NOME · login, sempre (issue #29): várias telas não mostravam quem está logado, e o login é
+    // o que a sede/o juiz precisam ler — o nome sozinho não identifica a conta.
+    el('span', { id: 'contestUserChip', class: 'user-chip small', style: 'margin-right:.3rem', title: (st.name ? st.name + ' · ' : '') + st.login },
+      avatarEl(st.login, st.name, 22, st.has_photo), el('span', {}, st.name || st.login),
+      (st.name && st.name !== st.login) ? el('span', { class: 'muted', style: 'margin-left:.3rem' }, st.login) : null),
     anchor);
 }
 
@@ -67,5 +71,6 @@ export async function initContestShell(contest) {
     const nav = await apiGet('/contest/navbuttons?contest=' + encodeURIComponent(contest), { contest, auth: isAuth });
     renderNav(Array.isArray(nav) ? nav : (nav.buttons || []), contest);
   } catch { /* sem nav */ }
+  mountSiteFooter().catch(() => {});   // rodapé (versão, repositório, contato — issue #20)
   return { basic, isAuth, st };
 }

@@ -26,10 +26,10 @@ Você é a pessoa que fica na sala cuidando das impressões e dos balões. Você
 | Aba | Para que serve |
 |---|---|
 | **Score** | O placar (a versão congelada, como um usuário comum). |
-| **🖨️ Impressão** | A fila de impressão e balões da sua sede. É a sua tela principal. |
-| **🎥 Animeitor** | A mesa do telão em modo **somente leitura**: as fotos e músicas dos times da sua sede. Você olha e escuta; não envia, não troca, não baixa o pacote. |
-| **📄 Documentos** | Os documentos que a organização publicou (info sheet, caderno da prova, folha de time limits) para você baixar e imprimir. |
-| **🔁 Rodadas** | O placar e as submissões das rodadas encerradas (o aquecimento, por exemplo). |
+| **Impressão** | A fila de impressão e balões da sua sede. É a sua tela principal. |
+| **Animeitor** | A mesa do telão em modo **somente leitura**: as fotos e músicas dos times da sua sede. Você olha e escuta; não envia, não troca, não baixa o pacote. |
+| **Documentos** | Os documentos que a organização publicou (info sheet, caderno da prova, folha de time limits) para você baixar e imprimir. |
+| **Rodadas** | O placar e as submissões das rodadas encerradas (o aquecimento, por exemplo). |
 | **Sair** | Encerra a sua sessão. |
 
 ### A fila de impressão (`/contest/staff/`)
@@ -109,7 +109,7 @@ Quando a organização promove a prova oficial:
   balcão: entregue **antes** da promoção;
 - o seu **escopo de sede sobrevive** (é configuração, não dado da rodada): o que você viu no
   aquecimento é o que verá na prova;
-- o que aconteceu no aquecimento continua consultável na aba **🔁 Rodadas**.
+- o que aconteceu no aquecimento continua consultável na aba **Rodadas**.
 
 ### O que a `.staff` NÃO faz
 
@@ -129,19 +129,19 @@ Você supervisiona uma sede. Você acompanha a fila da sua sede, imprime as etiq
 | Aba | Para que serve |
 |---|---|
 | **Score** | O placar (a versão congelada, como um usuário comum). |
-| **🖨️ Impressão** | A fila da sua sede, em modo **somente leitura**. |
-| **🏷️ Etiquetas** | As folhas de credenciais da sua sede, com senha. |
-| **🎥 Animeitor** | A mesa do telão recortada na sua sede: aqui você **escreve** (envia/troca/remove foto e música dos seus times, e baixa o pacote .zip da sede). Não troca o padrão do contest nem vê chaves de webcast. |
-| **📄 Documentos** | Os documentos publicados da prova, para baixar e imprimir na sede. |
-| **🔁 Rodadas** | O placar e as submissões das rodadas já encerradas. |
+| **Impressão** | A fila da sua sede, em modo **somente leitura**. |
+| **Etiquetas** | As folhas de credenciais da sua sede, com senha. |
+| **Animeitor** | A mesa do telão recortada na sua sede: aqui você **escreve** (envia/troca/remove foto e música dos seus times, e baixa o pacote .zip da sede). Não troca o padrão do contest nem vê chaves de webcast. |
+| **Documentos** | Os documentos publicados da prova, para baixar e imprimir na sede. |
+| **Rodadas** | O placar e as submissões das rodadas já encerradas. |
 | **Sair** | Encerra a sua sessão. |
-| **🏆 Revelação** | A cerimônia de revelação da sua sede. Só aparece **depois que a prova encerra para todas as sedes**. |
+| **Revelação** | A cerimônia de revelação da sua sede. Só aparece **depois que a prova encerra para todas as sedes**. |
 
-### 🖨️ Impressão, somente leitura (`/contest/staff/`)
+### Impressão, somente leitura (`/contest/staff/`)
 
 É a mesma tela da `.staff`, mas **sem os botões de ação**: a coluna de ações fica vazia e a barra indica "somente leitura". Você acompanha a fila da sua sede, mas quem pega, imprime e entrega é a `.staff`.
 
-### 🏷️ Etiquetas (`/contest/badges/`), com senha
+### Etiquetas (`/contest/badges/`), com senha
 
 Aqui está o que a `.staff` não tem: as folhas de credenciais prontas para imprimir (modelo Pimaco A4), com **nome, login, senha, sede e instituição** de cada conta.
 
@@ -155,13 +155,13 @@ Aqui está o que a `.staff` não tem: as folhas de credenciais prontas para impr
   por uma aleatória, então não existe credencial para imprimir (o admin reabilita com um reset).
 - Todo acesso a esta tela é registrado.
 
-### 📄 Documentos da prova (`/contest/docs/`)
+### Documentos da prova (`/contest/docs/`)
 
 Aqui ficam os documentos que a organização **publicou**, prontos para você baixar e imprimir na sede:
 
 | Documento | O que é |
 |---|---|
-| **Informações do ambiente** | O *info sheet*: versões de compilador, limite de memória e de pilha, linguagens aceitas e o tempo limite de cada problema. Costuma ser afixado na sala ou entregue com o caderno. |
+| **Ambiente de julgamento** | O *info sheet*: sistema e versões de compilador, linguagens aceitas, limites, linhas de compilação e execução, veredictos e penalidade. Costuma ser afixado na sala ou entregue com o caderno. |
 | **Caderno da prova** | Capa + todos os enunciados. É o que vai impresso na mesa de cada time. |
 | **Folha de time limits** | A tabela `letra · nome · tempo limite` (com errata, se houver). |
 
@@ -175,7 +175,7 @@ Cada um sai em **PDF** (para imprimir) e **HTML**, em **português e em inglês*
 
 O seu placar é o **congelado**, como um usuário comum. Um administrador pode liberar a visão completa para uma conta específica (a lista `SCORE_FULL_USERS`), mas isso é uma exceção controlada pelo admin.
 
-### 🏆 Revelação por sede (`/contest/score/reveal.html`)
+### Revelação por sede (`/contest/score/reveal.html`)
 
 Você conduz a cerimônia de revelação da sua sede, no estilo ICPC (de baixo para cima).
 
@@ -184,6 +184,20 @@ Você conduz a cerimônia de revelação da sua sede, no estilo ICPC (de baixo p
 3. Você revela posição por posição, do último para o primeiro.
 
 Descongelar tudo e publicar o placar global são ações do **administrador**, não suas (ele faz isso pelo botão **🏁 Encerrar evento**, na Central do painel — ver `MANUAL-ADMIN.md` §6½).
+
+### Reveleitor do telão (Animeitor)
+
+Quando a cerimônia é no **telão do Animeitor**, a revelação da sua sede é um **link** que o operador do telão
+libera. Depois que ele libera, aparece o botão **Reveleitor** na sua barra, com o cartão **🎬 Reveleitor da sua
+sede** (abrir / copiar). O cartão traz o **selo da conferência** — o MOJ pergunta ao Animeitor se ele tem todas as
+submissões da sua sede:
+
+- **✓ Validado**: a prova acabou para todas as sedes, nada está em julgamento e o Animeitor tem tudo. Pode começar.
+- **✓ Conferido**: bateu na última conferência; a validação final sai quando a prova acabar para todas as sedes.
+- **⚠**: faltava alguma coisa na última conferência. O MOJ já reenviou; espere o "Validado" ou fale com o operador.
+
+O link mostra as respostas depois do congelamento: abra só no computador do telão da sede e não repasse. Conta sem
+sede definida não recebe link.
 
 ### Aquecimento: o ensaio da sede
 
@@ -217,11 +231,11 @@ enquanto ninguém está sob pressão.
 | Ver a fila de impressão da sua sede | Sim | Sim (somente leitura) |
 | Pegar, imprimir e entregar tarefas da fila | Sim | Não (acesso negado) |
 | Usar o modo automático de impressão | Sim | Não |
-| Ver etiquetas com senha (🏷️ Etiquetas) | Não (acesso negado) | Sim (só a sua sede) |
-| Baixar os documentos publicados (📄 Documentos) | Sim | Sim |
+| Ver etiquetas com senha (Etiquetas) | Não (acesso negado) | Sim (só a sua sede) |
+| Baixar os documentos publicados (Documentos) | Sim | Sim |
 | Gerar/publicar documentos | Não (é do admin/juiz-chefe) | Não (é do admin/juiz-chefe) |
 | Conduzir a revelação da sua sede (🏆) | Não | Sim (após encerrar todas as sedes) |
-| Ver a mesa do telão (🎥 Animeitor) da sua sede | Sim (só olhar/ouvir) | Sim |
+| Ver a mesa do telão (Animeitor) da sua sede | Sim (só olhar/ouvir) | Sim |
 | Enviar/trocar foto e música dos times da sede | Não (acesso negado) | Sim (só a sua sede) |
 | Baixar o pacote .zip do telão | Não | Sim (recortado na sede) |
 | Trocar a foto/música PADRÃO do contest | Não | Não (é do `.animeitor`/admin) |

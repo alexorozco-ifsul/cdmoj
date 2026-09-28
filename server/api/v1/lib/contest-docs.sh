@@ -10,8 +10,12 @@
 # total real de páginas (pdfinfo).
 #
 # Idioma: PT/EN/ES vale para o CHROME do documento (capa, títulos, tabelas, info sheet) — a
-# tabela é o `_doc_t`. O corpo do ENUNCIADO sai no idioma em que foi escrito: o MOJ não traduz
-# enunciado (para isso existe o PDF ENVIADO, abaixo).
+# tabela é o `_doc_t` — E, desde 2026-09-15, para o CORPO: o caderno em <lang> usa o enunciado
+# `enunciados/<skey>.<lang>.html|pdf` (ou a tradução do banco, `statements[<lang>]`), o editorial
+# usa `docs/solucao.<lang>.md` do pacote, e o título do problema vem de `titles[<lang>]`
+# (`_doc_stmt_file`/`_doc_probs_l`, sobre lib/contest-statement.sh). Idioma sem tradução CAI NO
+# PT — o documento nunca sai só com a capa localizada e o miolo em branco. O PDF ENVIADO
+# (abaixo) continua sendo a via p/ prova traduzida por fora.
 #
 # PDF ENVIADO: o admin pode subir o documento PRONTO de um tipo+idioma
 # (docs/<tipo>.<lang>.uploaded.pdf). Ele VENCE o gerado em tudo que é servido (doc_pdf_served) e
@@ -21,7 +25,7 @@
 #   contests/<c>/docs/config.json            {caderno_version, cover_note, errata,
 #                                             editorial_note, published:[…]}
 #   contests/<c>/docs/info-sheet.<lang>.md   template editável (default: server/etc/)
-#   contests/<c>/docs/<tipo>.<lang>.{html,pdf}
+#   contests/<c>/docs/<tipo>.<lang>.{html,pdf,odt}  (.odt = o intermediário editável do PDF — organização)
 #   contests/<c>/docs/<tipo>.<lang>.uploaded.pdf   PDF pronto enviado pelo admin (vence)
 #   contests/<c>/docs/index.json             [{type,lang,fmt,bytes,generated_at,by}]
 : "${DOC_TYPES:=info-sheet contest times editorial}"
@@ -29,6 +33,46 @@
 declare -F effective_problem_langs >/dev/null || source "$_DIR/lib/langs.sh" 2>/dev/null || true
 # pkg_path (editorial lê docs/solucao.md do PACOTE do problema)
 declare -F pkg_path >/dev/null || source "$_DIR/lib/tl-store.sh" 2>/dev/null || true
+# idiomas do enunciado no contest (cs_file/cs_bank_json/cs_bank_title)
+declare -F cs_file >/dev/null || source "$_DIR/lib/contest-statement.sh"
+
+# _doc_probs_l <c> <lang> — cc_probs_json com o NOME do problema no idioma do documento
+# (titles[<lang>] do banco quando a tradução existe; senão o nome do conf). Toda função de
+# documento que lista problemas usa isto, e não cc_probs_json direto.
+_doc_probs_l(){
+  local c="$1" l="${2:-pt}" probs n i skey t
+  probs="$(cc_probs_json "$c")"
+  [[ "$l" == pt ]] && { printf '%s' "$probs"; return 0; }
+  n="$(jq -r 'length' <<<"$probs" 2>/dev/null)"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  for ((i=0; i<n; i++)); do
+    skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
+    [[ -n "$skey" ]] || continue
+    t=""; bf="$(cs_bank_json "$skey" 2>/dev/null)" && t="$(cs_bank_title "$bf" "$l")"
+    [[ -n "$t" ]] && probs="$(jq -c --argjson i "$i" --arg t "$t" '.[$i].name=$t' <<<"$probs")"
+  done
+  printf '%s' "$probs"
+}
+# _doc_stmt_file <c> <skey> <lang> -> caminho de um HTML do enunciado NO idioma (ou PT):
+# arquivo do contest no idioma › tradução do banco (materializada em tmp) › arquivo PT do
+# contest › PT do banco. rc 1 = nenhum. Os tmp ficam em $_DOC_TMPD (o chamador apaga).
+_doc_stmt_file(){
+  local c="$1" skey="$2" l="${3:-pt}" f bf tmpf
+  : "${_DOC_TMPD:=$(mktemp -d)}"
+  if [[ "$l" != pt && -f "$CONTESTSDIR/$c/enunciados/$skey.$l.html" ]]; then printf '%s' "$CONTESTSDIR/$c/enunciados/$skey.$l.html"; return 0; fi
+  bf="$(cs_bank_json "$skey" 2>/dev/null)" || bf=""
+  if [[ "$l" != pt && -n "$bf" ]] && jq -e --arg l "$l" '(.statements[$l].html_b64 // "") != ""' "$bf" >/dev/null 2>&1; then
+    tmpf="$_DOC_TMPD/s.$skey.$l.html"
+    jq -r --arg l "$l" '.statements[$l].html_b64' "$bf" 2>/dev/null | base64 -d > "$tmpf" 2>/dev/null
+    [[ -s "$tmpf" ]] && { printf '%s' "$tmpf"; return 0; }
+  fi
+  if f="$(cs_file "$c" "$skey" pt html)"; then printf '%s' "$f"; return 0; fi
+  if [[ -n "$bf" ]]; then
+    tmpf="$_DOC_TMPD/s.$skey.pt.html"
+    jq -r '.statement_html_b64 // ""' "$bf" 2>/dev/null | base64 -d > "$tmpf" 2>/dev/null
+    [[ -s "$tmpf" ]] && { printf '%s' "$tmpf"; return 0; }
+  fi
+  return 1
+}
 
 doc_dir(){ printf '%s/%s/docs' "$CONTESTSDIR" "$1"; }
 doc_file(){ printf '%s/%s.%s.%s' "$(doc_dir "$1")" "$2" "$3" "$4"; }   # <c> <tipo> <lang> <fmt>
@@ -82,10 +126,27 @@ _doc_t(){
     en:no_solution) printf 'no solution write-up in this problem'\''s package';;
     es:no_solution) printf 'solución no disponible en el paquete de este problema';;
     # chaves que ANTES eram ternário solto no meio do código (é o que sangrava num 3º idioma)
-    pt:env_title) printf 'Informações do ambiente';; en:env_title) printf 'Testing environment';; es:env_title) printf 'Información del entorno';;
+    # (2026-09-14: era "Testing environment"; o nome agora remete ao sistema de julgamento)
+    pt:env_title) printf 'Ambiente de julgamento e submissão';; en:env_title) printf 'Judging environment and submission system';; es:env_title) printf 'Entorno de evaluación y envío';;
+    pt:tl_same) printf 'Os limites de tempo não dependem da linguagem de programação.';;
+    en:tl_same) printf 'Time limits do not depend on the programming language.';;
+    es:tl_same) printf 'Los límites de tiempo no dependen del lenguaje de programación.';;
+    pt:tl_per_lang) printf 'O limite de tempo depende da linguagem: uma coluna por linguagem.';;
+    en:tl_per_lang) printf 'The time limit depends on the language: one column per language.';;
+    es:tl_per_lang) printf 'El límite de tiempo depende del lenguaje: una columna por lenguaje.';;
+    pt:ed_index) printf 'Problemas deste editorial';; en:ed_index) printf 'Problems in this editorial';; es:ed_index) printf 'Problemas de este editorial';;
+    pt:none_w) printf 'nenhum';;          en:none_w) printf 'none';;            es:none_w) printf 'ninguno';;
+    pt:all_langs) printf 'todas as linguagens da plataforma';; en:all_langs) printf 'all platform languages';; es:all_langs) printf 'todos los lenguajes de la plataforma';;
     pt:file_ext)  printf 'Extensão do arquivo';;     en:file_ext)  printf 'File extension';;      es:file_ext)  printf 'Extensión del archivo';;
     pt:no_versions) printf 'nenhum juiz reportou versões ainda';; en:no_versions) printf 'no judge reported versions yet';; es:no_versions) printf 'ningún juez ha reportado versiones todavía';;
     pt:no_statement) printf 'enunciado indisponível';; en:no_statement) printf 'statement unavailable';; es:no_statement) printf 'enunciado no disponible';;
+    # só no .odt do caderno (o que a organização baixa p/ ajustar): o que o ODT não consegue embutir
+    pt:odt_cover_pdf) printf '[Capa: a capa em PDF enviada substitui esta página — junte-a ao exportar o PDF.]';;
+    en:odt_cover_pdf) printf '[Cover: the uploaded cover PDF replaces this page — merge it when exporting the PDF.]';;
+    es:odt_cover_pdf) printf '[Portada: la portada en PDF enviada reemplaza esta página — únala al exportar el PDF.]';;
+    pt:odt_stmt_pdf) printf '[Este problema tem enunciado em PDF próprio — junte o PDF ao exportar.]';;
+    en:odt_stmt_pdf) printf '[This problem has its own statement PDF — merge it when exporting.]';;
+    es:odt_stmt_pdf) printf '[Este problema tiene su propio PDF de enunciado — únalo al exportar.]';;
     pt:news_doc) printf 'Documento da prova disponível para download.';;
     en:news_doc) printf 'Contest document available for download.';;
     es:news_doc) printf 'Documento de la competencia disponible para descargar.';;
@@ -184,13 +245,59 @@ _doc_meta(){
   # (é o que build-and-test.sh/calibreitor.sh fazem) e, sob `set -u`, ler `${ULIMITS[-s]}` sem
   # o array declarado aborta o subshell inteiro — o documento saía com cabeçalho vazio e data
   # "—" em todo contest que não define ULIMITS (o caso comum).
+  # CPEN/CPENV = penalidade ICPC (minutos e códigos que penalizam; "__unset" = default da
+  # plataforma) e CFSIZE = teto de saída do programa (ULIMITS[-f], KB) — a folha de ambiente
+  # publica os três (2026-09-14, padrão da folha da SBC).
+  CPEN=""; CPENV=""; CFSIZE=""
   _kv="$( declare -A ULIMITS 2>/dev/null || true
     . "$CONTESTSDIR/$c/conf" 2>/dev/null
-    printf 'CNAME=%q CDATE=%q CLANGS=%q CMEM=%q CSTACK=%q' \
+    printf 'CNAME=%q CDATE=%q CLANGS=%q CMEM=%q CSTACK=%q CPEN=%q CPENV=%q CFSIZE=%q' \
       "${CONTEST_NAME:-$c}" "${CONTEST_START:-0}" "${LANGUAGES:-}" \
-      "${MEMLIMITMB:-1024}" "${ULIMITS[-s]:-131072}" )"
+      "${MEMLIMITMB:-1024}" "${ULIMITS[-s]:-131072}" \
+      "${PENALTY_MINUTES:-20}" "${PENALTY_VERDICTS-__unset}" "${ULIMITS[-f]:-256000}" )"
   [[ -n "$_kv" ]] && eval "$_kv"
   [[ -n "$CNAME" ]] || CNAME="$c"
+  [[ "$CPEN" =~ ^[0-9]+$ ]] || CPEN=20
+  [[ "$CFSIZE" =~ ^[0-9]+$ ]] || CFSIZE=256000
+  declare -F penalty_code_canon >/dev/null || source "$_DIR/lib/verdict.sh"
+  [[ "$CPENV" == "__unset" ]] && CPENV="$PENALTY_CODES_DEFAULT"
+}
+
+# _doc_penalty_exceptions <lang> -> nomes dos veredictos que NÃO contam penalidade (de
+# PENALTY_VERDICTS × o universo fixo PENALTY_CODES_ALL), separados por vírgula; vazio = "nenhum".
+_doc_penalty_exceptions(){
+  local l="$1" code out=""
+  for code in $PENALTY_CODES_ALL; do
+    [[ " $CPENV " == *" $code "* ]] && continue
+    out+="${out:+, }$(penalty_code_canon "$code")"
+  done
+  printf '%s' "${out:-$(_doc_t "$l" none_w)}"
+}
+# _doc_verdicts_html -> <ul> com os veredictos que o competidor pode receber (o provisório +
+# as 6 classes canônicas de lib/verdict.sh — os nomes são os do MOJ, não se traduzem)
+_doc_verdicts_html(){
+  local v out='<ul><li>Not Answered Yet</li>'
+  local IFS='|'; for v in $VERDICT_CLASSES; do out+="<li>$(_doc_escs "$v")</li>"; done
+  printf '%s</ul>' "$out"
+}
+# _doc_os -> SO das máquinas de julgamento (campo `os` do registry, reportado pelo agente a
+# partir do /etc/os-release da ROOTFS — judge/agent/inventory.sh); vazio = juiz antigo.
+_doc_os(){
+  find "${REGISTRYDIR:-$RUNDIR/registry}" -maxdepth 1 -name '*.json' -exec cat {} + 2>/dev/null \
+    | jq -rs '[ .[] | (.os // "") | select(type == "string" and . != "") ] | unique | join(" / ")' 2>/dev/null
+}
+# _doc_lang_blocks <langs> — filtro dos blocos condicionais do template:
+#   {{#LANG c cpp}} … {{/LANG}}  fica só se ALGUMA das linguagens listadas está na whitelist do
+# contest (LANGUAGES vazio = todas as da plataforma = todos os blocos ficam). É o que deixa a
+# seção "Compilação e execução" ter uma subseção por linguagem sem inventar seção p/ linguagem
+# que ninguém pode usar. Marcadores sempre sozinhos na linha.
+_doc_lang_blocks(){
+  awk -v keep="$1" '
+    BEGIN{ n=split(keep,K," "); for(i=1;i<=n;i++) KP[K[i]]=1; all=(n==0); skip=0 }
+    /^[ \t]*\{\{#LANG[ \t]/ { s=$0; sub(/^[ \t]*\{\{#LANG[ \t]+/,"",s); sub(/[ \t]*\}\}.*$/,"",s)
+      m=split(s,L," "); ok=all; for(i=1;i<=m;i++) if(L[i] in KP) ok=1; skip=!ok; next }
+    /^[ \t]*\{\{\/LANG\}\}/ { skip=0; next }
+    !skip { print }'
 }
 
 _doc_date(){  # <epoch> <lang> [contest] — data da prova NO FUSO DELA
@@ -220,7 +327,7 @@ _doc_pool(){
 
 # doc_tl_rows <c> -> TSV: letra \t nome \t tl_texto  (tl vazio = não calibrado)
 doc_tl_rows(){
-  local c="$1" probs; probs="$(cc_probs_json "$c")"
+  local c="$1" probs; probs="$(_doc_probs_l "$c" "${2:-pt}")"
   local n i letter name pid tl allow
   n="$(jq -r 'length' <<<"$probs" 2>/dev/null)"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
   for ((i=0; i<n; i++)); do
@@ -254,6 +361,9 @@ _doc_lang_name(){
   esac
 }
 
+# _doc_lang_short <id> -> nome curto p/ cabeçalho de coluna (a versão longa é _doc_lang_name)
+_doc_lang_short(){ case "$1" in py) printf 'Python';; sh) printf 'Shell';; *) _doc_lang_name "$1";; esac; }
+
 # _doc_toolchain [<c>] -> linhas "Linguagem — versão" do que os JUÍZES reportam
 # (`toolchain` do registry, medido DENTRO da jaula pelo agente: judge/agent/inventory.sh).
 # Com o contest, filtra pelas linguagens aceitas nele — a info sheet não lista compilador
@@ -271,7 +381,7 @@ _doc_toolchain(){
   local k v
   while IFS=$'\t' read -r k v; do
     [[ -n "$k" ]] || continue
-    printf '%s — %s\n' "$(_doc_lang_name "$k")" "$v"
+    printf '%s: %s\n' "$(_doc_lang_name "$k")" "$v"
   done <<<"$tmp"
 }
 
@@ -279,20 +389,48 @@ _doc_toolchain(){
 _doc_langs_table(){
   local c="$1" l="$2" langs
   langs="$( . "$CONTESTSDIR/$c/conf" 2>/dev/null; printf '%s' "${LANGUAGES:-}" )"
-  [[ -n "$langs" ]] || { printf '<p>%s</p>' "$(_doc_t "$l" langs)"; return; }
+  [[ -n "$langs" ]] || { printf '<p>%s: %s.</p>' "$(_doc_t "$l" langs)" "$(_doc_t "$l" all_langs)"; return; }
   printf '<table class="doc-tbl"><thead><tr><th %s>%s</th><th %s>%s</th></tr></thead><tbody>' \
     "$_DOC_TH_RULE" "$(_doc_t "$l" langs)" "$_DOC_TH_RULE" "$(_doc_t "$l" file_ext)"
   local x arr=() i st
   for x in $langs; do arr+=( "$x" ); done
   for i in "${!arr[@]}"; do
     st="$_DOC_TD"; (( i == ${#arr[@]} - 1 )) && st="$_DOC_TD_LAST"
-    printf '<tr><td %s>%s</td><td %s><code>.%s</code></td></tr>' \
-      "$st" "$(_doc_escs "$(_doc_lang_name "${arr[$i]}")")" "$st" "$(_doc_escs "${arr[$i]}")"
+    # C++ aceita quatro extensões (2026-09-14): a folha diz ao time o que pode mandar
+    local _exts=".${arr[$i]}"; [[ "${arr[$i]}" == cpp ]] && _exts=".cpp, .cc, .cxx, .c++"
+    printf '<tr><td %s>%s</td><td %s><code>%s</code></td></tr>' \
+      "$st" "$(_doc_escs "$(_doc_lang_name "${arr[$i]}")")" "$st" "$(_doc_escs "$_exts")"
   done
   printf '</tbody></table>'
 }
 
-# _doc_tl_table <c> <lang> -> tabela HTML letra|nome|TL
+# _doc_tl_matrix <c> -> JSON [{letter,name,tl:{<lang>:<segundos>}}] — o mesmo recorte de
+# doc_tl_rows (só as linguagens permitidas no problema), mas com o mapa POR LINGUAGEM inteiro:
+# é o que deixa a tabela decidir entre "um número" e "uma coluna por linguagem".
+_doc_tl_matrix(){
+  local c="$1" probs n i letter name pid tl allow out='[]'
+  probs="$(_doc_probs_l "$c" "${2:-pt}")"
+  n="$(jq -r 'length' <<<"$probs" 2>/dev/null)"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  for ((i=0; i<n; i++)); do
+    letter="$(jq -r --argjson i "$i" '.[$i].letter // ""' <<<"$probs")"
+    name="$(jq -r --argjson i "$i" '.[$i].name // ""' <<<"$probs")"
+    pid="$(jq -r --argjson i "$i" '.[$i].statement_key // .[$i].problem_id // ""' <<<"$probs")"
+    tl="$(tl_store_served "$pid" "$(_doc_pool "$c" "$pid")" 2>/dev/null)"; [[ -n "$tl" ]] || tl='{}'
+    allow="[]"; declare -F effective_problem_langs >/dev/null && allow="$(effective_problem_langs "$c" "$pid" 2>/dev/null)"
+    [[ -n "$allow" ]] || allow='[]'
+    out="$(jq -c --arg L "$letter" --arg N "$name" --argjson allow "$allow" --argjson tl "$tl" '
+      . + [{letter:$L, name:$N,
+            tl: ($tl | to_entries | map(select(.key != "default"))
+                 | map(.key as $k | select(($allow|length) == 0 or (($allow|index($k)) != null)))
+                 | map({key, value:(.value|tonumber|(.*1000|round)/1000)}) | from_entries)}]' <<<"$out" 2>/dev/null)" || out='[]'
+  done
+  printf '%s' "${out:-[]}"
+}
+
+# _doc_tl_table <c> <lang> -> tabela HTML letra|nome|TL (+ nota de rodapé). Se TODO problema
+# tem um TL só (igual em todas as linguagens permitidas), sai UMA coluna e a nota "não depende
+# da linguagem" (padrão da folha da SBC); senão sai UMA COLUNA POR LINGUAGEM (ordem de LANGUAGES
+# do contest) com "—" onde não se aplica, e a nota diz isso (2026-09-14).
 # FILETES DA TABELA (booktabs) — INLINE, de propósito: o importador de HTML do LibreOffice
 # IGNORA borda de tabela/célula vinda de CSS (testado: só o atributo `style=` na própria célula
 # rende). O `contest-doc.css` mantém as mesmas regras para quem abre o HTML no navegador.
@@ -301,24 +439,38 @@ _DOC_TD_LAST='style="border-bottom:1.1pt solid #000;padding:.3em .9em .3em 0"'
 _DOC_TD='style="padding:.3em .9em .3em 0"'
 
 _doc_tl_table(){
-  local c="$1" l="$2" letter name tl
-  printf '<table class="doc-tbl"><thead><tr><th %s>%s</th><th %s>%s</th><th %s>%s</th></tr></thead><tbody>' \
-    "$_DOC_TH_RULE" "$(_doc_t "$l" problem)" "$_DOC_TH_RULE" "$(_doc_t "$l" name)" \
-    "$_DOC_TH_RULE" "$(_doc_t "$l" tl)"
-  # o filete de baixo vai na ÚLTIMA linha: junta tudo e só então imprime (nunca use conteúdo
-  # de usuário como FORMATO do printf — um problema chamado "50% off" viraria lixo)
-  local rows=() i st
-  while IFS=$'\t' read -r letter name tl; do
-    [[ -n "$letter$name" ]] || continue
-    rows+=( "$(printf '%s\t%s\t%s' "$(_doc_escs "$letter")" "$(_doc_escs "$name")" "$(_doc_escs "${tl:-—}")")" )
-  done < <(doc_tl_rows "$c")
-  for i in "${!rows[@]}"; do
-    st="$_DOC_TD"; (( i == ${#rows[@]} - 1 )) && st="$_DOC_TD_LAST"
-    IFS=$'\t' read -r letter name tl <<<"${rows[$i]}"
-    printf '<tr><td class="c" %s>%s</td><td %s>%s</td><td class="c" %s>%s</td></tr>' \
-      "$st" "$letter" "$st" "$name" "$st" "$tl"
+  local c="$1" l="$2" m langs
+  m="$(_doc_tl_matrix "$c" "$l")"
+  langs="$( . "$CONTESTSDIR/$c/conf" 2>/dev/null; printf '%s' "${LANGUAGES:-}" )"
+  # a tabela inteira sai do jq (@html escapa nome de problema — nunca conteúdo de usuário como
+  # FORMATO do printf); o filete de baixo vai na ÚLTIMA linha (o importador do Writer ignora
+  # tr:last-child) e as bordas são INLINE (ver _DOC_TH_RULE)
+  # cabeçalho por linguagem com o nome de exibição CURTO (C, C++, Java, Python…), não o id
+  local names='{}' x
+  for x in $(jq -r '[.[] | .tl | keys[]] | unique | .[]' <<<"${m:-[]}" 2>/dev/null); do
+    names="$(jq -c --arg k "$x" --arg v "$(_doc_lang_short "$x")" '.[$k]=$v' <<<"$names")"
   done
-  printf '</tbody></table>'
+  jq -r --arg th "$_DOC_TH_RULE" --arg td "$_DOC_TD" --arg tdl "$_DOC_TD_LAST" \
+     --arg h_prob "$(_doc_t "$l" problem)" --arg h_name "$(_doc_t "$l" name)" --arg h_tl "$(_doc_t "$l" tl)" \
+     --arg n_same "$(_doc_t "$l" tl_same)" --arg n_lang "$(_doc_t "$l" tl_per_lang)" \
+     --arg order "$langs" --argjson names "$names" '
+    def cell(v): if v == null then "—" else (v|tostring) end;
+    (map(.tl | [.[]] | unique | length) | any(. > 1)) as $per_lang
+    | (($order | split(" ") | map(select(. != ""))) as $o
+       | ([.[] | .tl | keys[]] | unique) as $all
+       | ($o | map(select(. as $x | ($all | index($x)) != null))) + ($all | map(select(. as $x | ($o | index($x)) == null)))) as $cols
+    | (length) as $n
+    | "<table class=\"doc-tbl\"><thead><tr><th \($th)>\($h_prob)</th><th \($th)>\($h_name)</th>"
+      + (if $per_lang then ($cols | map("<th class=\"c\" \($th)>\(($names[.] // .)|@html)</th>") | join(""))
+         else "<th class=\"c\" \($th)>\($h_tl)*</th>" end)
+      + "</tr></thead><tbody>"
+      + ([to_entries[] | (if .key == $n - 1 then $tdl else $td end) as $st | .value
+          | "<tr><td class=\"c\" \($st)>\(.letter|@html)</td><td \($st)>\(.name|@html)</td>"
+            + (if $per_lang then ([. as $r | $cols[] | "<td class=\"c\" \($st)>\(cell($r.tl[.]))</td>"] | join(""))
+               else "<td class=\"c\" \($st)>\(cell(.tl | [.[]] | first))</td>" end)
+            + "</tr>"] | join(""))
+      + "</tbody></table>"
+      + (if $n > 0 then "<p class=\"foot\">* \(if $per_lang then $n_lang else $n_same end)</p>" else "" end)' <<<"${m:-[]}" 2>/dev/null
 }
 
 # ---------- HTML de cada documento ----------------------------------------------------
@@ -331,12 +483,26 @@ _doc_html_infosheet(){
   [[ -f "$tpl" ]] || tpl="$_DIR/etc/info-sheet.$l.md"
   [[ -f "$tpl" ]] || { printf '<p>template ausente</p>'; return 1; }
   tmp="$(mktemp)"
-  # marcadores -> conteúdo gerado (tabelas entram como HTML puro depois do pandoc)
-  sed -e "s|{{CONTEST_NAME}}|$(_doc_escs "$CNAME")|g" \
+  # marcadores -> conteúdo gerado (tabelas entram como HTML puro depois do pandoc). Os blocos
+  # {{#LANG …}} são filtrados ANTES pela whitelist do contest (_doc_lang_blocks). Números:
+  # SOURCE_MAX = SUBMIT_MAX_KB (submit.sh), OUTPUT_MAX = ULIMITS[-f] do conf (ou o default do
+  # build-and-test), COMPILE_TL = COMPILETL do build-and-test (30 s), MEMLIMIT_MB/STACK_KB = o
+  # que o juiz passa em -Xmx/-Xss (lang/java|kt/run.sh).
+  local osname; osname="$(_doc_os)"; [[ -n "$osname" ]] || osname="GNU/Linux"
+  _doc_lang_blocks "$CLANGS" < "$tpl" \
+    | sed -e "s|{{CONTEST_NAME}}|$(_doc_escs "$CNAME")|g" \
       -e "s|{{DATE}}|$(_doc_date "$CDATE" "$l" "$c")|g" \
+      -e "s|{{MEMLIMIT_MB}}|${CMEM:-1024}|g" \
       -e "s|{{MEMLIMIT}}|${CMEM:-1024} MB|g" \
+      -e "s|{{STACK_KB}}|${CSTACK:-131072}|g" \
       -e "s|{{STACK}}|$(( ${CSTACK:-131072} / 1024 )) MB|g" \
-      "$tpl" > "$tmp"
+      -e "s|{{OS}}|$(_doc_escs "$osname" | sed 's/[&|\\]/\\&/g')|g" \
+      -e "s|{{SOURCE_MAX}}|${SUBMIT_MAX_KB:-1024} KB|g" \
+      -e "s|{{OUTPUT_MAX}}|$(( ${CFSIZE:-256000} / 1024 )) MB|g" \
+      -e "s|{{COMPILE_TL}}|${DOC_COMPILE_TL:-30}|g" \
+      -e "s|{{PENALTY}}|${CPEN:-20}|g" \
+      -e "s|{{PENALTY_EXCEPTIONS}}|$(_doc_escs "$(_doc_penalty_exceptions "$l")")|g" \
+      > "$tmp"
   local body; body="$(render_markdown_html < "$tmp" 2>/dev/null)"
   rm -f "$tmp"
   local tc; tc="$(_doc_toolchain "$c")"
@@ -349,7 +515,8 @@ _doc_html_infosheet(){
   printf '%s' "$body" \
     | sed -e "s|{{TOOLCHAIN}}|$(printf '%s' "$tchtml" | sed 's/[&|]/\\&/g')|" \
           -e "s|{{LANGS_TABLE}}|$(_doc_langs_table "$c" "$l" | sed 's/[&|]/\\&/g')|" \
-          -e "s|{{TL_TABLE}}|$(_doc_tl_table "$c" "$l" | sed 's/[&|]/\\&/g')|"
+          -e "s|{{TL_TABLE}}|$(_doc_tl_table "$c" "$l" | sed 's/[&|]/\\&/g')|" \
+          -e "s|{{VERDICTS}}|$(_doc_verdicts_html | sed 's/[&|]/\\&/g')|"
   _doc_html_foot
 }
 
@@ -361,8 +528,8 @@ _doc_html_times(){
   # bloco de título centrado (o \maketitle do LaTeX) — a classe é o que o CSS usa p/ centrar
   printf '<h1 class="title">%s</h1><div class="sub">%s</div>\n' "$(_doc_escs "$CNAME")" "$(_doc_date "$CDATE" "$l" "$c")"
   printf '<h2 class="center">%s</h2>\n' "$(_doc_t "$l" times_title)"
-  _doc_tl_table "$c" "$l"
-  printf '<p class="foot"><sup>1</sup> %s</p>\n' "$(_doc_t "$l" seconds)"
+  _doc_tl_table "$c" "$l"          # (traz a nota "* …" sobre linguagem)
+  printf '<p class="foot">%s</p>\n' "$(_doc_t "$l" seconds)"
   if [[ -n "$errata" ]]; then
     printf '<h3>%s</h3>%s\n' "$(_doc_t "$l" errata)" "$(printf '%s' "$errata" | render_markdown_html 2>/dev/null)"
   fi
@@ -377,6 +544,45 @@ _doc_html_times(){
 doc_cover_pdf(){ printf '%s/cover.%s.pdf' "$(doc_dir "$1")" "$2"; }   # <c> <lang>
 doc_cover_md(){  printf '%s/cover.%s.md'  "$(doc_dir "$1")" "$2"; }
 
+# CAPA POR TEMPLATE (25/09/2026): a capa padrão É um template Markdown — server/etc/cover.<lang>.md —, o
+# MESMO formato da capa editada pelo admin. Assim a área de Documentos mostra o texto da capa no editor
+# (como já fazia com o info sheet) e editar uma palavra muda só aquela palavra. O template usa as
+# classes do contest-doc.css (::: sub, {.session}, ::: center …) e reproduz a capa de antes (conferido
+# pixel a pixel no PDF).
+# doc_default_tpl <nome> <lang> -> caminho do template EMBARCADO (info-sheet|cover), idioma → pt
+doc_default_tpl(){
+  local f
+  for f in "$_DIR/../../etc/$1.$2.md" "$_DIR/etc/$1.$2.md" "$_DIR/../../etc/$1.pt.md" "$_DIR/etc/$1.pt.md"; do
+    [[ -s "$f" ]] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+# _doc_cover_tpl <c> <lang> -> o template da capa: o EDITADO do contest, senão o padrão
+_doc_cover_tpl(){
+  local f; f="$(doc_cover_md "$1" "$2")"
+  [[ -s "$f" ]] && { printf '%s' "$f"; return 0; }
+  doc_default_tpl cover "$2"
+}
+# _doc_cover_fill <tpl> <c> <lang> <n_problems> <n_pages> <note> <sites> <version> -> Markdown da capa.
+# Marcadores: {{CONTEST_NAME}} {{DATE}} {{N_PROBLEMS}} {{N_PAGES}} {{SITES}} {{VERSION}} {{NOTE}}.
+# OPCIONAIS — {{N_PAGES}} (só o PDF sabe as páginas), {{SITES}} (regions.json) e {{NOTE}} (nota da capa):
+# o BLOCO (texto entre linhas em branco) com um deles vazio SOME inteiro, com o ::: em volta. Substituição
+# em python (valor com '|', '&' ou barra não quebra nada, ao contrário do sed); nome/sedes/versão entram
+# escapados em HTML, a nota entra como Markdown.
+_doc_cover_fill(){
+  local tpl="$1" c="$2" l="$3"
+  _doc_meta "$c"
+  V_CONTEST_NAME="$(_doc_escs "$CNAME")" V_DATE="$(_doc_date "$CDATE" "$l" "$c")" V_N_PROBLEMS="$4" \
+  V_N_PAGES="$5" V_NOTE="$6" V_SITES="$(_doc_escs "$7")" V_VERSION="$(_doc_escs "$8")" python3 -c '
+import os, re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+v = {k[2:]: os.environ.get(k, "") for k in os.environ if k.startswith("V_")}
+opt = [k for k in ("N_PAGES", "SITES", "NOTE") if not v.get(k, "").strip()]
+blocks = [b for b in re.split(r"\n[ \t]*\n", t) if not any("{{%s}}" % k in b for k in opt)]
+t = "\n\n".join(blocks)
+sys.stdout.write(re.sub(r"\{\{([A-Z_]+)\}\}", lambda m: v.get(m.group(1), m.group(0)), t))' "$tpl"
+}
+
 # _doc_html_cover <c> <lang> <n_problems> <n_pages>  (n_pages vazio = sem a linha de páginas)
 _doc_html_cover(){
   local c="$1" l="$2" np="$3" pg="$4" cfg note ver sites md
@@ -384,22 +590,16 @@ _doc_html_cover(){
   note="$(jq -r '.cover_note // ""' <<<"$cfg")"; ver="$(jq -r '.caderno_version // "v1.0"' <<<"$cfg")"
   sites="$(jq -r '[.[].name] | join(", ")' "$CONTESTSDIR/$c/regions.json" 2>/dev/null)"
 
-  # modo 2: capa EDITADA pelo admin (markdown próprio, com os marcadores substituídos)
-  md="$(doc_cover_md "$c" "$l")"
-  if [[ -s "$md" ]]; then
+  # o template da capa (o editado pelo admin, senão o padrão embarcado) com os marcadores preenchidos
+  if md="$(_doc_cover_tpl "$c" "$l")"; then
     _doc_html_head "$CNAME"
     printf '<div class="cover">'
-    sed -e "s|{{CONTEST_NAME}}|$(_doc_escs "$CNAME")|g" \
-        -e "s|{{DATE}}|$(_doc_date "$CDATE" "$l" "$c")|g" \
-        -e "s|{{N_PROBLEMS}}|$np|g" \
-        -e "s|{{N_PAGES}}|${pg:-?}|g" \
-        -e "s|{{SITES}}|$(_doc_escs "$sites")|g" \
-        -e "s|{{VERSION}}|$(_doc_escs "$ver")|g" "$md" \
-      | render_markdown_html 2>/dev/null
+    _doc_cover_fill "$md" "$c" "$l" "$np" "$pg" "$note" "$sites" "$ver" | render_markdown_html 2>/dev/null
     printf '</div>\n'
     _doc_html_foot
     return 0
   fi
+  # sem template nenhum (instalação sem server/etc): a capa montada à mão de sempre
 
   _doc_html_head "$CNAME"
   printf '<div class="cover"><h1>%s</h1><div class="sub">%s</div>\n' "$(_doc_escs "$CNAME")" "$(_doc_date "$CDATE" "$l" "$c")"
@@ -416,24 +616,15 @@ _doc_html_cover(){
 # _doc_html_contest <c> <lang> — caderno inteiro em HTML (capa + enunciados embutidos)
 _doc_html_contest(){
   local c="$1" l="$2" probs n i letter name skey f
-  probs="$(cc_probs_json "$c")"; n="$(jq -r 'length' <<<"$probs")"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  probs="$(_doc_probs_l "$c" "$l")"; n="$(jq -r 'length' <<<"$probs")"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
   _doc_html_cover "$c" "$l" "$n" ""
   for ((i=0; i<n; i++)); do
     letter="$(jq -r --argjson i "$i" '.[$i].letter // ""' <<<"$probs")"
     name="$(jq -r --argjson i "$i" '.[$i].name // ""' <<<"$probs")"
     skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
     printf '<div class="prob"><h1>%s %s — %s</h1>\n' "$(_doc_t "$l" problem)" "$(_doc_escs "$letter")" "$(_doc_escs "$name")"
-    f="$CONTESTSDIR/$c/enunciados/$skey.html"
-    if [[ ! -f "$f" ]]; then
-      local jf="$CONTESTSDIR/treino/var/jsons/$skey.json"
-      [[ -f "$jf" ]] || jf="$CONTESTSDIR/treino/var/jsons-private/$skey.json"
-      if [[ -f "$jf" ]]; then
-        local tmpf; tmpf="$(mktemp)"
-        jq -r '.statement_html_b64 // ""' "$jf" 2>/dev/null | base64 -d > "$tmpf" 2>/dev/null
-        [[ -s "$tmpf" ]] && f="$tmpf" || rm -f "$tmpf"
-      fi
-    fi
-    if [[ -f "$f" ]]; then
+    f="$(_doc_stmt_file "$c" "$skey" "$l")" || f=""
+    if [[ -n "$f" && -f "$f" ]]; then
       # só o miolo do <body>, sem o h1 do próprio enunciado (o cabeçalho já é nosso)
       _doc_body_inner "$f"
     else
@@ -448,24 +639,55 @@ _doc_html_contest(){
 # docs/solucao.md do PACOTE (campo `editorial_md` da API de problemas — por contrato NUNCA
 # vai ao aluno; o gen-problem-json o ignora). Conteúdo mais sensível que o caderno: o
 # publish exige contest_over_for_all (handler) e o download idem p/ quem não é organização.
+# UM PROBLEMA POR PÁGINA (pedido do Ribas, 2026-09-14): (1) a página 1 é uma CAPA (título, data,
+# nota e o índice letra · nome); (2) cada problema abre com <h1 style="page-break-before:always">
+# — o estilo INLINE é o que o importador de HTML do Writer honra (a regra `.prob{…}` do CSS em
+# div ele ignora), e na rota ODT o Heading 1 do reference.odt já quebra; (3) os títulos de
+# DENTRO do solucao.md são rebaixados um nível (_doc_demote_headings): sem isso um `# Ideia` do
+# autor virava Heading 1 e abria página própria no meio da solução.
+_doc_demote_headings(){
+  python3 -c '
+import re,sys
+s=sys.stdin.read()
+for n in (5,4,3,2,1):
+    s=re.sub(r"<(/?)h%d\b" % n, lambda m: "<%sh%d" % (m.group(1), n+1), s, flags=re.I)
+sys.stdout.write(s)' 2>/dev/null || cat
+}
 _doc_html_editorial(){
-  local c="$1" l="$2" probs n i letter name skey pkg cname note
-  cname="$( (CONTEST_NAME=""; source "$CONTESTSDIR/$c/conf" 2>/dev/null; printf '%s' "${CONTEST_NAME:-$1}") )"
-  probs="$(cc_probs_json "$c")"; n="$(jq -r 'length' <<<"$probs")"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
-  _doc_html_head "$(_doc_t "$l" editorial) — $cname"
-  printf '<h1>%s — %s</h1>\n' "$(_doc_t "$l" editorial)" "$(_doc_escs "$cname")"
+  local c="$1" l="$2" probs n i letter name skey pkg note solf
+  _doc_meta "$c"
+  probs="$(_doc_probs_l "$c" "$l")"; n="$(jq -r 'length' <<<"$probs")"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  _doc_html_head "$(_doc_t "$l" editorial) — $CNAME"
+  # capa: título + data + nota + índice
+  printf '<div class="cover"><h1 class="title">%s — %s</h1><div class="sub">%s</div>\n' \
+    "$(_doc_t "$l" editorial)" "$(_doc_escs "$CNAME")" "$(_doc_date "$CDATE" "$l" "$c")"
   note="$(doc_conf_get "$c" | jq -r '.editorial_note // ""')"
   if [[ -n "$note" ]]; then
     printf '<div class="note">'; printf '%s' "$note" | render_markdown_html; printf '</div>\n'
   fi
+  printf '<h2 class="center">%s</h2>\n' "$(_doc_t "$l" ed_index)"
+  jq -r --arg th "$_DOC_TH_RULE" --arg td "$_DOC_TD" --arg tdl "$_DOC_TD_LAST" \
+     --arg h_prob "$(_doc_t "$l" problem)" --arg h_name "$(_doc_t "$l" name)" '
+    (length) as $n
+    | "<table class=\"doc-tbl\"><thead><tr><th \($th)>\($h_prob)</th><th \($th)>\($h_name)</th></tr></thead><tbody>"
+      + ([to_entries[] | (if .key == $n - 1 then $tdl else $td end) as $st | .value
+          | "<tr><td class=\"c\" \($st)>\(.letter // "" | @html)</td><td \($st)>\(.name // "" | @html)</td></tr>"] | join(""))
+      + "</tbody></table>"' <<<"$probs" 2>/dev/null
+  printf '</div>\n'
   for ((i=0; i<n; i++)); do
     letter="$(jq -r --argjson i "$i" '.[$i].letter // ""' <<<"$probs")"
     name="$(jq -r --argjson i "$i" '.[$i].name // ""' <<<"$probs")"
     skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
-    printf '<div class="prob"><h1>%s %s — %s</h1>\n' "$(_doc_t "$l" problem)" "$(_doc_escs "$letter")" "$(_doc_escs "$name")"
+    printf '<div class="prob"><h1 style="page-break-before:always">%s %s — %s</h1>\n' "$(_doc_t "$l" problem)" "$(_doc_escs "$letter")" "$(_doc_escs "$name")"
     pkg=""; declare -F pkg_path >/dev/null && pkg="$(pkg_path "$skey" 2>/dev/null)"
-    if [[ -n "$pkg" && -s "$pkg/docs/solucao.md" ]]; then
-      render_markdown_html < "$pkg/docs/solucao.md"
+    # editorial no idioma do documento (docs/solucao.<lang>.md), senão o PT
+    solf=""
+    if [[ -n "$pkg" ]]; then
+      [[ "$l" != pt && -s "$pkg/docs/solucao.$l.md" ]] && solf="$pkg/docs/solucao.$l.md"
+      [[ -z "$solf" && -s "$pkg/docs/solucao.md" ]] && solf="$pkg/docs/solucao.md"
+    fi
+    if [[ -n "$solf" ]]; then
+      render_markdown_html < "$solf" | _doc_demote_headings
     else
       printf '<p><i>%s</i></p>' "$(_doc_t "$l" no_solution)"
     fi
@@ -482,14 +704,32 @@ _doc_strip_annotation(){
   python3 -c 'import re,sys; sys.stdout.write(re.sub(r"<annotation[^>]*>.*?</annotation>", "", sys.stdin.read(), flags=re.S))' 2>/dev/null || cat
 }
 
-# _doc_html2pdf <html-file> <pdf-out> -> 0/1 (soffice; único engine da imagem)
+# _doc_html2pdf <html-file> <pdf-out> [odt-out] -> 0/1 (soffice; único engine da imagem)
+# HTML → ODT → PDF: o ODT é o intermediário DE VERDADE — o PDF é a exportação dele —, e é ele que a
+# organização baixa p/ ajustar espaçamento/imagem no LibreOffice e subir o PDF final (25/09/2026).
+# Medido antes de trocar a rota: PDF idêntico ao da conversão direta HTML→PDF (0 px de diferença na
+# folha de TL e na capa; 7 px em 6 páginas no info sheet — antialiasing). Se o passo do ODT falhar,
+# cai na conversão direta (o PDF nunca deixa de sair por causa do ODT).
 _doc_html2pdf(){
-  local src="$1" out="$2" work; work="$(mktemp -d)"
+  local src="$1" out="$2" odt="${3:-}" work; work="$(mktemp -d)"
   _doc_strip_annotation < "$src" > "$work/doc.html"
   [[ -s "$work/doc.html" ]] || cp -f "$src" "$work/doc.html"
-  soffice --headless -env:UserInstallation="file://$work/lo" --convert-to pdf \
+  soffice --headless -env:UserInstallation="file://$work/lo" --convert-to odt \
           --outdir "$work" "$work/doc.html" >/dev/null 2>&1
-  if [[ -s "$work/doc.pdf" ]]; then mv -f "$work/doc.pdf" "$out"; rm -rf "$work"; return 0; fi
+  if [[ -s "$work/doc.odt" ]]; then
+    soffice --headless -env:UserInstallation="file://$work/lo" --convert-to pdf \
+            --outdir "$work" "$work/doc.odt" >/dev/null 2>&1
+  fi
+  if [[ ! -s "$work/doc.pdf" ]]; then
+    rm -f "$work/doc.odt"   # o ODT que não gerou o PDF não é o intermediário deste PDF
+    soffice --headless -env:UserInstallation="file://$work/lo" --convert-to pdf \
+            --outdir "$work" "$work/doc.html" >/dev/null 2>&1
+  fi
+  if [[ -s "$work/doc.pdf" ]]; then
+    mv -f "$work/doc.pdf" "$out"
+    [[ -n "$odt" && -s "$work/doc.odt" ]] && mv -f "$work/doc.odt" "$odt"
+    rm -rf "$work"; return 0
+  fi
   rm -rf "$work"; return 1
 }
 _doc_pages(){ pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2; exit}'; }
@@ -503,21 +743,77 @@ _doc_pages(){ pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2; exit}'; }
 # estilos Text_20_body (fo:text-align=justify) e Preformatted_20_Text
 # (fo:background-color/fo:padding/fo:border) e rezipar com o mimetype PRIMEIRO (zip -0).
 # O html de entrada NÃO deve ter <title> (o pandoc o promoveria a título órfão no topo).
-_doc_html2pdf_odt(){
+# ⚠ BARRA VERTICAL (relato do Arthur Botelho, 24/09/2026: "o `|` sai com um ¿ em volta"): o pandoc
+# marca todo `|` da fórmula como `form="prefix"`, inclusive o que fecha, e o LibreOffice Math desenha
+# o erro de sintaxe (¿ vermelho). O enunciado está CERTO — o autor não escapa nada. Entre o pandoc e
+# o soffice, `_doc_odt_fix_math` reescreve as barras no ODT (lib/odt-math-bars.py: abre/fecha em PAR
+# com fence, a do meio vira ∣). O mesmo passo dá a cada fórmula a fonte e o tamanho do CORPO
+# (o objeto do Math não herda o parágrafo: saía 12pt em DejaVu Serif no meio do Latin Modern 11pt),
+# só estica parêntese/barra em volta de conteúdo alto, e desarma `[l, r)`, `cases` e `\#`/`\&`.
+# Fail-open: se o python falhar, o PDF sai como sairia sem ele.
+# E as IMAGENS (24/09/2026, "não podem ficar gigantes nem sair da página"): ODT ignora o
+# `img{max-width:100%}` da web; o pandoc punha PNG sem DPI a 1 px = 1 pt e o LibreOffice CORTAVA o que
+# passava da página. Antes do pandoc, `_doc_html_img_widths` passa o `{width=50%}` do autor (que chega
+# como `style=`, ignorado pelo leitor de HTML do pandoc) para ATRIBUTO; depois dele, o mesmo script põe
+# cada imagem no menor entre o tamanho da web (px × 0,75 pt) e o do DPI do arquivo, com teto na área
+# útil do reference-doc — nunca maior do que já saía.
+# Testes: smoke-odt-math-bars.sh (papéis, tipografia, delimitadores, imagens) e render-docs.sh (nenhum ¿
+# e nenhuma imagem fora da página, no papel). Fora: ACENTOS (`\bar`, `\hat`, `\overline`…) — nenhuma
+# grafia de MathML que o LibreOffice 25.2 aceite foi achada; a rota `_doc_html2pdf` (soffice direto no
+# HTML — capa, errata, info sheet, TL, e enunciado sem pandoc) também corta imagem grande, e hoje nenhum
+# desses tem imagem.
+_doc_odt_fix_math(){ python3 "$_DIR/lib/odt-math-bars.py" "$1" >/dev/null 2>&1 || true; }
+_doc_html_img_widths(){ python3 "$_DIR/lib/odt-math-bars.py" --html-widths "$1" >/dev/null 2>&1 || true; }
+_doc_html2pdf_odt(){   # <html> <pdf-out> [odt-out: guarda o ODT que gerou o PDF — o que a organização baixa]
+  local src="$1" out="$2" odt="${3:-}" work
+  work="$(mktemp -d)"
+  if _doc_html2odt "$src" "$work/doc.odt"; then
+    soffice --headless -env:UserInstallation="file://$work/lo" --convert-to pdf \
+            --outdir "$work" "$work/doc.odt" >/dev/null 2>&1
+    if [[ -s "$work/doc.pdf" ]]; then
+      mv -f "$work/doc.pdf" "$out"; [[ -n "$odt" ]] && mv -f "$work/doc.odt" "$odt"
+      rm -rf "$work"; return 0
+    fi
+  fi
+  rm -rf "$work"; return 1
+}
+
+# _doc_html2odt <html> <odt-out> -> 0/1 — a METADE pandoc da rota acima (reference-doc, `::: center`,
+# largura das imagens, conserto das barras), sem o PDF. É a MESMA função que faz o miolo do PDF, então o
+# .odt do caderno sai com a mesma cara dos enunciados no papel.
+_doc_html2odt(){
   local src="$1" out="$2" work rf refodt=()
   command -v pandoc >/dev/null 2>&1 || return 1
   work="$(mktemp -d)"
   rf="$_DIR/../../etc/caderno-reference.odt"; [[ -f "$rf" ]] || rf="$_DIR/etc/caderno-reference.odt"
   [[ -f "$rf" ]] && refodt=( --reference-doc="$rf" )
-  if pandoc -f html -t odt "${refodt[@]}" "$src" -o "$work/doc.odt" 2>/dev/null; then
-    soffice --headless -env:UserInstallation="file://$work/lo" --convert-to pdf \
-            --outdir "$work" "$work/doc.odt" >/dev/null 2>&1
-    [[ -s "$work/doc.pdf" ]] && { mv -f "$work/doc.pdf" "$out"; rm -rf "$work"; return 0; }
+  # `::: center` do enunciado: o pandoc descarta a classe do bloco; o filtro o centraliza (odt-center.lua)
+  [[ -f "$_DIR/lib/odt-center.lua" ]] && refodt+=( --lua-filter="$_DIR/lib/odt-center.lua" )
+  cp -f "$src" "$work/in.html" && _doc_html_img_widths "$work/in.html"   # cópia: o src é do chamador
+  if pandoc -f html -t odt "${refodt[@]}" "$work/in.html" -o "$work/doc.odt" 2>/dev/null && [[ -s "$work/doc.odt" ]]; then
+    _doc_odt_fix_math "$work/doc.odt"; mv -f "$work/doc.odt" "$out"; rm -rf "$work"; return 0
   fi
   rm -rf "$work"; return 1
 }
 
-# _doc_pdf_contest <c> <lang> <out.pdf> — caderno: capa + (PDF custom | enunciado renderizado),
+# _doc_cover_odt_styles — a capa (HTML com as classes do contest-doc.css) p/ a rota ODT, que IGNORA CSS:
+# cada peça vira um estilo de parágrafo do Writer (custom-style do pandoc): o nome → Title, data e sessão
+# → Subtitle, o resto → Center. É o ponto de partida EDITÁVEL da capa no .odt do caderno.
+_doc_cover_odt_styles(){
+  python3 -c '
+import re, sys
+s = sys.stdin.read()
+st = lambda n: "<div custom-style=\"" + n + "\">"
+s = re.sub(r"<h1[^>]*>(.*?)</h1>", lambda m: st("Title") + "<p>" + m.group(1) + "</p></div>", s, flags=re.S | re.I)
+s = re.sub(r"<h2[^>]*>(.*?)</h2>", lambda m: st("Subtitle") + "<p>" + m.group(1) + "</p></div>", s, flags=re.S | re.I)
+s = re.sub(r"<div class=\"sub\"[^>]*>", lambda m: st("Subtitle"), s)
+s = re.sub(r"<div class=\"(?:center|note|sites|ver)[^\"]*\"[^>]*>", lambda m: st("Center"), s)
+s = re.sub(r"<p class=\"[^\"]*\"[^>]*>(.*?)</p>", lambda m: st("Center") + "<p>" + m.group(1) + "</p></div>", s, flags=re.S)
+s = re.sub(r"<div class=\"cover\"[^>]*>", "<div>", s)
+sys.stdout.write(s)' 2>/dev/null || cat
+}
+
+# _doc_pdf_contest <c> <lang> <out.pdf> [out.odt] — caderno: capa + (PDF custom | enunciado renderizado),
 # unidos com pdfunite; capa REGERADA no fim com o total real de páginas.
 # _doc_body_inner <arquivo-html> -> só o miolo do <body>, sem o título do próprio enunciado.
 # Duas armadilhas que apareceram no PDF: (1) enunciado gerado em UMA LINHA fazia o `sed` de
@@ -537,12 +833,13 @@ _doc_body_inner(){
 # `fo:break-before="page"` do Heading 1 no caderno-reference.odt. Com PDF próprio no meio, não há
 # como renumerar (não temos pdftk/cpdf na imagem): volta ao caminho por-problema.
 _doc_pdf_contest(){
-  local c="$1" l="$2" out="$3" probs n i skey work parts=() pdf tot=0 custom=""
-  work="$(mktemp -d)"; probs="$(cc_probs_json "$c")"; n="$(jq -r 'length' <<<"$probs")"
+  local c="$1" l="$2" out="$3" odtout="${4:-}" probs n i skey work parts=() pdf tot=0 custom=""
+  work="$(mktemp -d)"; probs="$(_doc_probs_l "$c" "$l")"; n="$(jq -r 'length' <<<"$probs")"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  local _DOC_TMPD="$work"   # os HTML do banco materializados por _doc_stmt_file morrem com o work
   for ((i=0; i<n; i++)); do
     skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
-    [[ -f "$CONTESTSDIR/$c/enunciados/$skey.pdf" ]] && { custom=1; break; }
+    cs_file "$c" "$skey" "$l" pdf >/dev/null 2>&1 && { custom=1; break; }
   done
   if [[ -z "$custom" && "$n" -gt 0 ]]; then
     # --- caminho normal: um ODT com todos os enunciados (numeração contínua) ---
@@ -552,14 +849,9 @@ _doc_pdf_contest(){
         skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
         letter="$(jq -r --argjson i "$i" '.[$i].letter // ""' <<<"$probs")"
         name="$(jq -r --argjson i "$i" '.[$i].name // ""' <<<"$probs")"
-        f="$CONTESTSDIR/$c/enunciados/$skey.html"
-        if [[ ! -f "$f" ]]; then
-          local jf="$CONTESTSDIR/treino/var/jsons/$skey.json"
-          [[ -f "$jf" ]] || jf="$CONTESTSDIR/treino/var/jsons-private/$skey.json"
-          [[ -f "$jf" ]] && { jq -r '.statement_html_b64 // ""' "$jf" 2>/dev/null | base64 -d > "$work/s$i.html" 2>/dev/null; [[ -s "$work/s$i.html" ]] && f="$work/s$i.html"; }
-        fi
+        f="$(_doc_stmt_file "$c" "$skey" "$l")" || f=""
         printf '<h1>%s %s — %s</h1>' "$(_doc_t "$l" problem)" "$(_doc_escs "$letter")" "$(_doc_escs "$name")"
-        if [[ -f "$f" ]]; then _doc_body_inner "$f"; else printf '<p><i>%s</i></p>' "$(_doc_t "$l" no_statement)"; fi
+        if [[ -n "$f" && -f "$f" ]]; then _doc_body_inner "$f"; else printf '<p><i>%s</i></p>' "$(_doc_t "$l" no_statement)"; fi
       done
       printf '</body></html>'; } > "$allf"
     if _doc_html2pdf_odt "$allf" "$work/body.pdf" && [[ -s "$work/body.pdf" ]]; then
@@ -572,22 +864,17 @@ _doc_pdf_contest(){
   # --- caminho por-problema (só quando há PDF próprio de enunciado, ou o pandoc falhou) ---
   [[ -n "$custom" ]] && for ((i=0; i<n; i++)); do
     skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
-    pdf="$CONTESTSDIR/$c/enunciados/$skey.pdf"
-    if [[ -f "$pdf" ]]; then
+    pdf="$(cs_file "$c" "$skey" "$l" pdf 2>/dev/null)" || pdf=""
+    if [[ -n "$pdf" && -f "$pdf" ]]; then
       cp -f "$pdf" "$work/p$i.pdf"
     else
       # renderiza SÓ este problema (capa fica de fora) e converte
       local letter name f bodyf="$work/b$i.html" okpdf=""
       letter="$(jq -r --argjson i "$i" '.[$i].letter // ""' <<<"$probs")"
       name="$(jq -r --argjson i "$i" '.[$i].name // ""' <<<"$probs")"
-      f="$CONTESTSDIR/$c/enunciados/$skey.html"
-      if [[ ! -f "$f" ]]; then
-        local jf="$CONTESTSDIR/treino/var/jsons/$skey.json"
-        [[ -f "$jf" ]] || jf="$CONTESTSDIR/treino/var/jsons-private/$skey.json"
-        [[ -f "$jf" ]] && { jq -r '.statement_html_b64 // ""' "$jf" 2>/dev/null | base64 -d > "$work/s$i.html" 2>/dev/null; [[ -s "$work/s$i.html" ]] && f="$work/s$i.html"; }
-      fi
+      f="$(_doc_stmt_file "$c" "$skey" "$l")" || f=""
       # miolo do <body> do enunciado (HTML standalone com <head> próprio)
-      if [[ -f "$f" ]]; then
+      if [[ -n "$f" && -f "$f" ]]; then
         _doc_body_inner "$f" > "$bodyf"
       else
         printf '<p><i>%s</i></p>' "$(_doc_t "$l" no_statement)" > "$bodyf"
@@ -620,6 +907,30 @@ _doc_pdf_contest(){
   fi
   if (( ${#parts[@]} )); then pdfunite "$work/cover.pdf" "${parts[@]}" "$out" 2>/dev/null || cp -f "$work/cover.pdf" "$out"
   else cp -f "$work/cover.pdf" "$out"; fi
+  # .odt DO CADERNO (25/09/2026) — p/ a organização ajustar no LibreOffice o que o Markdown do enunciado
+  # deixou torto (espaço demais/de menos, imagem grande) e subir o PDF final ("subir PDF" vence o gerado).
+  # UM documento: a capa como página editável (Title/Subtitle/Center) + os enunciados pela MESMA rota
+  # pandoc→ODT do miolo do PDF (mesmo reference-doc, mesmo conserto das barras). O que o ODT não embute —
+  # capa enviada em PDF, enunciado em PDF próprio — vira um aviso no lugar ("junte ao exportar").
+  if [[ -n "$odtout" && -s "$out" ]]; then
+    local oh="$work/odt.html" letter name f
+    { printf '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+      if [[ -s "$upl" ]]; then printf '<div custom-style="Center"><p><i>%s</i></p></div>' "$(_doc_t "$l" odt_cover_pdf)"
+      else _doc_body_inner "$work/cover.html" | _doc_cover_odt_styles; fi
+      for ((i=0; i<n; i++)); do
+        skey="$(jq -r --argjson i "$i" '.[$i].statement_key // ""' <<<"$probs")"
+        letter="$(jq -r --argjson i "$i" '.[$i].letter // ""' <<<"$probs")"
+        name="$(jq -r --argjson i "$i" '.[$i].name // ""' <<<"$probs")"
+        printf '<h1>%s %s — %s</h1>' "$(_doc_t "$l" problem)" "$(_doc_escs "$letter")" "$(_doc_escs "$name")"
+        if cs_file "$c" "$skey" "$l" pdf >/dev/null 2>&1; then printf '<p><i>%s</i></p>' "$(_doc_t "$l" odt_stmt_pdf)"
+        else
+          f="$(_doc_stmt_file "$c" "$skey" "$l")" || f=""
+          if [[ -n "$f" && -f "$f" ]]; then _doc_body_inner "$f"; else printf '<p><i>%s</i></p>' "$(_doc_t "$l" no_statement)"; fi
+        fi
+      done
+      printf '</body></html>'; } > "$oh"
+    _doc_html2odt "$oh" "$odtout" || rm -f "$odtout"
+  fi
   rm -rf "$work"; [[ -s "$out" ]]
 }
 
@@ -628,7 +939,10 @@ _doc_pdf_contest(){
 doc_build(){
   local c="$1" t="$2" l="$3" d; d="$(doc_dir "$c")"
   mkdir -p "$d" 2>/dev/null
-  local html="$d/$t.$l.html" pdf="$d/$t.$l.pdf" tmp="$d/.$t.$l.tmp.html"
+  local html="$d/$t.$l.html" pdf="$d/$t.$l.pdf" odt="$d/$t.$l.odt" tmp="$d/.$t.$l.tmp.html"
+  rm -f "$odt.tmp"
+  # tmp dos enunciados materializados do banco (_doc_stmt_file); morre com o build
+  local _DOC_TMPD; _DOC_TMPD="$(mktemp -d)"
   case "$t" in
     info-sheet) _doc_html_infosheet "$c" "$l" > "$tmp" ;;
     times)      _doc_html_times "$c" "$l"    > "$tmp" ;;
@@ -638,29 +952,36 @@ doc_build(){
   esac
   [[ -s "$tmp" ]] || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$html"
-  if [[ "$t" == contest ]]; then _doc_pdf_contest "$c" "$l" "$pdf.tmp" && mv -f "$pdf.tmp" "$pdf" || rm -f "$pdf.tmp"
+  # todo PDF gerado ganha o GÊMEO .odt (o intermediário editável — só a organização baixa; ver doc.sh)
+  if [[ "$t" == contest ]]; then _doc_pdf_contest "$c" "$l" "$pdf.tmp" "$odt.tmp" && mv -f "$pdf.tmp" "$pdf" || rm -f "$pdf.tmp"
   elif [[ "$t" == editorial ]]; then
     # um documento só, pela rota ODT (as soluções têm math); miolo sem <title>
     local mini="$d/.$t.$l.odtin.html"
     { printf '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
       sed -n '/<body[^>]*>/,/<\/body>/p' "$html" | sed -e 's|.*<body[^>]*>||' -e 's|</body>.*||'
       printf '</body></html>'; } > "$mini"
-    _doc_html2pdf_odt "$mini" "$pdf.tmp" || _doc_html2pdf "$html" "$pdf.tmp" || true
+    _doc_html2pdf_odt "$mini" "$pdf.tmp" "$odt.tmp" || _doc_html2pdf "$html" "$pdf.tmp" "$odt.tmp" || true
     rm -f "$mini"
     if [[ -s "$pdf.tmp" ]]; then mv -f "$pdf.tmp" "$pdf"; else rm -f "$pdf.tmp"; fi
-  else _doc_html2pdf "$html" "$pdf.tmp" && mv -f "$pdf.tmp" "$pdf" || rm -f "$pdf.tmp"; fi
+  else _doc_html2pdf "$html" "$pdf.tmp" "$odt.tmp" && mv -f "$pdf.tmp" "$pdf" || rm -f "$pdf.tmp"; fi
+  # o .odt acompanha o PDF DESTA geração; um .odt velho de outra geração não pode sobrar ao lado do PDF novo
+  if [[ -s "$odt.tmp" ]]; then mv -f "$odt.tmp" "$odt"; else rm -f "$odt.tmp" "$odt"; fi
+  rm -rf "$_DOC_TMPD" 2>/dev/null
   jq -cn --arg t "$t" --arg l "$l" \
      --argjson bh "$(stat -c%s "$html" 2>/dev/null || echo 0)" \
      --argjson bp "$(stat -c%s "$pdf" 2>/dev/null || echo 0)" \
+     --argjson bo "$(stat -c%s "$odt" 2>/dev/null || echo 0)" \
      --argjson at "$EPOCHSECONDS" --arg by "${SESSION_LOGIN:-}" \
-     '{type:$t, lang:$l, html_bytes:$bh, pdf_bytes:$bp, generated_at:$at, by:$by}'
+     '{type:$t, lang:$l, html_bytes:$bh, pdf_bytes:$bp, odt_bytes:$bo, generated_at:$at, by:$by}'
 }
 
 # doc_index <c> -> [{type,lang,html_bytes,pdf_bytes,generated_at,by,published}]
 doc_index(){
   local c="$1" d; d="$(doc_dir "$c")"
   local idx="$d/index.json" pub; pub="$(doc_conf_get "$c" | jq -c '.published // []')"
-  [[ -s "$idx" ]] || { printf '[]'; return; }
+  # SEM index.json (contest que nunca gerou nada) a lista parte de [] e SEGUE p/ a varredura
+  # dos PDFs enviados — o early-return que havia aqui deixava o enviado invisível e a UI sem o
+  # botão "publicar" ("tenho de gerar a versão do moj antes", relato do Ribas, 2026-09-14).
   # a chave é BINDADA antes (`as $k`): o argumento de `index()` avalia contra a ENTRADA do
   # pipe — que aqui é `$p`, o array de publicados —, não contra o elemento do map. Sem o
   # bind dava "Cannot index array with string" e a lista de documentos voltava VAZIA.
@@ -689,7 +1010,7 @@ doc_index(){
                           | {type, lang, html_bytes:0, pdf_bytes:0, generated_at:0, by:"",
                              published: (($p | index($k)) != null),
                              uploaded:true, uploaded_bytes:.bytes, uploaded_at:.at}))' \
-     "$idx" 2>/dev/null || printf '[]'
+     <<<"$( [[ -s "$idx" ]] && cat "$idx" || printf '[]' )" 2>/dev/null || printf '[]'
 }
 
 # doc_index_upsert <c> <entrada-json>

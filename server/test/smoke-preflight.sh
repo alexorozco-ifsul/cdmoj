@@ -27,6 +27,8 @@ done
 { printf 'CONTEST_ID=%s\nCONTEST_NAME="Prova"\nCONTEST_TYPE=icpc\n' "$CONTEST"
   printf 'CONTEST_START=%s\nCONTEST_END=%s\nFREEZE_TIME=%s\nUSER_STORE=v2\nLANGUAGES="c"\n' \
     "$((NOW-3600))" "$((NOW+3600))" "$((NOW+1800))"
+  # MÓDULOS (lib/modules.sh): as checagens de evento abaixo só rodam com o módulo ligado
+  printf 'CONTEST_MODULES=sedes,maquinas,rodadas,documentos,baloes,coortes,inscricoes,telao,classificacao\n'
   printf 'PROBS=(%s)\n' "$probs"; } > "$C/conf"
 
 fx_user "$C" "$ADMIN" adm "Chefe"
@@ -179,6 +181,60 @@ printf '{"version":1,"teams":{"time-x":{"name":"X","captain":"a","members":["a"]
 check "com inscrito => ok"               '[[ "$(lvl registration)" == ok ]]'
 check "convites pendentes => warn"       '[[ "$(lvl reg_invites)" == warn && "$(det reg_invites)" == *"NÃO entra"* ]]'
 rm -f "$C/registrations.json"
+
+echo "== módulos (lib/modules.sh): checagem só com o módulo ligado =="
+run
+check "todos ligados => modules ok lista os ids" '[[ "$(lvl modules)" == ok && "$(det modules)" == *"coortes"* ]]'
+sed -i 's/^CONTEST_MODULES=.*/CONTEST_MODULES=sedes,maquinas,rodadas,documentos,baloes,inscricoes,telao,classificacao/' "$C/conf"; run
+check "coortes DESLIGADO com cohorts.json => modules warn cita coortes" '[[ "$(lvl modules)" == warn && "$(det modules)" == *"coortes (cohorts.json)"* ]]'
+check "coortes desligado => checagem cohorts OMITIDA"                   '[[ "$(lvl cohorts)" == "(ausente)" ]]'
+check "os outros módulos seguem checados (ua_gate presente)"            '[[ -n "$(lvl ua_gate)" ]]'
+sed -i '/^CONTEST_MODULES=/d' "$C/conf"; run
+check "nenhum módulo => só o básico: sem ua_gate/docs/next_round/balloons/tov" '[[ "$(lvl ua_gate)$(lvl docs)$(lvl next_round)$(lvl balloons)$(lvl tov)$(lvl staff_filters)" == "(ausente)(ausente)(ausente)(ausente)(ausente)(ausente)" ]]'
+check "nenhum módulo => mode não cobra icpc (ok) e modules avisa os dados existentes" '[[ "$(lvl mode)" == ok && "$(lvl modules)" == warn ]]'
+sed -i '1a CONTEST_MODULES=sedes,maquinas,rodadas,documentos,baloes,coortes,inscricoes,telao,classificacao' "$C/conf"
+
+echo "== problema PARALELO (CPUNEEDED>1) × largura dos juízes (judges_cpus) =="
+# o json servível do banco leva cpu_needed/same_numa (gen-problem-json.sh); o juiz NOVO manda slot_cpus
+mkdir -p "$FIX/treino/var/jsons"
+printf '{"id":"col#p0","title":"P0","cpu_needed":4,"same_numa":false,"public":true}' > "$FIX/treino/var/jsons/col#p0.json"
+jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:2,free_slots:2,slot_cpus:1,slots_by_node:{"0":2}}' > "$REG/j1.json"
+run
+check "juiz com 2 slots×1 cpu p/ um problema de 4 CPUs => warn" '[[ "$(lvl judges_cpus)" == warn && "$(det judges_cpus)" == *"A(4 CPUs)"* ]]'
+jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8,slot_cpus:1,slots_by_node:{"0":3,"1":5}}' > "$REG/j1.json"
+run
+check "juiz com 8 slots => ok"                                     '[[ "$(lvl judges_cpus)" == ok && "$(det judges_cpus)" == *"A"* ]]'
+printf '{"id":"col#p0","title":"P0","cpu_needed":4,"same_numa":true,"public":true}' > "$FIX/treino/var/jsons/col#p0.json"
+jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:6,free_slots:6,slot_cpus:1,slots_by_node:{"0":3,"1":3}}' > "$REG/j1.json"
+run
+check "SAMENUMA com nós de 3: warn cita NUMA"                       '[[ "$(lvl judges_cpus)" == warn && "$(det judges_cpus)" == *"NUMA"* ]]'
+jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8}' > "$REG/j1.json"
+run
+check "juiz ANTIGO (sem slot_cpus) não conta => warn"               '[[ "$(lvl judges_cpus)" == warn ]]'
+printf 'CONTEST_JUDGES=j2\n' >> "$C/conf"
+jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8,slot_cpus:1,slots_by_node:{"0":8}}' > "$REG/j1.json"
+run
+check "pool do contest (j2) sem o juiz capaz (j1) => warn"          '[[ "$(lvl judges_cpus)" == warn ]]'
+sed -i '/^CONTEST_JUDGES=/d' "$C/conf"; rm -f "$FIX/treino/var/jsons/col#p0.json"
+run
+check "sem problema paralelo => checagem ausente (sem ruído)"       '[[ "$(lvl judges_cpus)" == "(ausente)" ]]'
+
+echo "== telão (Animeitor): chave e conferência =="
+run
+check "módulo telao sem chave nenhuma => warn"                      '[[ "$(lvl telao)" == warn && "$(det telao)" == *"usuário e token"* ]]'
+mkdir -p "$RUN/secrets"; ( umask 077; printf 'moj:chave-de-teste-123\n' > "$RUN/secrets/animeitor.cred" )
+run
+check "com a chave do MOJ no servidor => ok \"com chave do MOJ\""  '[[ "$(lvl telao)" == ok && "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"telao\")|.label)")" == *"do MOJ"* ]]'
+check "…e a chave não aparece em lugar nenhum da resposta"          '[[ "$BODY" != *chave-de-teste-123* ]]'
+printf '{"url":"https://outro.exemplo"}' > "$C/animeitor.json"; run
+check "URL fora do padrão: a chave do MOJ não vale lá => warn"       '[[ "$(lvl telao)" == warn && "$(det telao)" == *"só vale no servidor padrão"* ]]'
+rm -f "$C/animeitor.json"
+jq -cn --argjson t "$NOW" '{at:$t, state:"diverge", ok:false, final:false, missing:2, wrong:0, extra:1, sample:{missing:[1,2]}}' > "$C/var/animeitor-verify.json"; run
+check "última conferência com divergência => warn com as contagens" '[[ "$(lvl telao)" == warn && "$(det telao)" == *"2 faltando, 0 diferentes, 1 a mais"* ]]'
+jq -cn --argjson t "$NOW" '{at:$t, state:"ok", ok:true, final:true, final_at:$t}' > "$C/var/animeitor-verify.json"; run
+check "conferência final => ok \"Telão validado\""                 '[[ "$(lvl telao)" == ok && "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"telao\")|.label)")" == "Telão validado" ]]'
+sed -i 's/,telao,/,/' "$C/conf"; run
+check "módulo telao desligado => checagem ausente"                   '[[ "$(lvl telao)" == "(ausente)" ]]'
 
 echo ""; echo "RESULT: $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

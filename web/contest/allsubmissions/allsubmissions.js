@@ -9,6 +9,7 @@ import { el, verdictClass, isPending, fmtDate } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { mountChrome } from '/lib/contest-chrome.js';
 import { openHtmlReport } from '/shared/submission-links.js';
+import { langLabel } from '/shared/languages.js';
 
 const qs = new URLSearchParams(location.search);
 const CONTEST = (window.__MOJ_CONTEST || qs.get('c') || '');
@@ -65,17 +66,22 @@ function filteredSubs() {
   // da própria opção, e não há o que digitar errado. O USUÁRIO segue busca livre (é nome).
   const fp = document.getElementById('fProblem').value;
   const fv = document.getElementById('fVerdict').value;
+  const flEl = document.getElementById('fLang'); const fl = flEl ? flEl.value : '';
   return subs.filter(s => {
     if (fu && !(s.username || '').toLowerCase().includes(fu)) return false;
     if (fp && s.problem_id !== fp) return false;
     if (fv && vHead(s.verdict) !== fv) return false;
+    if (fl && langLabel(s.lang) !== fl) return false;
     return true;
   });
 }
 
-// head do veredicto: `Accepted,100p` e `Accepted,PE` viram "Accepted"; `Wrong,60p. Pontos | 30 |`
-// vira "Wrong". É o mesmo corte que o `by_verdict` das métricas usa (split na vírgula/ponto).
-function vHead(v) { return String(v || '').split(',')[0].split('.')[0].trim(); }
+// head do veredicto: `Accepted,100p` e `Accepted,PE` viram "Accepted"; `Time Limit Exceeded,30p. Pontos | 30 |`
+// (problema com grupos) vira "Time Limit Exceeded" e o legado `Wrong,60p. …` vira "Wrong". É o mesmo
+// corte que o `by_verdict` das métricas usa (split na vírgula/ponto).
+// (`classe¦texto` do veredicto manual: filtra pela CLASSE; a célula mostra "classe ¦ texto")
+function vHead(v) { return String(v || '').split('¦')[0].split(',')[0].split('.')[0].trim(); }
+const vShow = (v) => String(v || '').replace('¦', ' ¦ ');
 
 // Repovoa os dois seletores preservando a escolha atual (o feed recarrega a cada poll).
 // O de problema sai do `/contest/problems` que a página já carrega (letra + título, na ordem da
@@ -99,6 +105,16 @@ function fillFilters() {
     vs_.forEach(v => vs.append(el('option', { value: v }, v)));
     vs.value = keep;
   }
+  // linguagem: rótulos que REALMENTE aparecem no feed (pedido do juiz-chefe, 2026-09-14)
+  const ls = document.getElementById('fLang');
+  if (ls) {
+    const keep = ls.value;
+    const ls_ = [...new Set(subs.map(s => langLabel(s.lang)).filter(Boolean))].sort();
+    ls.innerHTML = '';
+    ls.append(el('option', { value: '' }, T('todas as linguagens', 'all languages')));
+    ls_.forEach(l => ls.append(el('option', { value: l }, l)));
+    ls.value = keep;
+  }
 }
 
 function rowTable(items) {
@@ -106,7 +122,7 @@ function rowTable(items) {
     ...(FULL ? [el('th', { style: 'width:1.5rem' }, '')] : []),
     el('th', {}, T('Tempo', 'Time')), el('th', {}, T('Quando', 'When')),
     ...(FULL ? [el('th', {}, T('Usuário', 'User')), el('th', {}, T('Equipe', 'Team'))] : []),
-    el('th', {}, T('Problema', 'Problem')), el('th', {}, T('Veredicto', 'Verdict')),
+    el('th', {}, T('Problema', 'Problem')), el('th', {}, T('Linguagem', 'Language')), el('th', {}, T('Veredicto', 'Verdict')),
     el('th', {}, T('Arquivo', 'File')), el('th', {}, 'Log')));
   const tb = el('tbody');
   items.forEach(s => {
@@ -123,7 +139,8 @@ function rowTable(items) {
         el('td', {}, (s.univ ? `[${s.univ}] ` : '') + (s.fullname || '')),
       ] : []),
       el('td', {}, el('b', {}, shortOf(s.problem_id)), ' ', el('span', { class: 'small muted' }, fullOf(s.problem_id))),
-      el('td', {}, el('span', { class: 'verdict ' + verdictClass(s.verdict) }, pending ? el('span', {}, el('span', { class: 'spin' }), ' ' + s.verdict) : s.verdict)),
+      el('td', { class: 'small' }, langLabel(s.lang)),
+      el('td', {}, el('span', { class: 'verdict ' + verdictClass(s.verdict) }, pending ? el('span', {}, el('span', { class: 'spin' }), ' ' + s.verdict) : vShow(s.verdict))),
       el('td', {},
         el('a', { href: '#', title: T('ver código', 'view code'), onclick: (e) => { e.preventDefault(); openLogAuthed(`/submission/source?contest=${encodeURIComponent(CONTEST)}&id=${encodeURIComponent(s.submission_id)}&time=${encodeURIComponent(s.epoch)}`); } }, T('ver', 'view')),
         ' ',
@@ -142,11 +159,11 @@ function render() {
   if (groupBy === 'all') { box.append(rowTable(list)); return; }
   const groups = {};
   list.forEach(s => {
-    const key = groupBy === 'user' ? (s.username || '?') : shortOf(s.problem_id);
+    const key = groupBy === 'user' ? (s.username || '?') : groupBy === 'lang' ? (langLabel(s.lang) || '?') : shortOf(s.problem_id);
     (groups[key] = groups[key] || []).push(s);
   });
   Object.keys(groups).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).forEach(k => {
-    const label = groupBy === 'user' ? `${T('Usuário: ', 'User: ')}${k}` : `${T('Problema: ', 'Problem: ')}${k} ${fullOf(groups[k][0].problem_id)}`;
+    const label = groupBy === 'user' ? `${T('Usuário: ', 'User: ')}${k}` : groupBy === 'lang' ? `${T('Linguagem: ', 'Language: ')}${k}` : `${T('Problema: ', 'Problem: ')}${k} ${fullOf(groups[k][0].problem_id)}`;
     const gitems = groups[k];
     const markG = el('a', { href: '#', class: 'small', style: 'margin-left:.7rem', onclick: (e) => { e.preventDefault(); gitems.forEach(s => selected.add(s.submission_id)); render(); } }, T('☑ marcar grupo', '☑ select group'));
     box.append(el('div', { class: 'group-head' }, label, markG));
@@ -213,7 +230,7 @@ async function boot() {
 
   document.querySelectorAll('[data-group]').forEach(btn => btn.addEventListener('click', () => { groupBy = btn.dataset.group; render(); }));
   const fuE = document.getElementById('fUser'); if (fuE) fuE.addEventListener('input', render);
-  ['fProblem', 'fVerdict'].forEach(id => { const e = document.getElementById(id); if (e) e.addEventListener('change', render); });
+  ['fProblem', 'fVerdict', 'fLang'].forEach(id => { const e = document.getElementById(id); if (e) e.addEventListener('change', render); });
   if (FULL) {
     document.getElementById('markAll').addEventListener('click', () => { filteredSubs().forEach(s => selected.add(s.submission_id)); render(); });
     const clearBtn = el('button', { class: 'btn ghost', onclick: () => { selected.clear(); render(); } }, T('Desmarcar todos', 'Clear selection'));

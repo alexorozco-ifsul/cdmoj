@@ -4,12 +4,27 @@
 #         admin/juiz-chefe: tudo; .cstaff/.staff: `sedes[]` FILTRADO ao escopo de sede
 #         (tokens region: do staff-filters) — agregados global/by_node vão inteiros (não
 #         carregam MAC de outra sede); demais papéis: 403.
-# POST {action:"config", url?, key?}    (admin)  chave em secrets/ (600), URL no conf.
+# POST {action:"config", url?, key?, images?}  (admin)  chave em secrets/ (600), URL e a lista
+#         de site-images (`NUTELLABOOT_IMAGES`) no conf. Chave `nb3a_` (admin) OU `nb3s_` (serviço
+#         — a recomendada; como ela não lista `/site-images`, a lista de sedes vem do conf).
 # POST {action:"collect"}               (admin)  dispara o nutella-gen.sh destacado.
 # POST {action:"push-roster"}           (admin)  PUT do roster do STORE em cada imagem
 #                                                (correlação p/ provas futuras).
-# POST {action:"command", op, image, mac?}       admin: qualquer imagem, image:"all" =
-#         frota; .cstaff/.staff: SÓ imagem da própria sede (fail-CLOSED: sem escopo
+# POST {action:"push-bindings"}         (admin)  REPUBLICA no serviço o elo máquina↔time de todo login já
+#                                                feito com o UA do agente novo (o login publica sozinho —
+#                                                lib/nutella-bind.sh; isto é p/ quem logou ANTES de a
+#                                                integração existir, ou antes do push-roster).
+# POST {action:"webhooks-install", base_url?, remove?}  (admin) instala em cada sede do contest o webhook
+#         de alertas/eventos de máquina apontando p/ POST /hooks/nutella?contest=<c> (handlers/hooks/
+#         nutella.sh), com um segredo por contest gerado AQUI (secrets/nutella-webhook.secret, 600,
+#         write-only). Por ENTRADA (POST = cria/atualiza pelo url, DELETE por id — ids em
+#         var/nutella-webhooks.json): chave de serviço com `webhooks:write` basta; webhook alheio da sede
+#         não é tocado (o serviço nem o mostra).
+# POST {action:"command-status", image, command_id}  → {status:{command, summary:{acked,pending,expired}, targets[]}}
+#         (quem executou a ordem — rota nova do serviço; staff só na própria sede)
+# POST {action:"command", op, image, mac?}       admin: qualquer imagem, image:"all" = TODAS
+#         AS SEDES DO CONTEST (uma chamada por sede — nunca a frota do serviço, que tem sedes de
+#         outros eventos); .cstaff/.staff: SÓ imagem da própria sede (fail-CLOSED: sem escopo
 #         explícito no staff-filters = 403 — comando é AÇÃO, não leitura; diverge de
 #         propósito do "ausente = vê tudo" das rotas de leitura). `op` validado contra o
 #         catálogo `allowed` da imagem AO VIVO. Tudo auditado (nutella-*).
@@ -35,6 +50,21 @@ _nb_scope_json(){   # ecoa array JSON de nomes de sede (minúsculos) ou "null" (
   fi
 }
 
+# resumo da publicação do elo no login (lib/nutella-bind.sh): contagens, nunca MAC nem login
+_nb_bind_json(){
+  local v en=true pub=0 q=0
+  v="$(conf_value "$contest" NUTELLA_BIND)"; [[ "$v" == 0 ]] && en=false
+  [[ -s "$cdir/var/nutella-macs.tsv" ]] && pub="$(wc -l < "$cdir/var/nutella-macs.tsv" | tr -d '[:space:]')"
+  [[ -s "$cdir/var/nutella-bind.queue" ]] && q="$(wc -l < "$cdir/var/nutella-bind.queue" | tr -d '[:space:]')"
+  { [[ -s "$cdir/var/nutella-bind.log" ]] && awk -F'\t' '{ k = ($5 ~ /^http/) ? "error" : $5; n[k]++; if ($1 > t) t = $1 }
+      END { for (k in n) printf "%s\t%d\n", k, n[k]; printf "_at\t%d\n", t }' "$cdir/var/nutella-bind.log"; } \
+    | jq -Rcn --argjson en "$en" --argjson pub "${pub:-0}" --argjson q "${q:-0}" '
+        (reduce (inputs | split("\t") | select(length == 2)) as $r ({}; .[$r[0]] = ($r[1] | tonumber))) as $m
+        | {enabled: $en, published: $pub, queued: $q, last_at: ($m._at // null),
+           log: {ok: ($m.ok // 0), noroster: ($m.noroster // 0), image_unknown: ($m.image_unknown // 0),
+                 retry: ($m.retry // 0), error: ($m.error // 0)}}' 2>/dev/null
+}
+
 if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
   cfg=false; nb_configured "$contest" && cfg=true
   adm=false; is_admin && adm=true
@@ -52,19 +82,26 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
   st='null'; [[ -s "$STF" ]] && st="$(cat "$STF" 2>/dev/null)"; [[ -n "$st" ]] || st='null'
   jq -e . >/dev/null 2>&1 <<<"$st" || st='null'
   scope="$(_nb_scope_json)"
+  imgs="$(nb_images "$contest" | jq -Rcn '[inputs | select(length > 0)]' 2>/dev/null)"; [[ -n "$imgs" ]] || imgs='[]'
+  kk="$(nb_key_kind "$contest")"
+  bd="$(_nb_bind_json)"; jq -e . >/dev/null 2>&1 <<<"$bd" || bd='null'
+  # webhook de alertas: só EXISTÊNCIA do segredo e nº de eventos recebidos (o segredo é write-only)
+  _wn=0; [[ -s "$cdir/var/nutella-events.log" ]] && _wn="$(wc -l < "$cdir/var/nutella-events.log" | tr -d '[:space:]')"
+  bd="$(jq -c --argjson w "$([[ -s "$cdir/secrets/nutella-webhook.secret" ]] && echo true || echo false)" --argjson n "${_wn:-0}" \
+        '. as $b | {bind: $b, webhook: {installed: $w, events: $n}}' <<<"$bd")"
   if [[ ! -s "$CACHE" ]]; then
-    ok_json '{configured:$c, url:$u, status:$st, can_admin:$a, scoped:($sc != null), data:null}' \
+    ok_json '{configured:$c, url:$u, key_kind:$kk, images:$im, status:$st, can_admin:$a, scoped:($sc != null), bind:$bd.bind, webhook:$bd.webhook, data:null}' \
       --argjson c "$cfg" --arg u "$(nb_url "$contest")" --argjson st "$st" \
-      --argjson a "$adm" --argjson sc "$scope"
+      --argjson a "$adm" --argjson sc "$scope" --arg kk "$kk" --argjson im "$imgs" --argjson bd "$bd"
     exit 0
   fi
   # o corte de escopo acontece AQUI (API, nunca UI): .cstaff/.staff levam só as sedes
   # deles em `sedes[]` (com máquinas/MACs); os agregados seguem inteiros.
-  ok_json '{configured:$c, url:$u, status:$st, can_admin:$a, scoped:($sc != null),
+  ok_json '{configured:$c, url:$u, key_kind:$kk, images:$im, status:$st, can_admin:$a, scoped:($sc != null), bind:$bd.bind, webhook:$bd.webhook,
             data:($d[0] | if $sc == null then .
                   else (.sedes |= map(select((.name | ascii_downcase) as $n | $sc | index($n)))) end)}' \
     --argjson c "$cfg" --arg u "$(nb_url "$contest")" --argjson st "$st" \
-    --argjson a "$adm" --slurpfile d "$CACHE" --argjson sc "$scope"
+    --argjson a "$adm" --slurpfile d "$CACHE" --argjson sc "$scope" --arg kk "$kk" --argjson im "$imgs" --argjson bd "$bd"
   exit 0
 fi
 
@@ -88,7 +125,7 @@ config)
     if [[ -z "$key" ]]; then
       rm -f "$kf"
     else
-      [[ "$key" =~ ^nb3a_[A-Za-z0-9]+$ ]] || fail 422 "chave inválida (esperado nb3a_…)" "key_invalid"
+      [[ "$key" =~ ^nb3[as]_[A-Za-z0-9]+$ ]] || fail 422 "chave inválida (esperado nb3s_… de serviço, ou nb3a_… de administração)" "key_invalid"
       mkdir -p "${kf%/*}" 2>/dev/null; chmod 700 "${kf%/*}" 2>/dev/null
       # escrita atômica com modo certo ANTES do conteúdo (a chave nunca fica legível a
       # mais). ⚠ o nome do tmp é resolvido FORA do subshell: $BASHPID muda lá dentro.
@@ -96,8 +133,23 @@ config)
       ( umask 077; printf '%s\n' "$key" > "$tmpf" ) && mv -f "$tmpf" "$kf"
     fi
   fi
+  # lista de site-images do evento (obrigatória com chave de SERVIÇO, que não lista /site-images)
+  if jq -e 'has("images")' >/dev/null 2>&1 <<<"$body"; then
+    imgl="$(jq -r '(.images // "") | if type == "array" then join(" ") else tostring end' <<<"$body" | tr -s ',;\n\t ' ' ')"
+    imgl="${imgl# }"; imgl="${imgl% }"
+    for _i in $imgl; do [[ "$_i" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || fail 422 "site-image inválida: $_i" "images_invalid"; done
+    source "$_LIBDIR/contest-create.sh"
+    cc_set_conf_var "$contest" NUTELLABOOT_IMAGES "$imgl"
+  fi
+  # publicar o elo máquina↔time no login (ligado por omissão; `bind:false` grava NUTELLA_BIND=0)
+  if jq -e 'has("bind")' >/dev/null 2>&1 <<<"$body"; then
+    source "$_LIBDIR/contest-create.sh"
+    if [[ "$(jq -r '.bind' <<<"$body")" == false ]]; then cc_set_conf_var "$contest" NUTELLA_BIND 0; else cc_del_conf_var "$contest" NUTELLA_BIND; fi
+  fi
+  if [[ -n "$url" || -s "$(nb_keyfile "$contest")" ]]; then mod_enable "$contest" maquinas; fi
   audit_log_to "$contest" nutella-config "url=$([[ -n "$url" ]] && echo sim || echo nao) key=$(jq -r 'if has("key") then (if .key == "" then "removida" else "gravada" end) else "mantida" end' <<<"$body")"
-  ok_json '{saved:true, configured:$c}' --argjson c "$(nb_configured "$contest" && echo true || echo false)"
+  ok_json '{saved:true, configured:$c, key_kind:$kk}' --argjson c "$(nb_configured "$contest" && echo true || echo false)" \
+    --arg kk "$(nb_key_kind "$contest")"
   ;;
 collect)
   is_admin || fail 403 "Apenas o admin do contest" "admin_required"
@@ -105,9 +157,9 @@ collect)
   runner="$_DIR/../../score/nutella-gen.sh"
   [[ -f "$runner" ]] || fail 500 "coletor ausente" "runner_missing"
   jq -cn --argjson t "$EPOCHSECONDS" '{running:true, phase:"enfileirada", updated_at:$t}' > "$STF" 2>/dev/null
-  # destacado (molde jplag-run.sh): sobrevive ao fim da CGI; o gen tem flock próprio
-  CONTESTSDIR="$CONTESTSDIR" nohup bash "$runner" "$contest" </dev/null >/dev/null 2>&1 &
-  disown 2>/dev/null || true
+  # destacado, com os redirects NO SETSID (molde owner_rename_bg): um `nohup … &` herdava o socket do
+  # CGI e, sob o fcgiwrap, o cliente podia ficar esperando a coleta. O gen tem flock próprio.
+  ( setsid env CONTESTSDIR="$CONTESTSDIR" RUNDIR="${RUNDIR:-}" bash "$runner" "$contest" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
   audit_log_to "$contest" nutella-collect "started"
   ok_json '{started:true}'
   ;;
@@ -149,6 +201,110 @@ push-roster)
   audit_log_to "$contest" nutella-push-roster "pushed=$pushed kept=$kept failed=$failed"
   ok_json '{pushed:$p, kept:$k, failed:$f}' --argjson p "$pushed" --argjson k "$kept" --argjson f "$failed"
   ;;
+webhooks-install)
+  is_admin || fail 403 "Apenas o admin do contest" "admin_required"
+  nb_configured "$contest" || fail 409 "Integração não configurada" "not_configured"
+  remove="$(jq -r '.remove // false' <<<"$body")"
+  base="$(jq -r '.base_url // ""' <<<"$body")"; base="${base%/}"
+  if [[ -z "$base" ]]; then
+    # pelo subdomínio do contest a rota /hooks é barrada (isolamento): aí a URL base tem de vir no pedido
+    [[ -z "${CONTEST_HOST:-}" && -n "${HTTP_HOST:-}" ]] || fail 422 "Informe base_url (a URL pública do MOJ, fora do subdomínio do contest)" "base_url_required"
+    base="https://${HTTP_HOST}"
+  fi
+  [[ "$base" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || fail 422 "base_url inválida" "base_url_invalid"
+  hook="$base/api/v1/hooks/nutella?contest=$contest"
+  mapfile -t _hs < <({ jq -r '.sedes[]?.id // empty' "$CACHE" 2>/dev/null; nb_images "$contest"; jq -r '.images[]? // empty' <<<"$(nb_whoami "$contest")" 2>/dev/null; } | sort -u)
+  (( ${#_hs[@]} )) || fail 409 "Sem sedes: colete uma vez ou informe as site-images do evento" "no_sites"
+  secf="$cdir/secrets/nutella-webhook.secret"; idf="$cdir/var/nutella-webhooks.json"
+  ids='{}'; [[ -s "$idf" ]] && ids="$(cat "$idf")"; jq -e 'type == "object"' <<<"$ids" >/dev/null 2>&1 || ids='{}'
+  if [[ "$remove" != true && ! -s "$secf" ]]; then
+    mkdir -p "$cdir/secrets"; chmod 700 "$cdir/secrets" 2>/dev/null
+    ( umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 > "$secf.tmp"; printf '\n' >> "$secf.tmp" ) && mv -f "$secf.tmp" "$secf"
+  fi
+  okn=0; badn=0; res='{}'
+  # WEBHOOK POR ENTRADA (NutellaBoot ≥ 21/09/2026): `POST …/webhooks {url, secret, events}` cria (201) ou, com a
+  # MESMA url do mesmo dono, atualiza (200, `created:false`, mesmo id); `DELETE …/webhooks/{id}` remove SÓ o nosso.
+  # Chave de serviço precisa de `webhooks:write` e vê só os seus — o webhook alheio da sede nem aparece, e o
+  # `force` de antes (quando o PUT substituía a lista inteira) deixou de existir. Os ids ficam em
+  # var/nutella-webhooks.json {imagem: id} p/ a remoção. O segredo entra por --rawfile: nunca em argv.
+  bf="$(umask 077; mktemp)"
+  for _t in "${_hs[@]}"; do
+    [[ "$_t" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    if [[ "$remove" == true ]]; then
+      wid="$(jq -r --arg k "$_t" '.[$k] // ""' <<<"$ids")"
+      if [[ -z "$wid" ]]; then res="$(jq -c --arg k "$_t" '.[$k] = {status: 0, note: "não instalado"}' <<<"$res")"; continue; fi
+      [[ "$wid" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || continue
+      r="$(nb_curl "$contest" DELETE "/site-images/$_t/webhooks/$wid")"; st="$(nb_status "$r")"
+      if [[ "$st" == 204 || "$st" == 404 ]]; then okn=$((okn+1)); ids="$(jq -c --arg k "$_t" 'del(.[$k])' <<<"$ids")"; else badn=$((badn+1)); fi
+      res="$(jq -c --arg k "$_t" --argjson s "${st:-0}" '.[$k] = {status: $s}' <<<"$res")"
+    else
+      jq -cn --rawfile s "$secf" --arg u "$hook" \
+        '{url: $u, secret: ($s | gsub("[\\r\\n]"; "")), events: ["alert.raised", "alert.dismissed", "machine.rebooted", "machine.offline", "machine.online"]}' > "$bf"
+      r="$(nb_curl "$contest" POST "/site-images/$_t/webhooks" "$bf")"; st="$(nb_status "$r")"
+      if [[ "$st" == 2* ]]; then
+        okn=$((okn+1)); wid="$(nb_body "$r" | jq -r '.id // ""' 2>/dev/null)"
+        [[ "$wid" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && ids="$(jq -c --arg k "$_t" --arg v "$wid" '.[$k] = $v' <<<"$ids")"
+        res="$(jq -c --arg k "$_t" --argjson s "$st" --arg id "$wid" '.[$k] = {status: $s, id: $id}' <<<"$res")"
+      else
+        badn=$((badn+1)); res="$(jq -c --arg k "$_t" --argjson s "${st:-0}" --arg e "$(nb_code "$r")" '.[$k] = {status: $s, error: $e}' <<<"$res")"
+      fi
+    fi
+  done
+  rm -f "$bf"
+  mkdir -p "$cdir/var"; printf '%s\n' "$ids" > "$idf"
+  [[ "$remove" == true && $badn -eq 0 ]] && rm -f "$secf" "$idf"
+  audit_log_to "$contest" nutella-webhooks "$([[ "$remove" == true ]] && echo remove || echo install) ok=$okn failed=$badn"
+  ok_json '{installed:($rm | not), url:$u, ok:$o, failed:$f, sedes:$r}' --argjson rm "$remove" --arg u "$hook" \
+    --argjson o "$okn" --argjson f "$badn" --argjson r "$res"
+  ;;
+command-status)
+  # GET …/commands/{command_id} (≥ 21/09/2026): quem executou (acked), quem ainda não (pending) e quem deixou
+  # caducar (expired). Mesmo gate de sede do `command` p/ staff (é leitura, mas de uma ordem: fail-closed).
+  nb_configured "$contest" || fail 409 "Integração não configurada" "not_configured"
+  img="$(jq -r '.image // ""' <<<"$body")"; cid="$(jq -r '.command_id // ""' <<<"$body")"
+  [[ "$img" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || fail 422 "image inválida" "image_invalid"
+  [[ "$cid" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail 422 "command_id inválido" "command_id_invalid"
+  if ! is_admin; then
+    [[ -s "$CACHE" ]] || fail 409 "Sem coleta ainda" "no_cache"
+    scope="$(_nb_scope_json)"; [[ "$scope" != null ]] || fail 403 "Defina o escopo de sede do staff" "command_scope_required"
+    sede="$(jq -r --arg i "$img" 'first(.sedes[] | select(.id == $i) | .name) // "" | ascii_downcase' "$CACHE" 2>/dev/null)"
+    [[ -n "$sede" ]] && jq -e --arg s "$sede" 'index($s) != null' <<<"$scope" >/dev/null 2>&1 || fail 403 "Esta sede não está no seu escopo" "site_forbidden"
+  fi
+  r="$(nb_curl "$contest" GET "/site-images/$img/commands/$cid")"; st="$(nb_status "$r")"
+  [[ "$st" == 200 ]] || fail 502 "nutellaboot: $(nb_code "$r" | sed 's/^$/HTTP '"$st"'/')" "upstream_error"
+  ok_json_slurp '{status: ($u[0] | {command_id, command, created_at, expires_at, machines, summary, targets: (.targets // [])})}' u "$(nb_body "$r")"
+  ;;
+push-bindings)
+  is_admin || fail 403 "Apenas o admin do contest" "admin_required"
+  nb_configured "$contest" || fail 409 "Integração não configurada" "not_configured"
+  [[ -s "$cdir/var/access.log" ]] || fail 409 "Nenhum login registrado ainda" "no_logins"
+  source "$_LIBDIR/nutella-bind.sh"
+  # REPLAY do access.log pela MESMA fila do login: último login de cada MAC (UA do agente novo),
+  # conta de papel fora. O drenador dedupa contra o que já foi publicado e aplica a lista de sedes.
+  qf="$(mktemp)"
+  jq -Rrn '
+    [ inputs | split("\t") | select(length >= 4)
+      | (.[0] | tonumber? // 0) as $t | .[1] as $lg
+      | select(($lg | test("\\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$")) | not)
+      | ((.[3] | try @base64d catch "")
+         | capture("MLinux/(?<img>[A-Za-z0-9._-]{1,64})/[0-9a-f]{32}/(?<boot>[0-9]{1,20})/(?<mac>[0-9a-f]{2}([-:][0-9a-f]{2}){5})")? // null) as $m
+      | select($m != null) | {t: $t, lg: $lg, img: $m.img, boot: $m.boot, mac: ($m.mac | gsub(":"; "-"))} ]
+    | sort_by(.t) | reduce .[] as $e ({}; .[$e.mac] = $e)
+    | .[] | "\(.t)\t\(.lg)\t\(.img)\t\(.mac)\t\(.boot)"' "$cdir/var/access.log" > "$qf" 2>/dev/null
+  nq="$(wc -l < "$qf" | tr -d '[:space:]')"; nq="${nq:-0}"
+  batch='null'
+  if (( nq > 0 )); then
+    # LOTE (PUT …/bindings, até 1000 por request) — serviço antigo sem a rota: cai na fila do drenador
+    if batch="$(nb_bind_batch "$contest" "$qf")"; then :
+    else
+      batch='null'; cat "$qf" >> "$cdir/var/nutella-bind.queue"
+      if [[ "${MOJ_JOBS_SYNC:-0}" == 1 ]]; then nb_bind_drain "$contest"; else nb_bind_drain_bg "$contest"; fi
+    fi
+  fi
+  rm -f "$qf"
+  audit_log_to "$contest" nutella-push-bindings "queued=$nq batch=$batch"
+  ok_json '{queued:$q, batch:$b, bind:$bd}' --argjson q "$nq" --argjson b "$batch" --argjson bd "$(_nb_bind_json)"
+  ;;
 command)
   nb_configured "$contest" || fail 409 "Integração não configurada" "not_configured"
   op="$(jq -r '.op // ""' <<<"$body")"
@@ -169,30 +325,45 @@ command)
     jq -e --arg s "$sede" 'index($s) != null' <<<"$scope" >/dev/null 2>&1 \
       || fail 403 "Esta sede não está no seu escopo" "site_forbidden"
   fi
-  # op contra o catálogo AO VIVO da imagem (p/ "all", o catálogo de qualquer imagem serve
-  # de allowlist — o serviço revalida no destino)
-  cat_img="$img"
+  # SEDES-ALVO. `all` = as sedes DO CONTEST (cache da coleta; sem cache, a lista do conf) — nunca
+  # a frota do serviço: o nutellaboot hospeda sedes de OUTROS eventos e `POST /commands` atinge
+  # todas (além de exigir credencial de console, que a chave de serviço não tem).
+  targets=()
   if [[ "$img" == all ]]; then
-    cat_img="$(jq -r '.sedes[0].id // ""' "$CACHE" 2>/dev/null)"
-    [[ -n "$cat_img" ]] || fail 409 "Sem coleta ainda" "no_cache"
+    while IFS= read -r _t; do [[ "$_t" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && targets+=("$_t"); done \
+      < <({ jq -r '.sedes[].id' "$CACHE" 2>/dev/null; nb_images "$contest"; } | awk 'NF && !seen[$0]++')
+    (( ${#targets[@]} )) || fail 409 "Sem sedes conhecidas — rode a coleta ou informe as site-images" "no_cache"
+  else
+    targets=("$img")
   fi
-  r="$(nb_curl "$contest" GET "/site-images/$cat_img/commands")"
+  # op contra o catálogo AO VIVO (da 1ª sede-alvo; o serviço revalida em cada destino)
+  r="$(nb_curl "$contest" GET "/site-images/${targets[0]}/commands")"
   [[ "$(nb_status "$r")" == 200 ]] || fail 502 "nutellaboot indisponível (catálogo)" "upstream_error"
   jq -e --arg op "$op" '(.allowed // []) | index($op) != null' <<<"$(nb_body "$r")" >/dev/null 2>&1 \
     || fail 422 "op fora do catálogo da imagem" "op_not_allowed"
-  # shape confirmado na imagem de teste 26tete (30/08): o campo é `command`
-  # (resposta: {command_id, machines}); `op` era 400 "comando não permitido".
-  bf="$(mktemp)"; jq -cn --arg op "$op" '{command: $op}' > "$bf"
-  if [[ "$img" == all ]]; then r="$(nb_curl "$contest" POST "/commands" "$bf")"
-  elif [[ -n "$mac" ]]; then  r="$(nb_curl "$contest" POST "/site-images/$img/machines/$mac/commands" "$bf")"
-  else                        r="$(nb_curl "$contest" POST "/site-images/$img/commands" "$bf")"
-  fi
+  # SHAPE (NutellaBoot 3, conferido na 26tete em 21/09/2026): SEMPRE a rota DA SEDE,
+  #   POST /site-images/{i}/commands  {command, target: "all" | [mac,…]}  ->  {command_id, machines}
+  # Até então o comando POR MÁQUINA ia a `POST …/machines/{mac}/commands`, que NÃO EXISTE (405:
+  # aquele caminho só tem o GET do long-poll da própria máquina), e o de FROTA mandava `{command}`
+  # a `POST /commands`, que exige `targets` (400). O mock aceitava qualquer POST e escondeu os dois.
+  bf="$(mktemp)"; resf="$(mktemp)"; : > "$resf"; okn=0; badn=0; st=""
+  if [[ -n "$mac" ]]; then jq -cn --arg op "$op" --arg m "$mac" '{command: $op, target: [$m]}' > "$bf"
+  else                     jq -cn --arg op "$op" '{command: $op, target: "all"}' > "$bf"; fi
+  for _t in "${targets[@]}"; do
+    r="$(nb_curl "$contest" POST "/site-images/$_t/commands" "$bf")"; st="$(nb_status "$r")"
+    if [[ "$st" == 2* ]]; then okn=$((okn+1)); else badn=$((badn+1)); fi
+    jq -cn --arg i "$_t" --arg st "$st" --arg b "$(nb_body "$r" | head -c 2000)" \
+      '{key:$i, value:({status:($st|tonumber? // 0)} + (try ($b|fromjson) catch {} | if type=="object" then {command_id, machines, detail} else {} end | with_entries(select(.value != null))))}' >> "$resf"
+    audit_log_to "$contest" nutella-command "op=$op image=$_t mac=${mac:-todas} status=$st by=$SESSION_LOGIN"
+  done
   rm -f "$bf"
-  st="$(nb_status "$r")"
-  audit_log_to "$contest" nutella-command "op=$op image=$img mac=${mac:-todas} status=$st by=$SESSION_LOGIN"
-  [[ "$st" == 2* ]] || fail 502 "nutellaboot recusou o comando (HTTP $st)" "upstream_error"
-  ok_json_slurp '{sent:true, op:$op, image:$img, mac:$mac, upstream:($u[0] // null)}' u "$(nb_body "$r")" \
-    --arg op "$op" --arg img "$img" --arg mac "$mac"
+  if (( okn == 0 )); then
+    det="$(jq -rs 'map(.value.detail // empty) | first // ""' "$resf" 2>/dev/null)"; rm -f "$resf"
+    fail 502 "nutellaboot recusou o comando (HTTP $st)${det:+: $det}" "upstream_error"
+  fi
+  ok_json_slurp '{sent:true, op:$op, image:$img, mac:$mac, ok:$okn, failed:$badn, sedes:($u | from_entries),
+                  upstream:(($u[0].value // null))}' u "$(cat "$resf"; rm -f "$resf")" \
+    --arg op "$op" --arg img "$img" --arg mac "$mac" --argjson okn "$okn" --argjson badn "$badn"
   ;;
 *)
   fail 400 "action inválida" "action_invalid"

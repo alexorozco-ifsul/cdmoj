@@ -30,7 +30,7 @@ fx_user "$C" hands.judge j "Juiz Um"
 fx_user "$C" hands.mon   m "Monitor Um"
 printf '5:col#pa:C:Accepted,100p:1718000000:%s\n' "$SID" > "$C/users/alice/history"
 printf 'int main(){return 0;}\n' > "$C/users/alice/submissions/$SID.c"
-printf '<html>report</html>\n'   > "$C/users/alice/mojlog/$SID.html"
+printf '<html>report</html>\n' | gzip -6 > "$C/users/alice/mojlog/$SID.html.gz"   # formato atual (.gz)
 
 # treino mínimo p/ /index/open_training
 T="$FIX/treino"; mkdir -p "$T/var"
@@ -118,7 +118,7 @@ check "userinfo no token -> 401" '[[ "$OUT" == *"Status: 401"* ]]'
 echo "== contest/navbuttons (Bearer, admin) =="
 call "/contest/navbuttons" GET "contest=$CONTEST" "$TOKEN"
 check "navbuttons 200 + valid JSON" 'okstatus && jvalid'
-check "admin sees Todas Submissões & Administração & Logout" 'printf "%s" "$BODY" | jq -e "[.buttons[].label] as \$l | (\$l|index(\"Todas Submissões\")) and (\$l|index(\"⚙ Administração\")) and (\$l|index(\"Logout\"))" >/dev/null'
+check "admin sees Todas Submissões & Administração & Logout" 'printf "%s" "$BODY" | jq -e "[.buttons[].label] as \$l | (\$l|index(\"Todas Submissões\")) and (\$l|index(\"Administração\")) and (\$l|index(\"Logout\"))" >/dev/null'
 check "navbuttons base has Contest/Score/Clarification" 'printf "%s" "$BODY" | jq -e "[.buttons[].label] as \$l | (\$l|index(\"Contest\")) and (\$l|index(\"Score\")) and (\$l|index(\"Clarification\"))" >/dev/null'
 
 echo "== contest/problems (Bearer) =="
@@ -155,7 +155,7 @@ check "regions 200 empty" 'okstatus && [[ "$BODY" == *\"regions\":\[\]* ]]'
 echo "== contest/score (TXT, mode line, gerado de users/*/metrics.json) =="
 call "/contest/score" GET "contest=$CONTEST" ""
 check "score 200 (TXT)" 'okstatus'
-check "score first line is a known mode" '[[ "$(printf "%s" "$BODY" | head -1)" =~ ^(icpc|obi|treino|heuristic|outro|custom)$ ]]'
+check "score first line is a known mode (+ flags, ex.: icpc s)" '[[ "$(printf "%s" "$BODY" | head -1)" =~ ^(icpc|obi|treino|heuristic|outro|custom)( [a-z]+)*$ ]]'
 check "score has alice row (metrics-driven)" '[[ "$BODY" == *alice* ]]'
 check "placar gerado em var/placar.txt" '[[ -s "$FIX/$CONTEST/var/placar.txt" ]]'
 
@@ -164,6 +164,7 @@ call "/contest/allsubmissions" GET "contest=$CONTEST" "$TOKEN"
 check "allsubmissions 200 (TXT)" 'okstatus'
 check "allsubmissions has >=9 colon-fields" '[[ -n "$BODY" ]] && [[ "$(printf "%s" "$BODY" | head -1 | awk -F: "{print NF}")" -ge 9 ]]'
 check "allsubmissions resolve fullname do account.json" '[[ "$BODY" == *"Alice Silva"* ]]'
+check "allsubmissions: campo 4 = linguagem (não vazio, id [a-z0-9+]) em toda linha" 'printf "%s\n" "$BODY" | awk -F: "\$4 !~ /^[A-Za-z0-9+#.-]+\$/ {bad=1} END {exit bad+0}"'
 
 echo "== contest/allsubmissions ANÔNIMA (.judge/.mon: sem login/fullname) =="
 call "/contest/allsubmissions" GET "contest=$CONTEST" "$JTOK"
@@ -198,7 +199,12 @@ check "source bad id -> 400" '[[ "$OUT" == *"Status: 400"* ]]'
 
 echo "== submission/log (Bearer) =="
 call "/submission/log" GET "contest=$CONTEST&time=1718000000&id=$SID" "$TOKEN"
-check "log 200 returns report" 'okstatus && [[ "$BODY" == *report* ]]'
+check "log 200 returns report (gz descomprimido sem Accept-Encoding)" 'okstatus && [[ "$BODY" == *report* ]] && [[ "$OUT" != *"Content-Encoding: gzip"* ]]'
+# corpo BINÁRIO (gzip): vai p/ arquivo — $(…) engole NUL; o python separa cabeçalho/corpo em bytes
+HTTP_ACCEPT_ENCODING="gzip, br" PATH_INFO=/submission/log REQUEST_METHOD=GET QUERY_STRING="contest=$CONTEST&time=1718000000&id=$SID" HTTP_AUTHORIZATION="Bearer $TOKEN" \
+  CONTESTSDIR="$FIX" SESSIONDIR="$SESS" SPOOLDIR="$SPOOL" NEWSDIR="$NEWS" RUNDIR="$FIX/run" bash "$ROUTER" </dev/null > "$FIX/log.raw" 2>/dev/null
+OUT="$(head -c 400 "$FIX/log.raw" | tr -d '\0')"
+check "log com Accept-Encoding gzip: Content-Encoding e corpo comprimido" '[[ "$OUT" == *"Content-Encoding: gzip"* ]] && [[ "$(python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();i=d.find(b\"\\r\\n\\r\\n\");sys.stdout.buffer.write(d[i+4:])" "$FIX/log.raw" | gzip -dc 2>/dev/null)" == *report* ]]'
 
 echo "== admin/adduser + passwd (POST admin) — uses temp contest copy =="
 TMPC="$(mktemp -d)"

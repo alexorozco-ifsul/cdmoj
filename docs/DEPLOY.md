@@ -5,6 +5,13 @@ São **duas formas**, e elas diferem **só no nginx** (o resto — imagem, quadl
 | | **Produção** (máquina dedicada) | **Dev** (máquina de quem programa) |
 |---|---|---|
 | nginx | do **sistema** (root), **80/443**, TLS — `server/bin/install-nginx.sh` | **user-space**, como o próprio usuário, **8080/8443** — `~/nginx-proxy/` |
+
+O rodapé de todas as páginas mostra a versão em produção, o link do repositório e das issues e
+um contato opcional. `make deploy` grava `web/version.json` (gitignored) com `git describe`; defina
+`MOJ_CONTACT=<e-mail ou URL>` no ambiente do deploy para o link "contato" aparecer. Sem o
+arquivo, o rodapé mostra `dev`.
+
+Atenção: o `moj-app.conf.in` serve o estático com `Cache-Control: no-cache, must-revalidate` (issue #22: módulo ESM velho em cache depois de um deploy). Quando o `.conf.in` muda, reinstale ou recarregue o nginx no deploy seguinte.
 | API + judged | containers rootless (quadlets) da imagem podman | idem, ou os scripts à mão |
 | dono dos dados | um usuário de serviço (ex.: `moj`) | o seu usuário (`ribas`) |
 
@@ -279,3 +286,8 @@ curl -s -H "$H" -H "Authorization: Bearer $TOK" "$B/api/v1/contest/history?conte
 ```
 
 > Para ver o veredicto aparecer no navegador (treino ou contest), deixe `judged.sh` rodando. Com `JUDGE_BACKEND=mock` toda submissão vira `Accepted,100p` (bom p/ demo, mas grava no histórico do contest submetido — prefira `zzdemo`). `JUDGE_BACKEND=local` usa `mojtools` (bubblewrap) com pacotes de problema locais. Em produção o daemon roda `INTAKE_MODE=queue JUDGE_BACKEND=queue` (pull): enfileira e os juízes (`judge/`) puxam o job.
+
+## Limpeza diária (timer no host)
+
+`sudo bash server/bin/install-housekeeping.sh` instala o `moj-housekeeping.timer` (03:30): apaga reports de
+julgamento de contests encerrados há mais de 6 meses e purga caches regeneráveis. Ver `ADMIN.md` §9.

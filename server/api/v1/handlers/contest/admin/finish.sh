@@ -33,7 +33,7 @@ source "$_LIBDIR/contest-docs.sh"
 
 cdir="$CONTESTSDIR/$contest"
 now="$EPOCHSECONDS"
-FREEZE_TIME=""; SHOWLOG=""; SHOWCODE=""; CONTEST_END=0
+FREEZE_TIME=""; SHOWLOG=""; CONTEST_END=0
 load_contest_conf "$contest"
 
 _docs_pending_json(){   # [{type,lang}] dos gerados-e-não-publicados
@@ -59,12 +59,17 @@ if [[ "$REQUEST_METHOD" != POST ]]; then
 
   # --- o que o botão resolve --------------------------------------------------
   if [[ "${FREEZE_TIME:-0}" =~ ^[0-9]+$ ]] && (( FREEZE_TIME > 0 )); then
-    add freeze fail "Placar CONGELADO" "o público vê o placar de $(fmt_epoch "$FREEZE_TIME" '%H:%M' "$contest") — encerrar o evento abre o resultado final"
+    if freeze_release_ok "$contest"; then
+      add freeze fail "Placar CONGELADO" "o público vê o placar de $(fmt_epoch "$FREEZE_TIME" '%H:%M' "$contest") — encerrar o evento abre o resultado final"
+    else
+      add freeze fail "Placar CONGELADO" "o público vê o placar de $(fmt_epoch "$FREEZE_TIME" '%H:%M' "$contest") — pode ser descongelado a partir de $(fmt_epoch "$(freeze_release_at "$contest")" '%H:%M' "$contest") (fim para todas as sedes + 1 min)"
+    fi
   else
     add freeze ok "Placar aberto" "sem congelamento em vigor"
   fi
   pend="$(_docs_pending_json)"; npend="$(jq -r 'length' <<<"$pend")"
-  if (( npend > 0 )); then
+  if ! mod_on "$contest" documentos; then :   # módulo desligado: nada a publicar aqui
+  elif (( npend > 0 )); then
     add docs fail "$npend documento(s) gerado(s) sem publicar" \
       "$(jq -r 'map(.type + "." + .lang) | join(", ")' <<<"$pend")"
   else
@@ -77,23 +82,20 @@ if [[ "$REQUEST_METHOD" != POST ]]; then
   else
     add show_log warn "Times NÃO veem o relatório de correção" "em modo prova é o padrão; depois costuma-se liberar em ⚙️ Regras"
   fi
-  if [[ "${SHOWCODE:-0}" == 1 ]]; then
-    add show_code ok "Código visível entre os times" "SHOWCODE ligado"
-  else
-    add show_code warn "Cada time vê só o próprio código" "libere em ⚙️ Regras se quiser abrir as soluções"
-  fi
   source "$_LIBDIR/cohorts.sh" 2>/dev/null || true
-  if declare -F ch_released >/dev/null 2>&1 && ! ch_released "$contest"; then
+  if mod_on "$contest" coortes && declare -F ch_released >/dev/null 2>&1 && ! ch_released "$contest"; then
     add cohorts warn "Coortes não liberadas" "convidados/extra-oficiais seguem fora do placar público (Pessoas › Coortes)"
   fi
   add report ok "Relatório final" "baixe o pacote offline em Operação › Situação"
 
-  ok_json '{checks:$c, summary:{ok:$o, warn:$w, fail:$f}, can_finish:$cf, can_act:$ca, pending_docs:$pd}' \
+  ok_json '{checks:$c, summary:{ok:$o, warn:$w, fail:$f}, can_finish:$cf, can_act:$ca, pending_docs:$pd,
+            freeze_release_at:$fra}' \
+    --argjson fra "$(freeze_release_at "$contest")" \
     --argjson c "$CHECKS" \
     --argjson o "$(jq -r '[.[]|select(.level=="ok")]|length' <<<"$CHECKS")" \
     --argjson w "$(jq -r '[.[]|select(.level=="warn")]|length' <<<"$CHECKS")" \
     --argjson f "$(jq -r '[.[]|select(.level=="fail")]|length' <<<"$CHECKS")" \
-    --argjson cf "$(contest_over_for_all "$contest" && echo true || echo false)" \
+    --argjson cf "$(contest_over_for_all "$contest" && freeze_release_ok "$contest" && echo true || echo false)" \
     --argjson ca "$(is_admin && echo true || echo false)" \
     --argjson pd "$pend"
   exit 0
@@ -107,6 +109,7 @@ jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "JSON inválido" "bad_json"
 [[ "$(jq -r '.action // ""' <<<"$body")" == finish ]] || fail 400 "action deve ser finish" "action_invalid"
 contest_over_for_all "$contest" \
   || fail 409 "A prova ainda não terminou para todas as sedes" "contest_running"
+freeze_release_guard "$contest"     # com freeze em vigor: só a partir do fim geral + 1 min
 
 # uma vez só (duplo-clique/concorrência), como o relatório
 mkdir -p "$cdir/var" 2>/dev/null

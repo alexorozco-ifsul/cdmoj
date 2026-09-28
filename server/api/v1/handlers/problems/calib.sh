@@ -5,6 +5,7 @@
 require_method GET
 require_auth
 source "$_DIR/lib/tl-store.sh"; source "$_DIR/lib/orgs.sh"; source "$_DIR/lib/problems.sh"
+source "$_DIR/lib/calib-expect.sh"   # CALX_JQ: o que cada categoria tem de fazer (fonte única)
 : "${RUNDIR:=/home/ribas/moj/run}"; : "${CALIB_DIR:=$RUNDIR/calib}"
 
 id="$(param id)"
@@ -20,7 +21,7 @@ d="$CALIB_DIR/$id"
 if [[ -d "$d" ]]; then
   find "$d" -maxdepth 1 -name '*.json' -type f -exec cat {} + 2>/dev/null \
     | jq -s -c 'map(select(.host)
-        | {(.host): {at:.at, checksum:.checksum, log:.log,
+        | {(.host): {at:.at, version:.checksum, log:.log,
                      reports:(.reports // []), sols:(.sols // [])}}) | add // {}' \
     > "$LOGF" 2>/dev/null
 fi
@@ -29,19 +30,39 @@ fi
 # linguagens das soluções good (extensão) — p/ apontar as que NÃO calibraram (falharam). O -o noglob
 # da API vale aqui -> uso find, não glob.
 pkg="$(pkg_path "$id")"; goodlangs='[]'
+# VERSÃO ATUAL do pacote (pkg_judge_version): quem calibrou outra versão entra como `stale` e SEM as
+# soluções — mostrar o `sols` de uma versão anterior é o que fazia o autor ver solução já removida
+# (e não ver a nova) como se fosse o estado de agora.
+pkgver="$(pkg_judge_version "$pkg" "$id" 2>/dev/null)"; pkgver="${pkgver//[^0-9a-f]/}"
+# EM VOO agora (fila + em execução, inclusive a dirigida pelo marcador): é o que faz a tela do autor
+# esperar de verdade em vez de desistir no relógio. Uma calibração leva MINUTOS (medido em produção,
+# 21/09/2026: 3 a 7 min conforme o nº de soluções × testes) e o editor desistia em 80 s, some com o
+# aviso e parava de buscar — relatos do José Leite e do Arthur Botelho. Array pequeno: pode ir por
+# --argjson sem risco de ARG_MAX.
+calibrating="$(calibrating_for "$id" 2>/dev/null)"; [[ -n "$calibrating" ]] || calibrating='[]'
 if [[ -n "$pkg" && -d "$pkg/sols/good" ]]; then
-  # extensões py2/py3 legadas contam como 'py' (python unificado)
+  # extensão -> linguagem canônica (lang_canon_ext: py2/py3 = py, cc/cxx/c++ = cpp), a chave do TL
+  declare -F lang_canon_ext >/dev/null || source "$_LIBDIR/langs.sh"
   goodlangs="$(find "$pkg/sols/good" -maxdepth 1 -type f 2>/dev/null \
-    | while IFS= read -r gf; do e="${gf##*.}"; case "$e" in py2|py3) e=py;; esac; [[ "$e" != "$gf" ]] && echo "$e"; done \
+    | while IFS= read -r gf; do e="${gf##*.}"; [[ "$e" != "$gf" ]] && { lang_canon_ext "$e"; echo; }; done \
     | LC_ALL=C sort -u | jq -Rsc 'split("\n")|map(select(length>0))')"
   [[ -n "$goodlangs" ]] || goodlangs='[]'
 fi
 
+# as soluções que o pacote tem HOJE (o `missing` do sumário) + o ALLOWTLEDURINGCALIBRATION do conf
+pfiles="$(calx_pkg_files "$pkg")"; [[ -n "$pfiles" ]] || pfiles='[]'
+allowtle="$(calx_allowtle "$pkg")"
+drift="$(calx_drift "$pkg")"; [[ -n "$drift" ]] || drift='{}'   # TLMOD[<lang>|default.drift] do conf
+
 # CORPO ANTES DO CABEÇALHO (pode ser grande: log + sols por host — sai p/ arquivo).
 # npy normaliza chaves de TL py3/py2 legadas (calibração pré-unificação) p/ 'py'.
+# Cada solução ganha `expect` (lib/calib-expect.sh, contra o TL EFETIVO) e a resposta ganha `summary`
+# (o mesmo sumário que o /judge/calib-report grava p/ o Painel). A entrada category=="validator" (o
+# validador de entrada) sai de `sols` e vai p/ `hosts[].validator`.
 BODYF="$(mktemp)"; trap 'rm -f "$LOGF" "$BODYF"' EXIT
 jq -cn --argjson store "$store" --slurpfile lg "$LOGF" --argjson gl "$goodlangs" \
-   --argjson ov "$(tl_conf_overrides "$pkg")" '
+   --arg pkgver "$pkgver" --argjson clive "$calibrating" --argjson ov "$(tl_conf_overrides "$pkg")" \
+   --argjson pfiles "$pfiles" --argjson allowtle "$allowtle" --argjson drift "$drift" "$CALX_JQ"'
   def npy: if .=="py3" or .=="py2" then "py" else . end;
   ($lg[0] // {}) as $logs
   | ($store.hosts // {}) as $h
@@ -57,19 +78,41 @@ jq -cn --argjson store "$store" --slurpfile lg "$LOGF" --argjson gl "$goodlangs"
           | reduce $ks[] as $k ({}; .[$k] = ($ov[$k] // $ov["default"] // $cal[$k]))
           | with_entries(select(.value != null) | .value |= tostring)
      end) as $eff
-  | { success:true, id:($store.id // ""), checksum:($store.checksum // ""),
+  | [ $hosts[] as $n
+      | ($logs[$n].version // "") as $hv
+      | { host:$n,
+          stale:(($pkgver != "") and ($hv != "") and ($hv != $pkgver)),
+          sols:(($logs[$n].sols // []) | map(. + {expect: calx($eff; $allowtle; $drift)})) } ] as $hx
+  | ($hx | map({(.host): .}) | add // {}) as $hxm
+  | { success:true, id:($store.id // ""), checksum:($store.checksum // ""), version:$pkgver,
+      being_calibrated:(($clive|length) > 0), calibrating:$clive,
       good_langs:$gl, tl_override:$ov,
       time_limits:$eff, time_limits_calibrated:$cal,
       missing_langs:[ $gl[] | select(. as $g | ($served|index($g)|not)) ],     # sem TL em NENHUM host
+      allow_tle:$allowtle, drift:$drift,
+      summary:calx_sum([ $hx[] | select(.stale | not) ]; $pfiles),
       hosts: [ $hosts[] as $n
                | ($h[$n].tl // {}) as $htl
                | ($htl | keys | map(npy)) as $htlk
+               | ($logs[$n].version // "") as $hv
+               # desatualizado = calibrou OUTRA versão do pacote (só dá p/ afirmar quando as duas
+               # versões são conhecidas: juiz antigo/report sem versão não é acusado de nada)
+               | (($pkgver != "") and ($hv != "") and ($hv != $pkgver)) as $stale
                | { host:$n, tl:$htl,
                    missing:[ $gl[] | select(. as $g | ($htlk|index($g)|not)) ],  # sem TL NESTE host
-                   at:($h[$n].at // $logs[$n].at // 0),
+                   # o MAIOR entre o carimbo do store de TL e o do log: calibração que termina
+                   # SEM TL novo (good que falhou/TLE — justo o caso de quem está consertando
+                   # solução) só bumpa o log, e com o store vencendo ela ficava INVISÍVEL p/ quem
+                   # esperava "chegou algo mais novo"
+                   at:([($h[$n].at // 0), ($logs[$n].at // 0)] | max),
+                   version:$hv, stale:$stale,
                    log:($logs[$n].log // null),
-                   reports:($logs[$n].reports // []),
-                   sols:($logs[$n].sols // []) } ] }' > "$BODYF" 2>/dev/null
+                   reports:(if $stale then [] else ($logs[$n].reports // []) end),
+                   sols:(if $stale then [] else [ $hxm[$n].sols[] | select(.category != "validator") ] end),
+                   validator:(if $stale then null
+                              else ([ $hxm[$n].sols[] | select(.category == "validator") ] | .[0]
+                                    | if . == null then null
+                                      else (calx_val + {file: (.file // ""), tests: (.tests // [])}) end) end) } ] }' > "$BODYF" 2>/dev/null
 [[ -s "$BODYF" ]] || fail 500 "Falha ao montar a resposta" "calib_fail"
 emit_json 200 OK
 cat "$BODYF"

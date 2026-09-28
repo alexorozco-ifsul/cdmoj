@@ -31,23 +31,34 @@ source "$_LIBDIR/contest-create.sh"
 body="$(read_body)"
 jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "JSON inválido" "bad_json"
 
+# colors: objeto com chaves = grava (substitui o arquivo inteiro: o editor manda todas as letras +
+# enableSonic true/false); {} = NÃO MEXE (o editor devolve {} quando nada mudou — apagar aqui
+# perdia as cores e desligava o módulo, relato de 2026-09-14); null = volta às cores padrão.
+# Toda escrita/remoção derruba o cache de /contest/balloons (o frescor por -nt não vê arquivo
+# apagado; a lista de presença em resp_cache_fresh também cobre, mas o explícito é grátis).
+# (escritor único: cc_balloons_write/clear em lib/contest-create.sh — a troca de rodada usa o mesmo)
 if jq -e 'has("colors")' >/dev/null 2>&1 <<<"$body"; then
   c="$(jq -c '.colors' <<<"$body")"
-  if [[ "$(jq 'length' <<<"$c" 2>/dev/null)" -gt 0 ]]; then printf '%s' "$c" > "$cdir/balloons.json"; else rm -f "$cdir/balloons.json"; fi
+  if [[ "$c" == null ]]; then cc_balloons_clear "$contest"
+  elif [[ "$(jq 'if type=="object" then length else 0 end' <<<"$c" 2>/dev/null)" -gt 0 ]]; then
+    cc_balloons_write "$contest" "$c" || fail 500 "Falha ao gravar as cores" "colors_write"
+  fi
 fi
 if jq -e 'has("regions")' >/dev/null 2>&1 <<<"$body"; then
   r="$(jq -c '.regions' <<<"$body")"
-  if [[ "$(jq 'length' <<<"$r" 2>/dev/null)" -gt 0 ]]; then printf '%s' "$r" > "$cdir/regions.json"; else rm -f "$cdir/regions.json"; fi
+  if [[ "$(jq 'length' <<<"$r" 2>/dev/null)" -gt 0 ]]; then printf '%s' "$r" > "$cdir/regions.json"; mod_enable "$contest" sedes; else rm -f "$cdir/regions.json"; fi
 fi
 if jq -e 'has("teams_meta")' >/dev/null 2>&1 <<<"$body"; then
   t="$(jq -c '.teams_meta' <<<"$body")"
-  if [[ "$(jq 'length' <<<"$t" 2>/dev/null)" -gt 0 ]]; then jq -cn --argjson r "$t" '{rules:$r}' > "$cdir/teams-meta.json"; else rm -f "$cdir/teams-meta.json"; fi
+  if [[ "$(jq 'length' <<<"$t" 2>/dev/null)" -gt 0 ]]; then jq -cn --argjson r "$t" '{rules:$r}' > "$cdir/teams-meta.json"; mod_enable "$contest" sedes; else rm -f "$cdir/teams-meta.json"; fi
 fi
 if jq -e 'has("basic")' >/dev/null 2>&1 <<<"$body"; then
   bl="$(jq -r '.basic.locale // empty' <<<"$body")"; [[ "$bl" =~ ^(pt|en)$ ]] && cc_set_conf_var "$contest" LOCALE "$bl"
   bs="$(jq -r '.basic.login_start // empty' <<<"$body")"; [[ "$bs" =~ ^[0-9]+$ ]] && cc_set_conf_var "$contest" LOGIN_START_TIME "$bs"
   bf="$(jq -r '.basic.freeze // empty' <<<"$body")"
   if [[ "$bf" =~ ^[0-9]+$ ]] && [[ "$bf" != "$(conf_value "$contest" FREEZE_TIME)" ]]; then
+    # 0 = descongelar (ou freeze em vigor empurrado p/ o futuro): só a partir do fim geral + 1 min
+    source "$_LIBDIR/contest-gate.sh"; freeze_change_guard "$contest" "$bf"
     cc_set_conf_var "$contest" FREEZE_TIME "$bf"
     # freeze mudou ⇒ rebuild FORÇADO: o gatilho passivo "conf mais novo que .metrics-stamp"
     # perde p/ um build em voo (corrida de mtime, Maratona 29/08 — ver lib/common.sh).

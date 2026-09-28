@@ -23,9 +23,14 @@ export function isPending(v) {
   return s.includes('not answered') || s.includes('queue') || s.includes('running');
 }
 // veredicto SEM o sufixo de score (",100p" / " (...)" / ". Pontos...") -> rótulo limpo p/ exibir.
+// `classe¦texto` (veredicto manual com texto p/ o time, lib/verdict.sh) -> o texto.
 export function verdictShort(v) {
-  return (v || '').replace(/,.*$/, '').replace(/\s*\(.*$/, '').trim();
+  const s = v || '';
+  if (s.includes('¦')) return s.slice(s.indexOf('¦') + 1).trim();
+  return s.replace(/,.*$/, '').replace(/\s*\(.*$/, '').trim();
 }
+// classe canônica de `classe¦texto` (o que pontua); string sem marcador volta inteira
+export const verdictClassOf = (v) => String(v || '').split('¦')[0];
 // score embutido no veredicto (o "<N>p") -> número, ou null se não houver. Fallback p/ o resumo.
 export function verdictScore(v) {
   const m = /(-?\d+)p(?:\b|\.|$)/.exec(v || '');
@@ -85,7 +90,10 @@ export function avatarEl(login, name, size = 26, hasPhoto) {
     span.textContent = initialsOf(name, login);
   };
   if (!login || hasPhoto === false) { showInitials(); return span; }
-  const img = el('img', { alt: '', src: '/api/v1/treino/profile/photo?user=' + encodeURIComponent(login) });
+  // `loading` ANTES do `src` (o el() aplica na ordem): com o src primeiro o navegador já começa a baixar.
+  // Preguiçoso porque lista GRANDE de avatares derrubava o treino: a aba Sessões do /treino/admin/ pedia a
+  // foto de 1.201 contas num minuto e o anteparo do nginx (treino ≤ 16) devolveu 429 a 1.040 (25/09/2026).
+  const img = el('img', { alt: '', loading: 'lazy', decoding: 'async', src: '/api/v1/treino/profile/photo?user=' + encodeURIComponent(login) });
   img.addEventListener('error', showInitials);
   span.append(img);
   return span;

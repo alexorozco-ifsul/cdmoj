@@ -57,7 +57,7 @@
         <a href="#conflitos" data-en="3. Resolving conflicts">3. Resolvendo conflitos</a>
         <a href="#alerta" data-en="4. The conflict alarm">4. O alarme de conflito</a>
         <a href="#situacao" data-en="5. Watching the queue">5. Vigiando a fila</a>
-        <a href="#config" data-en="6. Verdict options and auto-verdict">6. Opções e auto-veredicto</a>
+        <a href="#config" data-en="6. Verdict options and what goes to review">6. Opções e o que vai para revisão</a>
         <a href="#extras" data-en="7. Your other powers">7. Seus outros poderes</a>
         <a href="#prova" data-en="8. Beyond judging: what only you do">8. Além de julgar: o que só você faz</a>
         <a href="#aquecimento" data-en="9. The warm-up is the rehearsal of the judging desk">9. O aquecimento é o ensaio da mesa</a>
@@ -78,9 +78,9 @@
         </div>
 
         <h3 data-en="Your tabs">Suas abas</h3>
-        <p data-en-html="You get everything a judge gets (<b>Contest</b> with the statements, <b>Score</b> always unfrozen, <b>Clarification</b>, <b>⚖️ Judge</b>, <b>Todas Submissões</b> — complete, with names — and <b>Statistics</b>), plus two that are yours:">
+        <p data-en-html="You get everything a judge gets (<b>Contest</b> with the statements, <b>Score</b> always unfrozen, <b>Clarification</b>, <b>Judge</b>, <b>Todas Submissões</b> — complete, with names — and <b>Statistics</b>), plus two that are yours:">
           Você recebe tudo que um juiz recebe (<b>Contest</b> com os enunciados, <b>Score</b>
-          sempre descongelado, <b>Clarification</b>, <b>⚖️ Judge</b>, <b>Todas Submissões</b> —
+          sempre descongelado, <b>Clarification</b>, <b>Judge</b>, <b>Todas Submissões</b> —
           completa, com nomes — e <b>Statistics</b>), mais duas que são suas:
         </p>
         <table class="cheat">
@@ -99,9 +99,9 @@
             votos mostrados com nome.
           </figcaption>
         </figure>
-        <p data-en="The panel has six tabs: Situation (the whole queue), Conflicts (only what needs you), Options and Auto-verdict (configuration), Documents and Rounds.">
+        <p data-en="The panel has six tabs: Situation (the whole queue), Conflicts (only what needs you), Options and What to review (configuration), Documents and Rounds.">
           O painel tem seis abas: <b>Status</b> (a fila inteira), <b>Conflicts</b> (só o que
-          precisa de você), <b>Opções</b> e <b>Auto-veredicto</b> (configuração), <b>Documents</b>
+          precisa de você), <b>Opções</b> e <b>O que revisar</b> (configuração), <b>Documents</b>
           e <b>Rodadas</b>.
         </p>
 
@@ -148,11 +148,11 @@
           ou quem está votando rápido demais — não para ranquear gente.
         </p>
 
-        <h2 id="config" data-en="6. Verdict options and auto-verdict">6. Opções e auto-veredicto</h2>
+        <h2 id="config" data-en="6. Verdict options and what goes to review">6. Opções e o que vai para revisão</h2>
         <p data-en="Two configuration tabs are yours:">Duas abas de configuração são suas:</p>
         <ul>
-          <li data-en-html="<b>🏷️ Options</b> — the list of verdicts the judges can vote (the classic ICPC set: <i>YES</i>, <i>NO - Wrong answer</i>, <i>NO - Time limit exceeded</i>…). Change the wording here and every judge sees the new list."><b>🏷️ Opções</b> — a lista de veredictos que os juízes podem votar (o conjunto clássico da ICPC: <i>YES</i>, <i>NO - Wrong answer</i>, <i>NO - Time limit exceeded</i>…). Mude aqui e todos os juízes veem a lista nova.</li>
-          <li data-en-html="<b>⚙️ Auto-verdict</b> — the matrix that lets some results skip the queue. The classic use is releasing <i>Compilation Error</i> automatically: it does not need human judgement and it floods the queue in the first minutes."><b>⚙️ Auto-veredicto</b> — a matriz que deixa alguns resultados pularem a fila. O uso clássico é liberar <i>Compilation Error</i> automaticamente: não precisa de julgamento humano e entope a fila nos primeiros minutos.</li>
+          <li data-en-html="<b>🏷️ Options</b> — the list of verdicts the judges can vote. Each option has three fields. The first field is the text the judge sees. The second field is the class: one of the six canonical classes (<i>Accepted</i>, <i>Wrong Answer</i>, <i>Time Limit Exceeded</i>, <i>Memory Limit Exceeded</i>, <i>Runtime Error</i>, <i>Compilation Error</i>). The class sets the score, the penalty and the color on the scoreboard. The third field is the text the team sees. Leave the third field empty to show the class. Change the list here and every judge sees the new list."><b>🏷️ Opções</b> — a lista de veredictos que os juízes podem votar. Cada opção tem três campos. O primeiro campo é o texto que o juiz vê. O segundo campo é a classe: uma das seis classes canônicas (<i>Accepted</i>, <i>Wrong Answer</i>, <i>Time Limit Exceeded</i>, <i>Memory Limit Exceeded</i>, <i>Runtime Error</i>, <i>Compilation Error</i>). A classe define a pontuação, a penalidade e a cor no placar. O terceiro campo é o texto que o time vê. Deixe o terceiro campo vazio para mostrar a classe. Mude a lista aqui e todos os juízes veem a lista nova.</li>
+          <li data-en-html="<b>🔎 What to review</b> — a table: one row per problem (letter and title), one column per verdict (AC, WA, TLE, MLE, RTE, CE). <b>Check what the judges review</b>; whatever is not checked goes to the team automatically, straight from the machine. With nothing checked, everything is automatic (only judge errors go to the queue). The <i>All problems</i> row checks a whole column and the box next to each problem checks its row. A common setup: leave <i>Compilation Error</i> automatic (it needs no human judgement and floods the queue in the first minutes) and review <i>Time Limit Exceeded</i>. The per-language exceptions (collapsed) apply to one language and override the table — e.g. <i>Python · TLE · goes to review</i>. If you change the table during the contest and there are held submissions that would now be automatic (no vote, no conflict), the screen offers <b>Release now</b> — it never releases on its own."><b>🔎 O que revisar</b> — uma tabela: uma linha por problema (letra e título), uma coluna por veredicto (AC, WA, TLE, MLE, RTE, CE). <b>Marque o que os juízes revisam</b>; o que não estiver marcado sai para o time automaticamente, direto da máquina. Sem nada marcado, tudo sai automático (só erro do juiz vai para a fila). A linha <i>Todos os problemas</i> marca uma coluna inteira, e a caixa ao lado de cada problema marca a linha. Um uso comum: deixar <i>Compilation Error</i> automático (não precisa de julgamento humano e entope a fila nos primeiros minutos) e revisar <i>Time Limit Exceeded</i>. As exceções por linguagem (recolhidas) valem para uma linguagem e vencem a tabela — por exemplo, <i>Python · TLE · vai para revisão</i>. Se você mudar a tabela durante a prova e houver submissões retidas que agora sairiam automáticas (sem voto e sem conflito), a tela oferece <b>Liberar agora</b> — ela nunca libera sozinha.</li>
         </ul>
         <div class="warn" data-en-html="Turning the manual verdict itself ON or OFF, and choosing how many judges are needed, belongs to the administrator — not to you. When they turn it OFF, MOJ releases the leftovers nobody had contested (with the machine verdict) and <b>leaves you the ones with a vote or in conflict</b>: those stay in Situação for you to decide, one by one.">
           Ligar ou desligar o veredicto manual, e escolher de quantos juízes ele precisa, é do
@@ -168,8 +168,19 @@
           <tr><td data-en="Rejudge in bulk">Rejulgar em lote</td><td data-en="The checkboxes in All submissions are yours only — pick several and re-run them.">Os checkboxes de Todas Submissões são só seus — marque várias e mande rodar de novo.</td></tr>
           <tr><td data-en="Rejudge">Rejulgar</td><td data-en="Re-run submissions after fixing a test or a checker.">Rodar de novo as submissões depois de corrigir um teste ou um corretor.</td></tr>
           <tr><td data-en="Edit answers and news">Editar respostas e notícias</td><td data-en="Fix a clarification already answered, or a news item already sent.">Corrigir uma clarification já respondida, ou uma notícia já enviada.</td></tr>
+          <tr><td data-en="Run jplag">Rodar o jplag</td><td data-en="The jplag link in the bar opens the similarity page. You can run the analysis and see the pairs with the team name. Pick the problem, the language and the threshold to find the pairs.">O link jplag na barra abre a página de similaridade. Você pode rodar a análise e ver os pares com o nome do time. Escolha o problema, a linguagem e o limiar para achar os pares.</td></tr>
           <tr><td data-en="Documents">Documentos</td><td data-en="Generate and publish the contest documents — including the ones not published yet, which judges cannot see.">Gerar e publicar os documentos da prova — inclusive os não publicados, que os juízes não veem.</td></tr>
+          <tr><td data-en="Statement languages">Idiomas do enunciado</td><td data-en="The 🌐 Languages tab of your panel. Automatic (default): each problem offers every language it has. Only these languages: check the list (Portuguese, English, Spanish); PT alone = Portuguese-only contest. The table shows which translations exist for each problem. An offered language without a translation in a problem shows Portuguese for that problem. The admin has the same panel.">A aba 🌐 Idiomas do seu painel. Automático (padrão): cada problema oferece todos os idiomas que tem. Só estes idiomas: marque a lista (português, inglês, espanhol); só PT = prova só em português. A tabela mostra quais traduções existem em cada problema. Um idioma oferecido sem tradução em um problema mostra o português nesse problema. O admin tem o mesmo painel.</td></tr>
         </table>
+
+        <figure class="shot">
+          <img src="/contest/ajuda/img/cjudge-idiomas.png" alt="">
+          <figcaption data-en="The 🌐 Languages tab: Automatic (the default — each problem offers every language it has) or Only these languages (a fixed list; PT alone makes a Portuguese-only contest), and the table of which translations exist per problem.">
+            A aba 🌐 Idiomas: Automático (o padrão — cada problema oferece todos os idiomas que tem)
+            ou Só estes idiomas (lista fixa; só PT faz uma prova só em português), e a tabela de
+            quais traduções existem em cada problema.
+          </figcaption>
+        </figure>
 
         <h3 data-en="All submissions, with names">Todas Submissões, com nomes</h3>
         <figure class="shot">
@@ -207,22 +218,24 @@
         <h3 data-en="Fixing a clarification already answered">Consertar uma clarification já respondida</h3>
         <figure class="shot">
           <img src="/contest/ajuda/img/cjudge-clarification.png" alt="">
-          <figcaption data-en="The same clarifications screen the judges use, but each answered question carries an extra line: &quot;✎ edit answer (chief judge)&quot;. Opening it brings the current text back for editing, and the button becomes &quot;Save edit (chief)&quot;.">
-            A mesma tela de clarifications que os juízes usam, mas cada pergunta respondida ganha
-            uma linha a mais: <b>✎ editar resposta (juiz-chefe)</b>. Abrindo, o texto atual volta
-            para edição e o botão vira <i>Save edit (chief)</i>.
+          <figcaption data-en="The same clarifications screen the judges use. Each answered question has one extra line: &quot;✎ edit answer (chief judge/admin)&quot;. Open it to edit the current text. The button becomes &quot;Save edit&quot;. You also see the login and the name of the team that asked.">
+            A mesma tela de clarifications que os juízes usam. Cada pergunta respondida tem uma
+            linha a mais: <b>✎ editar resposta (juiz-chefe/admin)</b>. Abra a linha para editar o
+            texto atual. O botão vira <i>Salvar edição</i>. Você também vê o login e o nome do time
+            que perguntou.
           </figcaption>
         </figure>
-        <p data-en-html="A judge cannot touch an answer once it is sent — on purpose. You can, and this is the escape hatch for the classic accident: an answer that went out wrong, or went out <b>private</b> when it should have been <b>public</b>. Fix the text, tick <b>pública</b> and save; the teams see the corrected version.">
-          Um juiz não mexe numa resposta depois de enviada — de propósito. Você mexe, e esta é a
-          saída para o acidente clássico: uma resposta que saiu errada, ou que saiu
-          <b>privada</b> quando devia ser <b>pública</b>. Corrija o texto, marque <b>pública</b> e
-          salve; os times passam a ver a versão corrigida.
+        <p data-en-html="A judge cannot edit an answer after sending it. You can. Use this for the classic accident: an answer that went out wrong, or went out <b>private</b> when it had to be <b>public</b>. Fix the text, check <b>public</b> and save. The teams see the corrected version.">
+          Um juiz não edita uma resposta depois de enviar. Você edita. Use isso para o acidente
+          clássico: uma resposta que saiu errada, ou que saiu <b>privada</b> quando tinha de ser
+          <b>pública</b>. Corrija o texto, marque <b>pública</b> e salve. Os times veem a versão
+          corrigida.
         </p>
-        <div class="tip" data-en-html="If a judge reserved a question and left the room, not even you answer over it: the reservation applies to everyone and expires by itself in <b>5 minutes</b>. Wait it out (or ask them to release it) and the question is free again.">
-          Se um juiz reservou uma pergunta e saiu da sala, nem você responde por cima: a reserva
-          vale para todos e expira sozinha em <b>5 minutos</b>. Espere o tempo passar (ou peça a
-          ele para liberar) e a pergunta volta a ficar livre.
+        <div class="tip" data-en-html="A reserved question belongs to the judge who reserved it. You cannot reserve it or answer it. The reservation expires by itself in <b>5 minutes</b>. If the judge left the room, click <b>⚠ Release reservation of &lt;judge&gt;</b> and confirm. The question becomes free again. The audit log records the release.">
+          Uma pergunta reservada pertence ao juiz que a reservou. Você não a reserva nem a
+          responde. A reserva expira sozinha em <b>5 minutos</b>. Se o juiz saiu da sala, clique em
+          <b>⚠ Liberar reserva de &lt;juiz&gt;</b> e confirme. A pergunta volta a ficar livre. A
+          auditoria registra a liberação.
         </div>
 
         <h3 data-en="Publishing news">Publicar notícia</h3>
@@ -248,7 +261,7 @@
         </figure>
         <table class="cheat">
           <tr><th data-en="Document">Documento</th><th data-en="What it is">O que é</th></tr>
-          <tr><td data-en="Environment info">Informações do ambiente</td><td data-en="Compilers, memory/time limits and accepted languages — what the team needs to know about the machine.">Compiladores, limites de memória/tempo e linguagens aceitas — o que o time precisa saber da máquina.</td></tr>
+          <tr><td data-en="Judging environment">Ambiente de julgamento</td><td data-en="Compilers, memory/time limits and accepted languages — what the team needs to know about the machine.">Compiladores, limites de memória/tempo e linguagens aceitas — o que o time precisa saber da máquina.</td></tr>
           <tr><td data-en="Problem set">Caderno da prova</td><td data-en="Cover + all statements, the booklet that gets printed.">Capa + todos os enunciados, o caderno que vai para a impressora.</td></tr>
           <tr><td data-en="Time limits sheet">Folha de time limits</td><td data-en="Letter · name · time limit, plus the errata.">Letra · nome · tempo limite, mais a errata.</td></tr>
           <tr><td>Editorial</td><td data-en="The solution to each problem. Generate and review whenever you like — but it only PUBLISHES after the contest ends for every site.">A solução de cada problema. Gere e revise quando quiser — mas ele só PUBLICA depois que a prova termina para todas as sedes.</td></tr>
@@ -270,11 +283,11 @@
         </div>
 
 <h2 id="aquecimento" data-en="9. The warm-up is the rehearsal of the judging desk">9. O aquecimento é o ensaio da mesa</h2>
-        <p data-en-html="The <b>warm-up</b> — the short round before the contest, at the same address — is the only moment when the whole judging desk runs with real submissions and nothing is at stake. It is where you check what only you can change: how many judges a verdict needs, which verdicts the auto-verdict matrix releases on its own, and whether the conflict alarm actually reaches you. A conflict that nobody sees in the warm-up is a conflict nobody will see in the contest either.">
+        <p data-en-html="The <b>warm-up</b> — the short round before the contest, at the same address — is the only moment when the whole judging desk runs with real submissions and nothing is at stake. It is where you check what only you can change: how many judges a verdict needs, which verdicts go to review (the rest goes out on its own), and whether the conflict alarm actually reaches you. A conflict that nobody sees in the warm-up is a conflict nobody will see in the contest either.">
           O <b>aquecimento</b> — a rodada curta antes da prova, no mesmo endereço — é o único
           momento em que a mesa inteira roda com submissões de verdade e nada em jogo. É ali que
-          você confere o que só você muda: quantos juízes um veredicto exige, quais veredictos a
-          matriz de auto-veredicto libera sozinha, e se o alarme de conflito chega mesmo até
+          você confere o que só você muda: quantos juízes um veredicto exige, quais veredictos
+          vão para revisão (o resto sai sozinho), e se o alarme de conflito chega mesmo até
           você. Conflito que ninguém vê no aquecimento é conflito que ninguém verá na prova.
         </p>
         <p data-en-html="It is also where you watch the queue drain — because <b>the promotion to the official round is refused</b> while there is an item without a released verdict, a job in flight or a pending verdict in the history. The panel's <b>📊 Status</b> tab is the screen that tells you when the desk is clean enough for the organizers to switch rounds.">
@@ -314,5 +327,6 @@
   </main>
 
   <script type="module" src="/shared/i18n-dom.js"></script>
+  <script type="module" src="/contest/ajuda/_tutorial.js"></script>
 </body>
 </html>

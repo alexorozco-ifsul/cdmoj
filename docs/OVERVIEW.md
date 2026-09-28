@@ -6,7 +6,7 @@ frontend estático modular, lendo o **mesmo `contests/<id>/`** de sempre (sem mi
 
 > Fluxo de submissão/julgamento e como os daemons conversam: ver **[FLOW.md](FLOW.md)**.
 > Contrato de rotas: **[API.md](API.md)** (+ `web/api/openapi.json`). Formato do pacote de problema
-> (orgs, coleções, metadados): **[PACOTE.md](PACOTE.md)**. Placar: **[SCOREBOARD.md](SCOREBOARD.md)**.
+> (orgs, coleções, metadados): **[PACOTE.md](PACOTE.md)**. Placar: **[SCOREBOARD.md](SCOREBOARD.md)**. Participação virtual (refazer contest encerrado): **[VIRTUAL.md](VIRTUAL.md)**.
 > Deploy: **[DEPLOY.md](DEPLOY.md)**. Plano original: **[PLAN.md](PLAN.md)**.
 
 > **Convenção de commit:** mensagens em português, no presente, prefixadas pelo componente
@@ -142,9 +142,11 @@ os juízes** (`handlers/judge/**` — o juiz baixa o pacote e devolve TL/veredic
 
 **Contest e treino ficam do lado de fora**: respondem do que o servidor já materializou — o índice
 de donos (`contests/treino/var/problem-owners.json`), o json servível
-(`var/jsons{,-private}/<id>.json`, que já traz enunciado renderizado, autor completo, tags,
-linguagens e o TL com `TLOVERRIDE` aplicado), o `run/tl/`, e os enunciados do próprio contest
-(`contests/<c>/enunciados/`). Rota de prova não abre pacote por três motivos: **latência** (é I/O
+(`var/jsons{,-private}/<id>.json`, que já traz enunciado renderizado — em cada idioma do pacote,
+`statement_langs` + `statements{<lang>}` —, autor completo, tags, linguagens e o TL com
+`TLOVERRIDE` aplicado), o `run/tl/`, e os enunciados do próprio contest
+(`contests/<c>/enunciados/<skey>[.<lang>].html|pdf`; conf `STATEMENT_LANGS` ausente = automático — cada
+problema oferece o que tem —, ou lista fixa escolhida pelo admin/chefe; lib `contest-statement.sh`). Rota de prova não abre pacote por três motivos: **latência** (é I/O
 de gigabytes no caminho mais polado do dia), **contenção** (autores commitam durante a prova) e
 **acoplamento** ao formato interno, que é da gestão e muda por conta dela.
 
@@ -173,7 +175,16 @@ só agregados (sem logins, sem nomes de contests) — não vaza prova privada.
   (`pkg/.calib-sols.json`) que o juiz sobe no `/judge/calib-report` e o `GET /problems/calib`
   serve por host: `[{file,lang,category,verdict,tests:[{name,code,time,tl}]}]` — o **mesmo**
   formato do vetor `tests` de uma submissão. O editor o renderiza no cartão de cada juiz, e a CLI
-  o entrega cru (`moj calib --json`) para ferramentas externas.
+  o entrega cru (`moj calib --json`) para ferramentas externas. **O juízo "a solução fez o que a
+  categoria pede?" é do SERVIDOR** (`lib/calib-expect.sh`, 2026-09-24): pelos códigos de cada teste
+  contra o TL efetivo, cada solução ganha `expect` (✓ conforme · ≈ outro motivo · ✗ divergente ·
+  ✗ não rodou) e o `/judge/calib-report` grava um sumário por problema (`run/calib-sum/<id>.json` +
+  o mapa `run/calib-summary.json`, upsert por evento; o `problem_commit` o marca velho quando o
+  pacote muda em `sols/ tests/ scripts/ conf`). O Painel (`/problems/status`) lê dali as colunas
+  **Soluções** e **Entradas** e o estado **pronto** (`ready` + `pending`); "Validado" virou
+  **Pacote**, porque é só a conferência estática. Tabela das regras: `PACOTE.md` §10. **Issues por
+  problema** (`/problems/issues`, `lib/problem-issues.sh`): a revisão da banca, fora do pacote
+  (`contests/treino/var/problem-issues/`); issue aberta é pendência do "pronto".
 - **`TLOVERRIDE[<lang>|default]` no conf do PACOTE**: o autor decide o TL na marra. O efetivo
   (`override[lang] // override[default] // calibrado`) vence **no julgamento** (o juiz aplica
   depois dos `TLMOD`) e em **toda exibição** (treino, contest, folha de TL, `/problems/tl`, que
@@ -266,7 +277,8 @@ vai com `group:false` p/ não vazar no grupo e `loud:true` p/ notificar) — é 
 (`lib/invite-notify.sh`; o poll do bot continua sendo o relógio, agora com stamp próprio).
 E carrega também a mensagem **só para o grupo** (`alert_group`: `chats:[]` + `group:true`) — é
 por ela que sai o **relatório de quartil** (`lib/relatorio.sh` + `POST /ops/relatorio`, comando
-`/relatorio` do bot, gate `.admin` pelo `telegram_id`): top-10 de contests por submissões no
+`/relatorio` do bot, gate `.admin` pelo `telegram_id`; destino = o grupo registrado por
+`/relatorio aqui`, entrega confirmada por ack do bot — `sent` só marca depois de entregue): top-10 de contests por submissões no
 semestre + treino + comparações com o ano anterior, automático ao vencer cada quartil.
 
 ### Criação de contest (`/treino/criar/`) — wizard multi-etapa
@@ -329,16 +341,22 @@ tem **prorrogação por sede/grupo** (`time-overrides.json`, regras regex no log
 `lib/contest-gate.sh` vale no `/submit` e no countdown do `/contest/basic` autenticado; editável
 na aba Configurações do admin e por `moj-contest extend --group`, auditado). Telas internas:
 
-- **`/contest/admin/`** — o painel do organizador. O `admin.js` é só o **SHELL** (~130 linhas):
-  **4 grupos** (🏁 Central · 🧩 Prova · 👥 Pessoas · 🎛️ Operação) × painéis, hash `#grupo/painel`,
-  `ALIAS` de TODOS os hashes antigos das 13 abas planas (`#settings`→`central/regras`,
-  `#log`→`pessoas/sessoes`, `#backups`→`operacao/auditoria`, …) e a guarda de admin. Cada painel é
+- **`/contest/admin/`** — o painel do organizador. O `admin.js` é só o **SHELL**; a navegação
+  vive em **`nav.js`** (puro, testável): **4 grupos comuns** (🏁 Central · 🧩 Prova · 👥 Pessoas ·
+  🎛️ Operação) sempre, e os grupos de EVENTO (🏟️ Evento · 🖥️ Máquinas) só quando o contest liga
+  o **MÓDULO** correspondente (`basic.modules` ← `CONTEST_MODULES` do conf; catálogo em
+  `lib/modules.sh` ⇄ `modules.js`; painel **Central › Módulos**; spec de criação `modules{}`).
+  Hash `#grupo/painel` resolve pelo id do painel em qualquer grupo visível; `ALIAS` cobre TODOS os
+  hashes antigos (13 abas planas E os 4 grupos de agosto: `#settings`→`central/regras`,
+  `#pessoas/maquinas`→`maquinas/gate`, `#prova/rodadas`→`evento/rodadas`, …); painel de módulo
+  desligado cai em Central › Módulos com aviso. Cada painel é
   um módulo `web/contest/admin/<nome>-tab.js` com o MESMO contrato **`{panel, load}`** — construído
   uma vez e só escondido (mantém filtros e timers), e reusável fora do painel (o `chief.js` monta
   Documentos e Rodadas assim). Helpers comuns (CSV, download autenticado, formatação, `field/chk`)
   em **`shared/admin-ui.js`**. A **🏁 Central** é a porta de entrada: *Falta para começar* (o
   `preflight` como lista ACIONÁVEL — cada item com botão que abre o painel exato, mapa `id→painel`
-  no front), *Gerar* (cartões dos artefatos com o estado atual), *Ao vivo* (resumo do `dashboard`,
+  no front; o item `judges_warm` mostra juiz a juiz quem ainda não calibrou cada problema e traz o
+  botão **🔥 Aquecer juízes**, `POST /contest/admin/warm-judges`), *Gerar* (cartões dos artefatos com o estado atual), *Ao vivo* (resumo do `dashboard`,
   o único bloco com auto-refresh — re-renderiza só ele p/ não apagar o que está sendo digitado) e
   *Regras da prova* (janela/freeze inline). Os painéis:
   **👥 Times** (gerência POR-USUÁRIO da identidade dos times — **o NOME é campo único:
@@ -387,7 +405,13 @@ na aba Configurações do admin e por `moj-contest extend --group`, auditado). T
   prova). O arquivo `rounds/<slug>/` guarda tudo p/ auditoria — inclusive o **site estático do
   `report-gen`**, que segue navegável em `/contest/round` (publicável p/ os times) — e o `.seq`
   da impressão, os balões e a prorrogação por sede voltam ao zero. Config (contas, senhas,
-  sedes, `staff-filters.json`, cores, TL, templates de documento) **sobrevive**);
+  sedes, `staff-filters.json`, cores, TL, templates de documento) **sobrevive**. Uma rodada
+  pode ter `colors` próprias (formato do `balloons.json`): entram no ar na promoção via
+  `cc_balloons_write`, o escritor único de cores; sem `colors` herda. A guarda de problema da
+  rodada é `problems_denied_for` (dono do contest: público/dono/colaborador/org), a mesma de
+  Prova › Problemas e do wizard. Descongelar o placar — por qualquer caminho: `settings`,
+  `config`, `finish`, promoção — só a partir de `freeze_release_at` = fim geral + 60 s
+  (`lib/contest-gate.sh`; 409 `freeze_locked`, e o `force` da promoção não passa));
   **Coortes** (`lib/cohorts.sh` + `handlers/contest/admin/cohorts.sh` — times oficiais ×
   **CONVIDADOS** (extra-oficiais/"CCL"): coorte privada não entra no placar público nem no
   `/contest/teams`, os regulares não sabem que ela existe, os convidados veem todos, e `release`
@@ -436,18 +460,51 @@ na aba Configurações do admin e por `moj-contest extend --group`, auditado). T
 - **`/contest/statistics/`** — estatísticas ricas (totais, por problema, quartis, distribuição,
   tentativas, veredicto×problema, balões, linha do tempo).
 - **`/contest/clarification/`** — perguntas (por problema/geral); admin/judge/mon respondem
-  (pública/privada) e publicam **notícias do contest**. O **asker é anônimo** p/ os juízes
-  (tratamento isonômico; recuperável só pelo admin via auditoria); responder exige **reserva**
-  (`clarification-claim`, TTL 5 min) p/ dois juízes não pegarem a mesma; o juiz manda **aviso
-  oficial** (Q+A público, autor oculto) e o **juiz-chefe/admin** editam respostas/notícias já dadas.
+  (pública/privada) e publicam **notícias do contest**. O **asker é anônimo** p/ `.judge`/`.mon`
+  (tratamento isonômico); o **juiz-chefe/admin veem login + nome** (`asker_name`; o relatório
+  público segue anônimo). Responder exige **reserva** (`clarification-claim`, TTL 5 min) p/ dois
+  juízes não pegarem a mesma — **ninguém reserva por cima de outro**; o chefe/admin só LIBERA a
+  reserva alheia com botão próprio + confirmação (`force:true`, auditado). O juiz manda **aviso
+  oficial** (texto público com assunto opcional, autor oculto) e o **juiz-chefe/admin** editam
+  respostas/notícias já dadas. A página separa **abertas** (fila, mais antiga primeiro) de
+  **respondidas + avisos**, repolá a cada 30 s em lugar e preserva quebras de linha.
 - **`/contest/judge/`** — área de **avaliação**. **`/contest/jplag/`** — similaridade das
-  soluções aceitas (roda o jar, mostra pares + comparação lado-a-lado).
+  soluções aceitas (roda o jar, mostra pares + comparação lado-a-lado). Abre p/ juiz (só vê,
+  pares com login), chefe e admin (rodam; `can_run`). A tela filtra por problema, linguagem e
+  **limiar** de similaridade (default 50 %, persistido por contest) e atualiza em lugar; o runner
+  tem `flock` (429 `busy`).
 - **`/contest/chief/`** — **painel do juiz-chefe (`.cjudge`)** e do admin: **Situação** da
   avaliação usa o **mesmo board** da aba "Tarefas do judge" do admin (`shared/review-board.js`:
   cards, fila completa com idade/quem pegou/votos, ação Decidir/Resolver e desempenho por juiz,
   via `review/{list,stats,resolve}`), **Conflitos** e a config do veredicto manual (opções +
   matriz). O **alerta de conflito** (banner + bip) é **global** (`shared/chief-alert.js`): segue o
   chief/admin em **qualquer página** do contest e abre a fila já filtrada em conflitos.
+
+### Telão: o MOJ alimenta o Animeitor pela API (`docs/ANIMEITOR.md`)
+O sistema do telão (Animeitor 2.1.0) deixou de puxar o zip no protocolo do BOCA (`docs/WEBCAST.md`, legado): agora
+**o MOJ empurra**. A **chave do MOJ** (`run/secrets/animeitor.cred`) vale p/ todo contest no servidor padrão —
+nada a configurar, e ela nunca aparece na tela; o `.animeitor` pode gravar uma própria (`secrets/animeitor.cred` do
+contest), que vence. Com a credencial compartilhada, o registro `run/animeitor/events.json` é quem diz de qual contest é
+cada evento. O `.animeitor` revisa os **placares** (geral,
+coortes, países) e as **sedes** que o MOJ deriva de `cohorts.json`/`regions.json` e **publica** (`lib/animeitor.sh`:
+POST e, no 409, PATCH — nunca PUT, que trocaria os links de revelação). Um processo à parte,
+`daemons/animeitor-feed.sh`, manda o **relógio a cada 1 s** (o servidor do telão não o avança sozinho) e as
+**submissões a cada 2 s** (só o delta, id inteiro estável por submissão) — fora do caminho do julgamento. As respostas
+vão sempre reais; quem congela e revela é o Animeitor. `score/telao-runs.sh` é a fonte única das runs p/ os dois
+caminhos (API e pacote BOCA). O MOJ também **CONFERE** se o Animeitor tem todas as submissões: sede a sede, pela rota
+pública `runs_secret` (com a chave de cada sede, tirada do link de revelação), reenviando o que faltar ou divergir —
+o alimentador confere durante a prova e, com a prova encerrada p/ todas as sedes e nada pendente, faz a conferência
+FINAL, o **"validado"** que o reveleitor da sede mostra.
+
+### Máquinas mlinux: integração NutellaBoot 3 (`docs/NUTELLABOOT.md`)
+O serviço que boota as máquinas da prova (uma **site-image** por sede) conversa com o MOJ nos DOIS sentidos.
+**MOJ → serviço** (`lib/nutella.sh`, chave em `secrets/`): o coletor `score/nutella-gen.sh` baixa máquinas e
+séries (em lote, 1 request por sede) e agrega por sede → `var/nutella.cache.json` (hardware, editores, pressão
+com PSI, saúde na prova), servido por `/contest/nutella` e embutido no relatório; comandos remotos por sede; e o
+**login publica o elo máquina↔time** (`lib/nutella-bind.sh`: fila + drenador destacado — o UA do agente novo
+traz o MAC). **Serviço → MOJ**: webhooks de alerta assinados por HMAC em `POST /hooks/nutella` (a única rota sem
+Bearer que escreve; 401 opaco) → `var/nutella-events.log` → Máquinas › Anomalias + Telegram ao dono durante a
+prova. Tudo atrás do módulo `maquinas`; nada disso está no caminho do julgamento.
 
 ### Juiz `.judge`, juiz-chefe `.cjudge` & veredicto manual
 **Papéis** (sufixo no login; ver `lib/auth.sh`): `.judge` submete a qualquer hora (fora do
@@ -459,15 +516,19 @@ sufixo (auth/score-common/stats-gen/login) p/ ficar fora do placar e isento da j
 
 **Veredicto manual** (opt-in por contest, `MANUAL_VERDICT`): quando ligado, o **daemon segura** o
 veredicto computado p/ revisão humana — grava `contests/<c>/review/<id>.json` e deixa o history
-provisório (o aluno segue vendo "julgando"); a exceção é a **matriz `auto-verdicts.json`**
-(problema × linguagem × veredicto, editável por admin/chief) que libera combinações automáticas. O
-casamento da matriz é pelo **veredicto canônico** (`verdict_canon`, **sem** o sufixo de score `,Np`
+provisório (o aluno segue vendo "julgando") — mas só o que **`auto-verdicts.json`** manda p/ revisão:
+desde 25/09/2026 a regra é **OPT-OUT** (`lib/review-rules.sh`: grade problema × classe + exceções por
+linguagem, editável por admin/chief na tela "🔎 O que vai para revisão"; sem arquivo, tudo sai
+automático; o formato anterior, opt-in, segue valendo até ser salvo de novo; o `ingest-drain.py` espelha
+a regra em Python). O casamento é pelo **veredicto canônico** (`verdict_canon`, **sem** o sufixo de score `,Np`
 que o juiz embute), e **erros de juiz** (`Judge Error`/`No_Servers`) **também são segurados** — o
 competidor vê só `Not Answered Yet` (nenhuma mensagem de erro vaza); o juiz vê o erro no painel e
 re-julga.
 Dois `.judge` **pegam** a submissão (máx 2, **1 ativa** por juiz, **TTL 5 min** com **+5**, ou
 **desistir**), veem **log + fonte + veredicto computado** (a tela **não recarrega** enquanto se avalia)
-e escolhem um veredicto de uma **lista configurável** (`final-verdicts.json`, `{label,verdict}`;
+e escolhem um veredicto de uma **lista configurável** (`final-verdicts.json`, `{label, verdict,
+team}` — rótulo do juiz, CLASSE canônica das 6 que pontua/penaliza, e o texto que o TIME vê; o
+history guarda `classe¦team` e `lib/verdict.sh` separa `canon` (classe) de `canon_team` (texto);
 default = as 6: 1-YES…6-Contact staff). O **voto é permanente e libera o juiz** na hora (ele já pode
 pegar outra submissão). **N votos unânimes → vai ao aluno**; **diferentes → conflito**, que **só o
 juiz-chefe resolve** (avisado pelo **alerta global** de conflito em qualquer página). A liberação enfileira `setverdict`, consumido pelo daemon e finalizado pelo
@@ -525,12 +586,12 @@ auto-verdicts-set`, `review-claim/extend/giveup/vote/agree/conflict/resolve`, `v
   - **Chefe de sede (`.cstaff`)**: papel de supervisão da sede. Usa a **mesma página** da fila em
     modo **somente leitura** (acompanha o escopo dele; sem pegar/imprimir/entregar — a API corta
     `print-action`/`print-pdf`/`print-file` com 403) e é o **único papel além do admin** que vê as
-    **🏷️ Etiquetas de credenciais** (`/contest/badges`, senha **sempre** presente — o `.staff`
+    **Etiquetas de credenciais** (`/contest/badges`, senha **sempre** presente — o `.staff`
     perdeu o acesso e o antigo toggle `staff_password` foi extinto). Vê o placar **congelado** como
     usuário normal (admin libera o completo via `SCORE_FULL_USERS`) e, pós-fim p/ todas as sedes,
     abre a **cerimônia de revelação da sede** (navbutton 🏆). O escopo (mesmo `staff-filters.json`,
     entradas `region:<nome>`/regex) governa fila, etiquetas e cerimônia — **configure-o sempre**
-    (vazio = vê tudo, inclusive todas as senhas). Baixa também os **📄 Documentos publicados**
+    (vazio = vê tudo, inclusive todas as senhas). Baixa também os **Documentos publicados**
     da prova (`/contest/docs/`) para imprimir na sede.
 
 - **`/contest/docs/`** — **Documentos da prova (só-leitura)**: a mesma aba do admin em modo

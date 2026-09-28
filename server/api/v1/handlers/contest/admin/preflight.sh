@@ -3,7 +3,9 @@
 # surpresa e devolve verde/amarelo/vermelho por item — janela, SHOWLOG (anti-vazamento de
 # testes em icpc), freeze, juízes online, toolchain das linguagens permitidas, TL calibrado
 # de cada problema (+ cache nos juízes online), staff de impressão, contas, spool travado.
-# -> {checks:[{id,level:ok|warn|fail,label,detail}], summary:{ok,warn,fail}}
+# -> {checks:[{id,level:ok|warn|fail,label,detail[,label_en,detail_en][,action]}], summary:{ok,warn,fail}}
+#    label/detail em PT (legado); item com `label_en`/`detail_en` é bilíngue na Central. `action` = o
+#    botão que a Central põe no item (hoje: "warm_judges" → POST /contest/admin/warm-judges).
 contest="$(param contest)"
 [[ -n "$contest" ]] || fail 400 "Missing contest" "contest_missing"
 require_contest "$contest"
@@ -11,7 +13,9 @@ require_auth_contest "$contest"
 is_admin_or_chief || fail 403 "Apenas o admin ou o juiz-chefe" "admin_required"
 source "$_DIR/../../judge-gw/sched-lib.sh"
 source "$_DIR/lib/tl-store.sh"
+source "$_DIR/lib/judge-warm.sh"      # juiz quente × frio por problema (item judges_warm)
 source "$_LIBDIR/contest-gate.sh"
+source "$_LIBDIR/langs.sh"          # lang_canon_ext (cc/cxx/c++ = cpp, py3 = py) p/ a whitelist
 
 now="$EPOCHSECONDS"
 cdir="$CONTESTSDIR/$contest"
@@ -20,12 +24,31 @@ add(){ # add <id> <level> <label> <detail>
   CHECKS="$(jq -c --arg i "$1" --arg lv "$2" --arg lb "$3" --arg d "$4" \
     '. + [{id:$i, level:$lv, label:$lb, detail:$d}]' <<<"$CHECKS")"
 }
+add2(){ # add2 <id> <level> <label> <detail> <label_en> <detail_en> [action] — item BILÍNGUE (+ botão)
+  CHECKS="$(jq -c --arg i "$1" --arg lv "$2" --arg lb "$3" --arg d "$4" --arg le "$5" --arg de "$6" --arg a "${7:-}" \
+    '. + [{id:$i, level:$lv, label:$lb, detail:$d, label_en:$le, detail_en:$de} + (if $a == "" then {} else {action:$a} end)]' <<<"$CHECKS")"
+}
 
 # conf num subshell-safe: só os campos que precisamos
 CONTEST_TYPE=""; CONTEST_START=0; CONTEST_END=0; FREEZE_TIME=""; LANGUAGES=""
-SHOWCODE=0; PRINT=""; MANUAL_VERDICT=""; PROBS=(); CONTEST_JUDGES=""; DEMO=""
+PRINT=""; MANUAL_VERDICT=""; REVIEW_JUDGES=""; PROBS=(); CONTEST_JUDGES=""; DEMO=""
 load_contest_conf "$contest"
 mode="$(contest_score_mode "$contest")"
+# MÓDULOS (lib/modules.sh): checagem de feature de evento só roda com o módulo LIGADO — contest
+# sem o módulo não ganha aviso eterno sobre coisa que não usa. Feature configurada com módulo
+# desligado vira UM aviso (`modules`, abaixo), que aponta p/ Central › Módulos.
+_mods_off_with_data=""
+for _m in "${MODULES[@]}"; do
+  mod_on "$contest" "$_m" && continue
+  _r="$(mod_detect "$contest" "$_m")" && _mods_off_with_data="${_mods_off_with_data:+$_mods_off_with_data, }$_m ($_r)"
+done
+if [[ -n "$_mods_off_with_data" ]]; then
+  add modules warn "Módulo desligado com dados existentes" "$_mods_off_with_data — se a prova usa isso, ligue em Central › Módulos (desligado só esconde os painéis; nada foi apagado)"
+elif mod_any "$contest"; then
+  add modules ok "Módulos ligados" "$(mod_raw "$contest" | tr ',' ' ')"
+else
+  add modules ok "Sem módulos de evento" "só o básico (problemas, contas, placar); ligue módulos em Central › Módulos quando precisar"
+fi
 
 # --- demonstração -----------------------------------------------------------
 # Contest de demo é indistinguível de uma prova de verdade na tela do admin — e ele aceita
@@ -49,11 +72,6 @@ else
   lv=warn; [[ "$mode" == icpc ]] && lv=fail
   add show_log "$lv" "Log de julgamento VISÍVEL" "o report.html expõe input+diff de TODOS os testes — desligue em Configurações (show_log)"
 fi
-if [[ "${SHOWCODE:-0}" == 1 ]]; then
-  add show_code warn "Código das submissões PÚBLICO" "show_code ligado: qualquer um vê o fonte dos outros"
-else
-  add show_code ok "Código das submissões restrito" "só dono/juiz/admin"
-fi
 
 # --- freeze -------------------------------------------------------------------
 fz="${FREEZE_TIME:-0}"; [[ "$fz" =~ ^[0-9]+$ ]] || fz=0
@@ -68,7 +86,7 @@ fi
 # --- balão × freeze -----------------------------------------------------------
 # Só faz sentido com freeze configurado. Nunca `fail`: as duas políticas são legítimas — a
 # padrão (retém) protege o placar congelado, e liberar é escolha deliberada do admin.
-if (( fz > 0 )); then
+if (( fz > 0 )) && mod_on "$contest" baloes; then   # módulo baloes
   bdf=0; grep -qE '^[[:space:]]*BALLOONS_DURING_FREEZE=1?\b' "$cdir/conf" 2>/dev/null && bdf=1
   nfz=0
   if [[ -f "$cdir/print-requests/.balloon-frozen" ]]; then
@@ -86,7 +104,9 @@ fi
 # --- juízes online + linguagens ------------------------------------------------
 judges="$( { find "$REGISTRYDIR" -maxdepth 1 -name '*.json' 2>/dev/null | while IFS= read -r jf; do
       jq -c --argjson now "$now" --argjson ttl "$REG_TTL" \
-        'select((.last_seen//0) >= ($now-$ttl)) | {host, langs:(.langs//[]), problems:(.problems//{})}' \
+        'select((.last_seen//0) >= ($now-$ttl)) | {host, langs:(.langs//[]), problems:(.problems//{}),
+          cpus:(if ((.slot_cpus // 0) >= 1) then ((.total_slots // 1) * .slot_cpus) else 0 end),
+          node_cpus:(if ((.slot_cpus // 0) >= 1) then ((((.slots_by_node // {}) | [.[]] | max) // (.total_slots // 1)) * .slot_cpus) else 0 end)}' \
         "$jf" 2>/dev/null
     done; } | jq -cs '.')"
 [[ -n "$judges" ]] || judges='[]'
@@ -95,6 +115,33 @@ if (( njudges > 0 )); then
   add judges ok "Juízes online" "$njudges juiz(es): $(jq -r 'map(.host)|join(", ")' <<<"$judges")"
 else
   add judges fail "NENHUM juiz online" "sem juiz, nada é corrigido — verifique moj-agent nas máquinas"
+fi
+
+# --- problemas PARALELOS (CPUNEEDED>1) × largura dos juízes do pool ---------------
+# O json servível do banco carrega cpu_needed/same_numa (gen-problem-json.sh; sem abrir pacote).
+# Um problema que pede k CPUs por teste só é julgado por juiz NOVO (manda slot_cpus) com
+# total_slots×slot_cpus ≥ k (com SAMENUMA, o maior nó); sem um, o job espera e vira Judge Error.
+declare -F cs_bank_json >/dev/null 2>&1 || source "$_DIR/lib/contest-statement.sh" 2>/dev/null
+par_probs=""; par_bad=""
+pjm0='{}'; [[ -f "$cdir/problem-judges.json" ]] && pjm0="$(jq -c . "$cdir/problem-judges.json" 2>/dev/null)"; jq -e . >/dev/null 2>&1 <<<"$pjm0" || pjm0='{}'
+for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
+  pid="${PROBS[i+4]}"; bj="$(cs_bank_json "$pid" 2>/dev/null)" || continue
+  IFS=$'\x01' read -r pk pn < <(jq -j '[((.cpu_needed // 1)|tostring), ((.same_numa // false)|tostring)] | join("\u0001")' "$bj" 2>/dev/null)
+  [[ "$pk" =~ ^[0-9]+$ && "$pk" -gt 1 ]] || continue
+  par_probs+=" ${PROBS[i+3]}"
+  # pool efetivo do problema: override → CONTEST_JUDGES → todos os online
+  pool="$(jq -r --arg p "$pid" '([$p, ($p|gsub("#";"/")), ($p|gsub("/";"#"))] | unique) as $vs | ([ $vs[] | .[$vs[]] ] | .[0]) // [] | join(" ")' <<<"$pjm0" 2>/dev/null)"
+  [[ -n "$pool" ]] || pool="${CONTEST_JUDGES:-}"
+  fit="$(jq -r --arg pool "$pool" --argjson k "$pk" --arg nm "$pn" '
+      [ .[] | select(($pool == "") or (($pool | split(" ")) | index(.host)))
+            | select((if $nm == "true" then .node_cpus else .cpus end) >= $k) ] | length' <<<"$judges" 2>/dev/null)"
+  [[ "$fit" =~ ^[0-9]+$ && "$fit" -gt 0 ]] || par_bad+=" ${PROBS[i+3]}(${pk} CPUs$([[ "$pn" == true ]] && printf ', NUMA'))"
+done
+if [[ -n "$par_bad" ]]; then
+  add judges_cpus warn "Problema paralelo sem juiz com as CPUs" \
+    "nenhum juiz online do pool serve:$par_bad — o julgamento espera e vira Judge Error (CPUNEEDED do conf; juiz antigo sem slot_cpus não conta)"
+elif [[ -n "$par_probs" ]]; then
+  add judges_cpus ok "Problemas paralelos com juiz" "CPUNEEDED>1 em:$par_probs — há juiz online com as CPUs"
 fi
 
 # --- pool de juízes (contest + overrides por problema) ----------------------------
@@ -136,7 +183,7 @@ langs_lc="$(printf '%s' "${LANGUAGES:-}" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$langs_lc" ]]; then
   missing=""
   # confs antigos podem ter py3/py2 na whitelist; os juízes anunciam 'py' (python unificado)
-  langs_lc="$(printf '%s\n' $langs_lc | sed 's/^py[23]$/py/' | sort -u | paste -sd' ' -)"
+  langs_lc="$(for _l in $langs_lc; do lang_canon_ext "$_l"; echo; done | sort -u | paste -sd' ' -)"
   for l in $langs_lc; do
     jq -e --arg l "$l" 'any(.[]; .langs | index($l))' >/dev/null 2>&1 <<<"$judges_eff" || missing+=" $l"
   done
@@ -149,8 +196,11 @@ else
   add langs warn "Linguagens sem whitelist" "todas as linguagens do MOJ ficam liberadas (Configurações → Linguagens)"
 fi
 
-# --- problemas: TL calibrado + cache nos juízes online (do pool EFETIVO, se houver) ----
-noTL=""; noCache=""; noPool=""; nprob=0
+# --- problemas: TL calibrado (do pool EFETIVO, se houver) ------------------------------
+# O "está no cache de algum juiz" que morava aqui saiu: lia o inventário do registro, que o agente só
+# refaz ao re-registrar, e bastava UM juiz ter o problema. Quem responde "este juiz vai calibrar na 1ª
+# submissão?" é o item judges_warm, logo abaixo, juiz por juiz.
+noTL=""; noPool=""; nprob=0
 for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
   id="${PROBS[i+4]}"; (( nprob++ ))
   # pool efetivo do problema: override (problem-judges.json) -> pool do contest -> todos
@@ -165,24 +215,44 @@ for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
     # calibrado = algum host DO POOL reportou TL p/ o problema
     jq -e --arg p "$ppool" '(.hosts // {}) | keys | any(. as $h | ($p|split(" ")|index($h)))' \
       "$(tl_store_file "$id")" >/dev/null 2>&1 || { noTL+=" $id"; continue; }
-    jq -e --arg id "$id" --arg p " $ppool " \
-      'any(.[]; .host as $h | ($p | contains(" "+$h+" ")) and (.problems | has($id)))' \
-      >/dev/null 2>&1 <<<"$judges" || noCache+=" $id"
   else
     if [[ ! -s "$(tl_store_file "$id")" ]]; then noTL+=" $id"; continue; fi
-    jq -e --arg id "$id" 'any(.[]; .problems | has($id))' >/dev/null 2>&1 <<<"$judges" || noCache+=" $id"
   fi
 done
 if (( nprob == 0 )); then
   add problems fail "Sem problemas" "o contest não tem problemas no conf"
 elif [[ -n "$noTL" ]]; then
   add problems fail "Problema sem TL calibrado$([[ -n "$pool_all" ]] && echo ' no pool')" "sem calibração:$noTL — dispare /ops/updateproblemset e aguarde os juízes"
-elif [[ -n "$noCache" ]]; then
-  add problems warn "Problema fora do cache dos juízes online" "será baixado+calibrado na 1ª submissão (lento):$noCache"
 else
-  add problems ok "Problemas calibrados" "$nprob problema(s) com TL reportado e em cache"
+  add problems ok "Problemas calibrados" "$nprob problema(s) com TL reportado"
 fi
 [[ -n "$noPool" ]] && add pool_problems fail "Problema com pool de juízes offline" "nenhum juiz do pool destes problemas está online (fila presa):$noPool"
+
+# --- juízes aquecidos: CADA juiz online do pool já calibrou CADA problema? (lib/judge-warm.sh) -------
+# O TL é por máquina: juiz frio baixa e calibra na 1ª submissão, e ela espera — 7,3 min na XIV Maratona
+# UnB (25/09/2026). O botão da Central (action warm_judges) manda a calibração dirigida só aos pares frios.
+if (( njudges > 0 && nprob > 0 )); then
+  wm="$(jw_matrix "$contest")"
+  if [[ -n "$wm" ]] && jq -e '.counts' >/dev/null 2>&1 <<<"$wm"; then
+    { read -r w_warm; read -r w_ing; read -r w_cold; read -r w_nh; } \
+      < <(jq -r '.counts.warm, .counts.warming, .counts.cold, (.online | length)' <<<"$wm")
+    g_cold="$(jw_group "$wm" cold)"; g_ing="$(jw_group "$wm" warming)"
+    if (( w_warm + w_ing + w_cold == 0 )); then :   # nenhum juiz do pool online: é o item pool/pool_problems
+    elif (( w_cold > 0 )); then
+      add2 judges_warm warn "Juízes FRIOS para problemas da prova" \
+        "$w_cold par(es) juiz×problema sem calibração da versão atual — $g_cold. A 1ª submissão de cada par espera o juiz baixar e calibrar o problema inteiro (minutos). Aqueça antes do início: cada calibração ocupa um slot do juiz.$([[ -n "$g_ing" ]] && echo " Aquecendo: $g_ing.")" \
+        "Judges not warmed up for contest problems" \
+        "$w_cold judge×problem pair(s) not calibrated for the current version — $g_cold. The first submission of each pair waits while the judge downloads and calibrates the whole problem (minutes). Warm them up before the start: each calibration takes one judge slot.$([[ -n "$g_ing" ]] && echo " Warming up: $g_ing.")" \
+        warm_judges
+    elif (( w_ing > 0 )); then
+      add2 judges_warm warn "Juízes aquecendo" "$w_ing calibração(ões) na fila ou em andamento — $g_ing. Rode de novo daqui a alguns minutos." \
+        "Judges warming up" "$w_ing calibration(s) queued or running — $g_ing. Check again in a few minutes."
+    else
+      add2 judges_warm ok "Juízes aquecidos" "todo juiz online que pode julgar cada problema já o calibrou na versão atual ($w_warm par(es) juiz×problema, $w_nh juiz(es) online)" \
+        "Judges warmed up" "every online judge that may judge each problem has already calibrated it for the current version ($w_warm judge×problem pair(s), $w_nh online judge(s))"
+    fi
+  fi
+fi
 
 # --- staff de impressão -----------------------------------------------------------
 staff_n="$(find "$cdir/users" -maxdepth 1 -type d -name '*.staff' 2>/dev/null | wc -l | tr -d '[:space:]')"
@@ -197,6 +267,7 @@ fi
 # --- escopo do staff/chefe de sede -------------------------------------------------
 # Sem staff-filters.json (ou com lista vazia), staff_can_see devolve TRUE p/ todo mundo: cada
 # chefe de sede imprime as ETIQUETAS COM SENHA de TODOS os times, não só da sede dele.
+if mod_on "$contest" sedes; then   # escopo por sede é do módulo sedes
 sfj="$cdir/print-requests/staff-filters.json"
 cstaff_n="$(find "$cdir/users" -maxdepth 1 -type d -name '*.cstaff' 2>/dev/null | wc -l | tr -d '[:space:]')"
 cstaff_n="${cstaff_n//[^0-9]/}"; cstaff_n="${cstaff_n:-0}"
@@ -216,11 +287,13 @@ else
     add staff_filters warn "Staff sem escopo de sede" "$(( cstaff_n + staff_n - scoped )) de $(( cstaff_n + staff_n )) conta(s) .staff/.cstaff sem filtro: veem a fila e as ETIQUETAS COM SENHA de todos os times (Operação → Staff)"
   fi
 fi
+fi   # módulo sedes
 
 # --- balões: cor por letra -----------------------------------------------------------
 # Sem balloons.json a cor é o default ICPC A–O (pr_balloon_color); da letra P em diante todo
 # balão sai CINZA — em prova com mais de 15 problemas isso é um problema de verdade no balcão.
-if [[ -s "$cdir/balloons.json" ]]; then
+if ! mod_on "$contest" baloes; then :   # módulo baloes desligado
+elif [[ -s "$cdir/balloons.json" ]]; then
   nbc="$(jq -r 'length' "$cdir/balloons.json" 2>/dev/null)"; nbc="${nbc//[^0-9]/}"
   add balloons ok "Cores dos balões" "${nbc:-0} letra(s) com cor definida"
 elif (( nprob > 15 )); then
@@ -250,12 +323,44 @@ else
 fi
 
 # --- informativos ---------------------------------------------------------------------
-add mode "$([[ "$mode" == icpc ]] && echo ok || echo warn)" "Modo do placar" "$mode$([[ "$mode" != icpc ]] && echo ' — prova ICPC usa CONTEST_TYPE=icpc')"
-[[ "${MANUAL_VERDICT:-}" == 1 ]] && add manual ok "Veredicto manual LIGADO" "2 juízes decidem cada submissão" \
-                                 || add manual ok "Veredicto manual desligado" "veredicto automático direto ao aluno"
+# `mode` só cobra icpc quando o contest tem cara de evento (algum módulo ligado): lista de
+# treino em modo treino não é erro.
+if mod_any "$contest"; then
+  add mode "$([[ "$mode" == icpc ]] && echo ok || echo warn)" "Modo do placar" "$mode$([[ "$mode" != icpc ]] && echo ' — prova ICPC usa CONTEST_TYPE=icpc')"
+else
+  add mode ok "Modo do placar" "$mode"
+fi
+# veredicto manual: desde a regra OPT-OUT (lib/review-rules.sh, 25/09/2026) "ligado" com a tabela vazia não
+# revisa NADA — tudo sai automático. O item diz quanto vai para revisão e avisa o vazio e o ilegível.
+if [[ "${MANUAL_VERDICT:-}" == 1 ]]; then
+  source "$_LIBDIR/review-rules.sh"
+  _rq="${REVIEW_JUDGES:-2}"; [[ "$_rq" =~ ^[1-5]$ ]] || _rq=2
+  _rst="$(rr_state "$contest")"
+  if [[ "$_rst" == invalid ]]; then
+    add2 manual warn "Regras de revisão ilegíveis" "o auto-verdicts.json não é JSON válido, então TUDO vai para revisão — salve a tabela em Juízes › O que vai para revisão" \
+      "Unreadable review rules" "auto-verdicts.json is not valid JSON, so EVERYTHING goes to review — save the table in Judges › What goes to review"
+  else
+    _cids="$(for ((i=0; i+4<${#PROBS[@]}; i+=5)); do c="${PROBS[i+4]}"; [[ "$c" == *"#"* ]] || c="${PROBS[i+1]//\//#}"; printf '%s\n' "$c"; done | jq -R . | jq -cs 'map(select(length > 0))')"
+    _rv='{"review":{},"langs":[]}'
+    [[ "$_rst" != missing ]] && _rv="$(jq -c --argjson cids "${_cids:-[]}" "$RR_JQ_DEFS rr_view(\$cids)" "$cdir/auto-verdicts.json" 2>/dev/null || echo '{"review":{},"langs":[]}')"
+    read -r _rn _rx < <(jq -r '"\([.review[] | length] | add // 0) \([.langs[] | select(.to != "auto")] | length)"' <<<"$_rv")
+    if (( ${_rn:-0} + ${_rx:-0} == 0 )); then
+      add2 manual warn "Veredicto manual ligado, mas nada vai para revisão" \
+        "a tabela \"O que vai para revisão\" está vazia: todo veredicto sai automático (só erro do juiz é revisado). Marque o que os juízes revisam em Juízes › O que vai para revisão ou no painel do juiz-chefe" \
+        "Manual verdict is on, but nothing goes to review" \
+        "the \"What goes to review\" table is empty: every verdict is automatic (only judge errors are reviewed). Check what the judges review in Judges › What goes to review or in the chief judge panel"
+    else
+      add2 manual ok "Veredicto manual LIGADO" "${_rn:-0} combinação(ões) problema×veredicto vão para revisão$( (( ${_rx:-0} )) && echo " + ${_rx} exceção(ões) por linguagem"), com $_rq juiz(es) por decisão; o resto sai automático" \
+        "Manual verdict ON" "${_rn:-0} problem×verdict combination(s) go to review$( (( ${_rx:-0} )) && echo " + ${_rx} per-language exception(s)"), $_rq judge(s) per decision; the rest is automatic"
+    fi
+  fi
+else
+  add2 manual ok "Veredicto manual desligado" "veredicto automático direto ao aluno" "Manual verdict off" "automatic verdict straight to the team"
+fi
 tov="$cdir/time-overrides.json"
 ntov=0; [[ -s "$tov" ]] && ntov="$(jq -r 'length' "$tov" 2>/dev/null)"; ntov="${ntov//[^0-9]/}"; ntov="${ntov:-0}"
-if (( ntov > 0 )); then
+if ! mod_on "$contest" sedes; then :   # prorrogação por sede é do módulo sedes
+elif (( ntov > 0 )); then
   # o freeze vale p/ TODO mundo, inclusive quem tem prorrogação: se o fim prorrogado passa do
   # freeze, aquele grupo joga a última parte com placar congelado (às vezes é o que se quer —
   # mas tem de ser escolha, não surpresa).
@@ -271,7 +376,8 @@ fi
 source "$_LIBDIR/cohorts.sh"
 chj="$(ch_get "$contest")"
 nch="$(jq -r '(.cohorts // []) | length' <<<"$chj" 2>/dev/null)"; nch="${nch//[^0-9]/}"; nch="${nch:-0}"
-if (( nch == 0 )); then
+if ! mod_on "$contest" coortes; then :   # módulo coortes desligado
+elif (( nch == 0 )); then
   add cohorts ok "Sem coortes" "um placar só, todos oficiais"
 else
   npriv="$(jq -r '[(.cohorts // [])[] | select(.public == false)] | length' <<<"$chj")"; npriv="${npriv//[^0-9]/}"
@@ -287,7 +393,7 @@ fi
 # prova isso vira fila no balcão. Aqui o organizador vê quantos entraram, quantos convites
 # ficaram pendentes (esses NÃO entram) e se a janela está coerente com o início.
 source "$_LIBDIR/registration.sh"
-if reg_enabled "$contest"; then
+if mod_on "$contest" inscricoes && reg_enabled "$contest"; then
   regj="$(reg_get "$contest")"
   rp="$(jq -r '.entries | length' <<<"$regj")"; rp="${rp//[^0-9]/}"; rp="${rp:-0}"
   rt="$(jq -r '.teams | length' <<<"$regj")"; rt="${rt//[^0-9]/}"; rt="${rt:-0}"
@@ -331,11 +437,12 @@ if reg_enabled "$contest"; then
   fi
   # coortes: o placar separado depende delas existirem (a semeadura pula quando o contest já
   # tinha coortes configuradas)
-  jq -e 'any(.cohorts[]; .id == "times") and any(.cohorts[]; .id == "individual")' <<<"$chj" >/dev/null 2>&1 \
-    || add reg_cohorts warn "Coortes de inscrição ausentes" "sem as coortes 'individual' e 'times' o placar não separa times de individuais (Pessoas → Coortes)"
+  mod_on "$contest" coortes && ! jq -e 'any(.cohorts[]; .id == "times") and any(.cohorts[]; .id == "individual")' <<<"$chj" >/dev/null 2>&1 \
+    && add reg_cohorts warn "Coortes de inscrição ausentes" "sem as coortes 'individual' e 'times' o placar não separa times de individuais (Pessoas → Coortes)"
 fi
 
 # --- gate de navegador por sede ---------------------------------------------------------
+if mod_on "$contest" maquinas; then   # gate/trava/sessão única são do módulo maquinas
 source "$_LIBDIR/ua-gate.sh"
 ugj="$(ug_get "$contest")"
 # SEM CONFIGURAÇÃO NENHUMA = gate desligado de fato. O ug_get default é mode:enforce (p/ o
@@ -396,11 +503,12 @@ else
     add session_single ok "Sessão única por time" "login em outra máquina derruba a sessão anterior; anomalias em Pessoas → Sessões & anomalias"
   fi
 fi
+fi   # módulo maquinas
 
 # --- rodada seguinte (aquecimento → prova) ------------------------------------------------
 # Só carrega o motor de rodadas quando HÁ rodada planejada: contest sem rodadas (a maioria) não
 # paga nada, e rd_promote_blockers precisa de users.sh + contest-create.sh (cc_probs_json).
-if [[ -s "$cdir/rounds.json" ]]; then
+if mod_on "$contest" rodadas && [[ -s "$cdir/rounds.json" ]]; then
   nxt="$(jq -r 'first((.rounds // [])[] | select(.state == "pending") | .slug) // ""' "$cdir/rounds.json" 2>/dev/null)"
   if [[ -z "$nxt" ]]; then
     add next_round ok "Sem rodada planejada" "a rodada no ar é a última do plano"
@@ -422,8 +530,9 @@ source "$_LIBDIR/contest-docs.sh"
 docs_j="$(doc_index "$contest")"; [[ -n "$docs_j" ]] || docs_j='[]'
 ndoc="$(jq -r 'length' <<<"$docs_j")"; ndoc="${ndoc//[^0-9]/}"; ndoc="${ndoc:-0}"
 npub="$(jq -r '[.[] | select(.published)] | length' <<<"$docs_j")"; npub="${npub//[^0-9]/}"; npub="${npub:-0}"
-if (( ndoc == 0 )); then
-  add docs warn "Nenhum documento gerado" "info sheet, caderno e folha de time limits saem de Prova → Documentos"
+if ! mod_on "$contest" documentos; then :   # módulo documentos desligado
+elif (( ndoc == 0 )); then
+  add docs warn "Nenhum documento gerado ou enviado" "ambiente de julgamento, caderno e folha de time limits saem de Evento › Documentos (gere ou envie um PDF pronto)"
 elif (( npub == 0 )); then
   add docs warn "Documentos gerados mas não publicados" "$ndoc arquivo(s) só visíveis ao admin/chefe"
 else
@@ -434,12 +543,36 @@ fi
 # Só entra QUANDO CONFIGURADA (contest sem mlinux não ganha aviso eterno). Checa que a
 # chave abre a API (curl -m 5 — a Central é do admin e abre pouco).
 source "$_LIBDIR/nutella.sh"
-if nb_configured "$contest"; then
-  _nbr="$(nb_curl "$contest" GET /whoami)"
-  if [[ "$(nb_status "$_nbr")" == 200 ]]; then
-    add mlinux ok "Integração nutellaboot" "chave válida; panorama/coleta em Operação → mlinux"
+if mod_on "$contest" maquinas && nb_configured "$contest"; then
+  # `/whoami` responde às DUAS chaves desde 21/09/2026 (a de serviço devolve kind/scopes/images). Chave de
+  # serviço: confere os escopos que a integração usa e as imagens do glob. Serviço ANTIGO (401 no whoami de
+  # nb3s_): prova acesso lendo as máquinas da 1ª sede, como antes.
+  _nbr="$(nb_curl "$contest" GET /whoami)"; _nbs="$(nb_status "$_nbr")"
+  if [[ "$_nbs" == 200 ]]; then
+    _nbw="$(nb_body "$_nbr")"
+    if [[ "$(jq -r '.kind // "admin"' <<<"$_nbw")" == service ]]; then
+      _miss="$(jq -r '(["machines:read","commands:write","bindings:write","roster:read","roster:write","webhooks:write"] - (.scopes // [])) | join(" ")' <<<"$_nbw")"
+      _nimg="$(jq -r '(.images // []) | length' <<<"$_nbw")"
+      if [[ -n "$_miss" ]]; then add mlinux warn "nutellaboot: chave sem escopo" "faltam: $_miss — peça uma chave com esses escopos (o que falta não funciona: coleta/comando/vínculo/webhook)"
+      elif [[ "$_nimg" == 0 ]]; then add mlinux warn "nutellaboot: chave sem imagem" "o glob da chave não cobre nenhuma site-image"
+      else add mlinux ok "Integração nutellaboot" "chave de serviço \"$(jq -r '.name // ""' <<<"$_nbw")\" com todos os escopos, $_nimg sede(s) no alcance; panorama/coleta em Máquinas › mlinux"; fi
+    else
+      add mlinux ok "Integração nutellaboot" "chave de ADMINISTRAÇÃO válida (mais poder do que a integração precisa: prefira uma nb3s_ por evento); Máquinas › mlinux"
+    fi
+  elif [[ "$(nb_key_kind "$contest")" == service && "$_nbs" == 401 ]]; then
+    _nbi="$(nb_images "$contest" | head -n1)"
+    [[ -n "$_nbi" ]] || _nbi="$(jq -r '.sedes[0].id // empty' "$cdir/var/nutella.cache.json" 2>/dev/null)"
+    if [[ -z "$_nbi" ]]; then add mlinux warn "nutellaboot: faltam as site-images" "serviço antigo: chave de serviço não lista as sedes — informe os ids em Máquinas › mlinux"
+    else
+      _nbr="$(nb_curl "$contest" GET "/site-images/$_nbi/machines?active_since=$EPOCHSECONDS")"
+      case "$(nb_status "$_nbr")" in
+        200) add mlinux ok "Integração nutellaboot" "chave de serviço válida (lê $_nbi); panorama/coleta em Máquinas › mlinux" ;;
+        403) add mlinux warn "nutellaboot: chave sem alcance" "a chave de serviço não tem machines:read ou não enxerga a imagem $_nbi (HTTP 403)" ;;
+        *)   add mlinux warn "nutellaboot não responde" "chave inválida ou serviço fora (HTTP $(nb_status "$_nbr")) — Máquinas › mlinux" ;;
+      esac
+    fi
   else
-    add mlinux warn "nutellaboot não responde" "chave inválida ou serviço fora (HTTP $(nb_status "$_nbr")) — Operação → mlinux"
+    add mlinux warn "nutellaboot não responde" "chave inválida ou serviço fora (HTTP ${_nbs:-000}$([[ -n "$(nb_code "$_nbr")" ]] && echo ", $(nb_code "$_nbr")")) — Máquinas › mlinux"
   fi
   # sede com MENOS máquinas do que times (auditoria da Maratona 2026: Trinidad 1 máquina p/ 4
   # times, Tupiza 3 p/ 5 — os times se revezaram numa máquina). Lê o cache da última coleta.
@@ -454,6 +587,34 @@ if nb_configured "$contest"; then
     else
       add site_short ok "Máquinas por sede" "toda sede tem pelo menos uma máquina mlinux por time (última coleta)"
     fi
+  fi
+fi
+
+# --- telão (Animeitor) -------------------------------------------------------------------
+# Só com o módulo telao. Sem rede: a chave (a do MOJ vale por padrão no servidor padrão) e a última
+# CONFERÊNCIA gravada (o alimentador confere sozinho; o "validado" é o que a sede vê no reveleitor).
+if mod_on "$contest" telao; then
+  source "$_LIBDIR/cohorts.sh"; source "$_LIBDIR/animeitor.sh"
+  _anu="$(jq -r .url <<<"$(an_cfg "$contest")")"; _ans="$(an_cred_source "$contest" "$_anu")"
+  _anv="$(an_verify_summary "$contest")"; _anst="$(jq -r '.state // ""' <<<"$_anv")"
+  if [[ "$_ans" == none ]]; then
+    add2 telao warn "Telão sem chave do Animeitor" \
+      "$( an_moj_cred_available && echo "a chave do MOJ só vale no servidor padrão ($AN_DEFAULT_URL) — grave uma chave própria na mesa do telão ou volte ao padrão" || echo "grave usuário e token na mesa do telão (/contest/animeitor/)" )" \
+      "Big screen without an Animeitor key" \
+      "$( an_moj_cred_available && echo "the MOJ key only works on the default server ($AN_DEFAULT_URL) — save your own key on the big-screen page or go back to the default" || echo "save user and token on the big-screen page (/contest/animeitor/)" )"
+  elif [[ "$_anst" == diverge || "$_anst" == error ]]; then
+    add2 telao warn "Telão: o Animeitor não tem todas as submissões" \
+      "na última conferência: $(jq -r '"\(.missing // 0) faltando, \(.wrong // 0) diferentes, \(.extra // 0) a mais\(if .error then " — " + .error else "" end)"' <<<"$_anv") — o alimentador já reenviou; confira de novo na mesa do telão" \
+      "Big screen: the Animeitor does not have every submission" \
+      "at the last check: $(jq -r '"\(.missing // 0) missing, \(.wrong // 0) different, \(.extra // 0) extra\(if .error then " — " + .error else "" end)"' <<<"$_anv") — the feeder has already resent them; check again on the big-screen page"
+  elif [[ "$(jq -r '.final == true' <<<"$_anv")" == true ]]; then
+    add2 telao ok "Telão validado" "o Animeitor tem todas as submissões e a prova acabou (conferência final)" \
+      "Big screen validated" "the Animeitor has every submission and the contest is over (final check)"
+  else
+    add2 telao ok "Telão com chave $( [[ "$_ans" == moj ]] && echo "do MOJ" || echo "própria" )" \
+      "$( [[ "$_anst" == ok ]] && echo "a última conferência bateu" || echo "publique e ligue o alimentador na mesa do telão; ele confere sozinho durante a prova" )" \
+      "Big screen with $( [[ "$_ans" == moj ]] && echo "the MOJ key" || echo "its own key" )" \
+      "$( [[ "$_anst" == ok ]] && echo "the last check matched" || echo "publish and start the feeder on the big-screen page; it checks by itself during the contest" )"
   fi
 fi
 

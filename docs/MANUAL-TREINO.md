@@ -166,8 +166,10 @@ A lista completa, sempre visível, com o **trilho de filtros** à esquerda:
 
 - **Filtrar por título:** digite parte do nome.
 - **Meu status** (só logado): Todos / A resolver / ✓ Resolvidos / … Tentados.
-- **Dificuldade:** muito fácil → difícil, **derivada da taxa de acerto** de cada problema
-  (“novo” = ainda sem dados). Cada opção mostra quantos problemas restam com ela.
+- **Dificuldade:** muito fácil → difícil, pela **taxa por usuário** de cada problema (quem
+  tenta consegue? resolveram ÷ tentaram: ≥90% muito fácil, ≥70% fácil, ≥50% médio, <50%
+  difícil; “novo” = ainda sem dados). É a mesma escala da página de estatística do problema, do
+  perfil e do sorteio de contest. Cada opção mostra quantos problemas restam com ela.
 - **Coleções:** a árvore com **caixas de seleção** — dá para marcar **várias ao mesmo
   tempo** (a lista mostra a **união**). Marcar um **grupo** (ex.: `obi`) pega todas as
   coleções dele de uma vez. O número à direita é o **seu progresso** (ex.: `20/140`).
@@ -183,7 +185,8 @@ resultados e a **ordenação**: **Mais resolvidos**, **A–Z**, **Dificuldade** 
 | **✓** | Se você resolveu (✓) ou tentou (…) — aparece quando logado |
 | **Problema** | O título, que é o **link** para abrir o problema |
 | **Coleções** | Clique numa coleção para **somá-la** ao filtro |
-| **Dificuldade** | A faixa derivada da taxa de acerto |
+| **Dificuldade** | A faixa pela taxa por usuário (resolveram ÷ tentaram) |
+| **Dirt** | Quanto se erra até acertar: parte das submissões de quem resolveu que estava errada. Alto = o problema pune erros. Verde ≤20%, amarelo ≤50%, vermelho acima. |
 | **Resolvidos** | Quantos usuários resolveram / tentaram |
 
 A lista vem em **páginas de 50**. Dica: a **URL guarda os seus filtros** — copie o link
@@ -207,7 +210,16 @@ No **topo do enunciado** você encontra:
 - as **coleções** a que ele pertence;
 - as **tags** (elas começam **borradas**, com um link para **mostrar/ocultar**);
 - o **tempo-limite por linguagem**;
-- um **botão de estatísticas** do problema.
+- um **botão de estatísticas** do problema;
+- o botão **⬇ Exemplos**, que baixa a entrada e a saída de cada exemplo como arquivos, num zip.
+
+Cada bloco de exemplo do enunciado tem um botão **Copiar** no título. Um clique copia o bloco
+inteiro, com a quebra de linha final.
+
+Quando o problema tem o enunciado em mais de um idioma, aparecem os chips **PT · EN · ES** acima
+do texto. Clique para trocar. O título muda junto. O MOJ lembra a sua escolha para os próximos
+problemas. Na lista de problemas, o selo **EN ES** ao lado do título mostra quais problemas têm
+tradução.
 
 ### Como enviar sua solução
 
@@ -320,6 +332,40 @@ Dica: quer aparecer nesse ranking? **Declare o seu editor** na seção **Dados**
 **Perfil** (veja a seção 7).
 
 ---
+
+## 9½. Participação virtual: refazer uma prova encerrada
+
+Alguns contests encerrados têm o botão **🕹️ Virtual** no card (página inicial e arquivo de
+contests). Ele abre a **participação virtual**: você refaz a prova inteira, com relógio, contra o
+placar oficial. Os times oficiais resolvem os problemas no mesmo minuto em que resolveram na prova real.
+
+1. **Leia as regras e marque o aceite.** Não participe se já viu os problemas. Faça a prova inteira.
+2. Escolha **Começar agora** ou **Agendar** (até 7 dias; o agendamento pode ser cancelado).
+3. Na arena: abra um problema, escolha o arquivo e envie. O veredicto aparece em **Minhas submissões**.
+   O placar mostra a sua linha em destaque, com a posição que você ocuparia.
+4. **Encerrar agora** termina antes do tempo.
+
+**Filtros do placar.** A barra é a mesma do placar do contest: **Placar** (por exemplo, só os times
+oficiais, sem convidados), **Bandeira**, **Universidade**, **Sede** e a busca. Com filtro ativo, o
+número grande é a posição no recorte e o pequeno é a posição geral. A sua linha aparece sempre.
+**Meus escolhidos.** Clique no **📌** de uma linha virtual para fixar aquela pessoa: ela aparece sempre
+no placar, em qualquer filtro. O botão **📌 Escolhidos** abre a lista: busque por nome ou login, marque
+e desmarque, ou adicione um login de quem ainda não fez o virtual desta prova. A lista é da sua conta e
+vale para todas as provas. Exemplo de uso: escolha os seus amigos, selecione uma **Sede** e veja a
+posição de cada um entre os times daquela sede.
+
+O seletor **Virtuais** escolhe entre todos os participantes virtuais, só os escolhidos, só você, ou nenhum. O filtro de
+**Sede** não esconde os virtuais: assim você compara o seu resultado com os times daquela sede.
+
+**Desistir sem gravar:** o botão **Desistir** existe nos primeiros **15 minutos**, ou enquanto você
+não tiver **nenhum problema aceito**. Desistir devolve a tentativa, no máximo **2 vezes**. Depois
+disso a largada é definitiva. Terminar o tempo sem nenhum aceito conta como desistência.
+
+**Depois:** a sua linha fica no placar virtual da prova, marcada como **virtual**. Cada conta faz a
+participação virtual de uma prova **uma vez**. As submissões ficam no seu histórico do treino.
+
+Sem entrar na conta, a mesma página mostra o **Replay**: arraste o controle de tempo para ver o
+placar em qualquer minuto da prova.
 
 ## 10. Para saber mais
 

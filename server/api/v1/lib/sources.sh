@@ -6,9 +6,11 @@
 # uma lib a mais no router e a menos no molde viraria "function not found" só em produção.
 # Espera $_DIR = raiz de api/v1 (o router e o molde o definem antes).
 source "$_DIR/lib/common.sh"
+source "$_DIR/lib/modules.sh"        # módulos ligáveis do contest (catálogo + mod_on; só funções)
 source "$_DIR/lib/spool-shard.sh"
 source "$_DIR/lib/params.sh"
 source "$_DIR/lib/auth.sh"
+source "$_DIR/lib/cli-version.sh"     # X-Moj-Cli-Status/Latest + dica p/ CLI antiga (aviso de CLI desatualizada)
 source "$_DIR/lib/session-index.sh"   # índice por login + chave de máquina + sessão única
 source "$_DIR/lib/site-lock.sh"       # trava de sede por IP (403 site_locked fora do contest dono)
 source "$_DIR/lib/worker-auth.sh"

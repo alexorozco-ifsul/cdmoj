@@ -14,7 +14,7 @@ from="$(jq -r '.from // empty' <<<"$body")"
 { [[ -n "$from" ]] && valid_id "$from"; } || fail 400 "Informe from" "from_missing"
 cdir="$CONTESTSDIR/$from"
 cowner="$(head -1 "$cdir/owner" 2>/dev/null)"
-{ [[ -f "$cdir/created-by" && -f "$cdir/conf" ]] && { is_admin || [[ -n "$cowner" && "$cowner" == "$SESSION_LOGIN" ]]; }; } \
+{ [[ -f "$cdir/created-by" && -f "$cdir/conf" ]] && cc_contest_visible_to "$SESSION_LOGIN" "$cowner"; } \
   || fail 404 "Contest não encontrado" "notfound"
 
 base="$(cc_export_spec "$from" none)"
@@ -39,6 +39,7 @@ probs="$(jq -cs '.' "$tmpd/probs.jsonl")"; rm -rf "$tmpd"
 
 spec="$(jq -c --argjson probs "$probs" --argjson o "$body" --argjson now "$EPOCHSECONDS" '
   ((.end // 0) - (.start // 0)) as $dur
+  | (.start // 0) as $oldst
   | ((.login_start // 0) as $ls | (.start // 0) as $st | if $ls > 0 and $st > $ls then $st - $ls else 0 end) as $lead
   | ((.freeze // 0) as $fz | (.end // 0) as $en | if $fz > 0 and $en > $fz then $en - $fz else 0 end) as $fb
   | del(.id, .start, .end, .login_start, .freeze)
@@ -48,12 +49,31 @@ spec="$(jq -c --argjson probs "$probs" --argjson o "$body" --argjson now "$EPOCH
   | .end   = ($o.end // (.start + (if $dur > 0 then $dur else 10800 end)))
   | (if $lead > 0 then .login_start = (.start - $lead) else . end)
   | (if $fb > 0 then .freeze = (.end - $fb) else . end)
+  # módulos: o PLANO de rodadas anda junto com as datas (mesmo delta); prorrogações por sede
+  # eram do fim antigo e não viajam
+  | (if (.modules.rodadas.rounds|type) == "array" and $oldst > 0 then (.start - $oldst) as $dl
+       | .modules.rodadas.rounds |= map(. + (if (.start|type)=="number" then {start:(.start + $dl)} else {} end)
+                                          + (if (.end|type)=="number" then {end:(.end + $dl)} else {} end)
+                                          + (if ((.freeze // 0)|type)=="number" and (.freeze // 0) > 0 then {freeze:(.freeze + $dl)} else {} end))
+     else . end)
+  | (if (.modules.sedes|type) == "object" then del(.modules.sedes.time_overrides) else . end)
   | (if $o.id then .id = $o.id else . end)
   | (if $o.admin then .admin = $o.admin else . end)
   | (if $o.users then .users = $o.users else . end)
   | (if $o.users_from then .users_from = $o.users_from else . end)
   | (if ((.problems // [])|length) == 0 then .allow_empty = true else . end)' <<<"$base")"
 [[ -n "$spec" ]] || fail 500 "Falha ao montar o spec" "spec_fail"
+
+# quem duplica precisa poder VER cada problema (topo E rodadas planejadas): um .admin do treino
+# copiando um contest alheio herdaria os privados do dono — mesma guarda do create
+source "$_LIBDIR/problems.sh"
+pids="$(jq -c '[ (.problems[]?, .modules.rodadas.rounds[]?.problems[]?)
+                 | (.bank_id // .problem_id // "") | gsub("/";"#") | select(.!="") ] | unique' <<<"$spec")"
+if [[ "$pids" != "[]" ]]; then
+  denied="$(problems_denied_for "$SESSION_LOGIN" "$pids")" \
+    || fail 503 "Índice de problemas indisponível — tente de novo em instantes" "index_unavailable"
+  [[ -n "$denied" ]] && fail 404 "Problema não encontrado ou sem acesso ($(wc -w <<<"$denied") id(s))" "problem_denied"
+fi
 
 cc_create "$spec" "$SESSION_LOGIN" "$SESSION_NAME" "$srcdir"
 audit_log contest-create "duplicate from=$from id=$(jq -r '.contest_id' <<<"$CC_RESULT")"

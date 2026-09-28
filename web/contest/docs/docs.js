@@ -1,8 +1,11 @@
 // contest/docs/docs.js — página SÓ-LEITURA dos documentos da prova (chefe de sede .cstaff,
 // staff e demais logins do contest). Lista o que a organização PUBLICOU e baixa/abre para
-// imprimir na sede. Quem gera/publica é o admin ou o juiz-chefe (aba 📄 Documentos).
+// imprimir na sede — o caderno e a folha de TL só aparecem p/ a sede/times A PARTIR DO INÍCIO
+// (o servidor corta: /contest/doc); antes só admin/chefe/juiz. Quem gera/publica é o admin ou
+// o juiz-chefe (aba 📄 Documentos).
 // O gate real é da API (`/contest/doc` devolve 404 para documento não publicado).
 import { el } from '/shared/ui.js';
+import { contestLoginHref, hereAsNext } from '/shared/contest-guard.js';
 import { initContestShell } from '/shared/contest-shell.js';
 import { makeDocsTab } from '/contest/admin/docs-tab.js';
 import { T } from '/shared/i18n.js';
@@ -18,7 +21,7 @@ async function boot() {
   if (!st || !st.logged_in) {
     app.innerHTML = '';
     app.append(el('div', { class: 'section' }, el('h2', {}, T('🔒 Entre no contest', '🔒 Log in to the contest')),
-      el('a', { class: 'btn', href: '/contest/login/?c=' + enc(CONTEST) }, T('Login do contest', 'Contest login'))));
+      el('a', { class: 'btn', href: contestLoginHref(CONTEST, hereAsNext()) }, T('Login do contest', 'Contest login'))));
     return;
   }
   app.innerHTML = '';

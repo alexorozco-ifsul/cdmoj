@@ -16,7 +16,10 @@ export function makeBalloonsTab(CONTEST) {
     panel.append(el('h2', {}, T('🎈 Balões', '🎈 Balloons')),
       el('p', { class: 'small muted' },
         T('Uma cor por letra: é o que sai desenhado na folha do balão que o staff entrega. Sem cores definidas, todos os balões saem cinza.',
-          'One colour per letter: it is what gets drawn on the balloon sheet the staff delivers. With no colours defined, every balloon comes out grey.')));
+          'One colour per letter: it is what gets drawn on the balloon sheet the staff delivers. With no colours defined, every balloon comes out grey.')),
+      el('p', { class: 'small muted' },
+        T('Estas são as cores da rodada no ar. Para dar cores próprias a outra rodada, use Evento › Rodadas.',
+          'These are the colours of the live round. To give another round its own colours, use Event › Rounds.')));
     let cfg;
     try { cfg = await apiGet('/contest/admin/config?contest=' + enc(CONTEST), G); }
     catch (e) { panel.append(el('div', { class: 'error-box' }, T('Falha: ', 'Failed: ') + (e.message || T('erro', 'error')))); return; }
@@ -33,7 +36,14 @@ export function makeBalloonsTab(CONTEST) {
       catch (e) { msg.className = 'small error-box'; msg.textContent = e.message || T('falha', 'failed'); }
       save.disabled = false;
     });
-    panel.append(ed.el, el('div', { class: 'row', style: 'margin-top:.7rem' }, save, msg));
+    // voltar ao padrão = apagar o balloons.json (colors:null); o {} do editor não apaga mais nada
+    const reset = el('button', { class: 'btn ghost danger', title: T('apaga as cores personalizadas e desliga o Sonic', 'deletes the custom colours and turns Sonic off'), onclick: async () => {
+      if (!confirm(T('Voltar às cores padrão? As cores personalizadas são apagadas e o modo Sonic desligado.', 'Back to the default colours? Custom colours are deleted and Sonic mode is turned off.'))) return;
+      msg.className = 'small'; msg.textContent = '…';
+      try { await apiPost('/contest/admin/config?contest=' + enc(CONTEST), { colors: null }, G); await load(); }
+      catch (e) { msg.className = 'small error-box'; msg.textContent = e.message || T('falha', 'failed'); }
+    } }, T('↺ Cores padrão', '↺ Default colours'));
+    panel.append(ed.el, el('div', { class: 'row', style: 'margin-top:.7rem;gap:.6rem' }, save, reset, msg));
   }
   return { panel, load };
 }

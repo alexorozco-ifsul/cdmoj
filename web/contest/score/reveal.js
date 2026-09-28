@@ -13,7 +13,7 @@ import { apiGet, apiGetText, apiPost, getToken } from '/shared/api.js';
 import { status } from '/shared/auth.js';
 import { parseICPC } from './score-icpc.js';
 import { balloonColorHex, balloonDot, paintSolvedCell } from './score-colors.js';
-import { flagEl } from '/shared/flags.js';
+import { flagEl, flagName } from '/shared/flags.js';
 import { scoreCols, cellTitle } from './score-cols.js';
 
 const CONTEST = new URLSearchParams(location.search).get('c') || '';
@@ -25,7 +25,8 @@ let PEN = 20;                 // PENALTY_MINUTES (vem do /contest/basic; fallbac
 let BSTYLE = 'icon';          // como pintar a célula resolvida (/contest/basic; ver score-colors.js)
 let balloons = {};
 let probShorts = [];
-let teams = [];               // [{username, teamName, univShort, flag, cells:{sn:v}, fullCells:{sn:v}}]
+let teams = [];               // [{username, teamName, univShort, flag, guest, cells:{sn:v}, fullCells:{sn:v}}]
+let GUEST_NUM = false;        // flag `g` do TXT: convidados numerados na sequência própria (#25)
 let cursor = -1;              // índice na ordem ATUAL (de baixo p/ cima)
 let finished = false;
 let timer = null;
@@ -62,17 +63,27 @@ function render(highlight) {
   const tb = el('tbody');
   // ranking de competição na cerimônia: empatados (solved+penalty — a tupla do
   // standingsSort daqui) mostram a MESMA posição; o seguinte pula N (2026-08-31)
-  const places = [];
+  // CONVIDADO (coorte unranked) não consome posição — a cerimônia numerava todo mundo (bug
+  // apontado na issue #25); com a flag g ele ganha a sequência própria, em itálico
+  const places = [], gplaces = [];
+  let seen = 0, prev = null, gseen = 0, gprev = null;
   ordered.forEach((t, i) => {
-    const prev = i > 0 ? ordered[i - 1] : null;
-    places[i] = (prev && prev.solved === t.solved && prev.penalty === t.penalty) ? places[i - 1] : i + 1;
+    if (t.guest) {
+      places[i] = null;
+      if (GUEST_NUM) { gseen++; gplaces[i] = (gprev && gprev.solved === t.solved && gprev.penalty === t.penalty) ? gplaces[gprev.i] : gseen; gprev = { ...t, i }; }
+      return;
+    }
+    seen++;
+    places[i] = (prev && prev.solved === t.solved && prev.penalty === t.penalty) ? places[prev.i] : seen;
+    prev = { ...t, i };
   });
   ordered.forEach((t, i) => {
     const tr = el('tr', {});
     if (i === cursor && !finished) tr.style.outline = '3px solid #1e57c4';
     if (highlight && highlight.user === t.username) tr.classList.add(highlight.up ? 'placing-up' : 'placing-down');
-    tr.append(el('td', { class: 'cl-place' }, String(places[i])));
-    const ftd = el('td', {}); if (t.flag) { const fi = flagEl(t.flag, { height: 16 }); if (fi) ftd.append(fi); }
+    tr.append(el('td', { class: 'cl-place' }, places[i] != null ? String(places[i])
+      : (gplaces[i] != null ? el('span', { class: 'gplace', title: T('posição entre os convidados', 'position among guest teams') }, String(gplaces[i])) : '–')));
+    const ftd = el('td', {}); if (t.flag) { const fi = flagEl(t.flag, { height: 16, title: flagName(t.flag) }); if (fi) ftd.append(fi); }
     tr.append(ftd);
     tr.append(el('td', { class: 'team', title: [t.univFull || '', t.username].filter(Boolean).join(' · ') },
       (t.univShort ? '[' + t.univShort + '] ' : '') + (t.teamName || t.username)));
@@ -164,7 +175,9 @@ async function main() {
   if (modeWords(fl[0])[0] !== 'icpc' || modeWords(ul[0])[0] !== 'icpc') {
     app.textContent = T('A cerimônia é só para contests em modo icpc.', 'The ceremony is only for contests in icpc mode.'); return;
   }
-  try { balloons = await apiGet('/contest/balloons?contest=' + enc(CONTEST), G); } catch { balloons = {}; }
+  // .balloons do envelope (como score.js/contest.js) — guardar o envelope inteiro deixava a
+  // cerimônia sem cor nenhuma (balloons.A era undefined)
+  try { const bc = await apiGet('/contest/balloons?contest=' + enc(CONTEST), G); balloons = (bc && bc.balloons) || {}; } catch { balloons = {}; }
   // o modo de pintura vale p/ TODOS os papéis que abrem a cerimônia (a leitura de PEN abaixo é
   // só p/ não-cstaff); falhou = fica no default 'icon', que é o legível
   try { const bb = await apiGet('/contest/basic?contest=' + enc(CONTEST), G);
@@ -177,14 +190,14 @@ async function main() {
     try { const b = await apiGet('/contest/basic?contest=' + enc(CONTEST), G);
           if (Number.isInteger(b.penalty_minutes)) PEN = b.penalty_minutes; } catch { /* fallback 20 */ }
   }
-  const frozen = parseICPC(fl.slice(1), balloons, modeWords(fl[0]).includes('s'));
-  const full = parseICPC(ul.slice(1), balloons, modeWords(ul[0]).includes('s'));
+  const frozen = parseICPC(fl.slice(1), balloons, modeWords(fl[0]).includes('s'), modeWords(fl[0]).includes('g'));
+  const full = parseICPC(ul.slice(1), balloons, modeWords(ul[0]).includes('s'), modeWords(ul[0]).includes('g'));
   if (!frozen || !full) { app.textContent = T('Placar vazio.', 'Empty scoreboard.'); return; }
-  probShorts = full.probShorts;
+  probShorts = full.probShorts; GUEST_NUM = !!full.guestNumbering;
   const fmap = {}; full.teams.forEach(t => { fmap[t.username] = t; });
   teams = frozen.teams.map(t => ({
     username: t.username, teamName: t.teamName, univShort: t.univShort, univFull: t.univFull,
-    flag: t.flag, cells: { ...t.probs }, fullCells: { ...(fmap[t.username]?.probs || t.probs) },
+    flag: t.flag, guest: !!t.guest, cells: { ...t.probs }, fullCells: { ...(fmap[t.username]?.probs || t.probs) },
   }));
   // times que só aparecem no full (ex.: 1ª submissão pós-freeze com placar por atividade)
   full.teams.forEach(t => {
@@ -216,9 +229,23 @@ async function main() {
     autoBtn.textContent = T('⏸ Pausar', '⏸ Pause');
     timer = setInterval(() => { if (!step()) { clearInterval(timer); timer = null; autoBtn.textContent = '▶ Auto'; } }, 1400);
   });
-  // descongelar é POST admin-only — o botão só aparece p/ admin (juiz/cstaff não podem)
-  const unfreezeBtn = st.is_admin
-    ? el('button', { class: 'btn danger ghost', onclick: unfreezeAll }, T('🔓 Descongelar tudo (público)', '🔓 Unfreeze all (public)')) : '';
+  // descongelar é POST admin-only — o botão só aparece p/ admin (juiz/cstaff não podem).
+  // E só a partir do fim geral + 1 min (freeze_release_at do /contest/admin/settings; o
+  // servidor recusa com 409 freeze_locked de qualquer jeito — aqui é só p/ explicar a hora).
+  let unfreezeBtn = '';
+  if (st.is_admin) {
+    unfreezeBtn = el('button', { class: 'btn danger ghost', onclick: unfreezeAll }, T('🔓 Descongelar tudo (público)', '🔓 Unfreeze all (public)'));
+    try {
+      const cfg = await apiGet('/contest/admin/settings?contest=' + enc(CONTEST), G);
+      const at = +(cfg && cfg.freeze_release_at) || 0;
+      if (at && Math.floor(Date.now() / 1000) < at) {
+        unfreezeBtn.disabled = true;
+        const hh = new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        unfreezeBtn.title = T('disponível a partir de ', 'available from ') + hh + T(' (fim para todas as sedes + 1 min)', ' (end for every site + 1 min)');
+        unfreezeBtn.textContent = T('🔒 Descongelar a partir de ', '🔒 Unfreeze from ') + hh;
+      }
+    } catch { /* sem leitura das configurações: o servidor decide */ }
+  }
   app.append(
     el('div', { class: 'row', style: 'gap:.5rem;align-items:center;margin-bottom:.6rem;flex-wrap:wrap' },
       stepBtn, autoBtn, unfreezeBtn,

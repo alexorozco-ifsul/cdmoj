@@ -289,7 +289,7 @@ _pr_text2pdf() {  # <src> <out.pdf> <nome-do-arquivo> <rodapé> <workdir> [<err>
   # ⚠ CURTO: a data que o paps escreve à esquerda come metade da linha, a fonte do cabeçalho é
   # FIXA (não acompanha o `--font`) e um título de mais de ~14 caracteres SOBREPÕE a data —
   # medido. Por isso o login do time não cabe aqui: ele vai no rodapé, logo abaixo.
-  name="$(basename -- "${name:-arquivo}" | tr -cd 'A-Za-z0-9._-')"; [[ -n "$name" ]] || name=arquivo
+  name="$(basename -- "${name:-arquivo}" | tr -cd 'A-Za-z0-9._+-')"; [[ -n "$name" ]] || name=arquivo   # + p/ sol.c++
   enc="$(file -b --mime-encoding "$src" 2>/dev/null)"
   { case "$enc" in
       utf-8|us-ascii|'') cat "$src" ;;
@@ -883,12 +883,14 @@ pr_reconcile_balloons() {
     while IFS=$'\t' read -r sub_epoch login cid verdict; do
       [[ -n "$login" && -n "$cid" ]] || continue
       sub_epoch="${sub_epoch//[^0-9]/}"; sub_epoch="${sub_epoch:-0}"   # nunca deixe (( )) ver lixo
-      case "$verdict" in *Accepted*) ;; *) continue;; esac
+      # pela CLASSE (prefixo), nunca por substring: o texto do time (`¦…`, configurável) pode
+      # conter "Accepted" ("Not Accepted") — o awk abaixo já cortou o `¦…`
+      case "$verdict" in Accepted*) ;; *) continue;; esac
       case "$verdict" in *" (Ignored)") continue;; esac   # ignorada não conta no placar nem ganha balão
       case "$login" in *.admin|*.judge|*.cjudge|*.staff|*.cstaff|*.mon|*.animeitor) continue;; esac
       _bln_try "$login" "$cid" "$sub_epoch" || true
     done < <(emit_history_stream_since "$c" "$prev" \
-               | awk -F: 'NF>=7{ v=$5; for(i=6;i<=NF-2;i++) v=v ":" $i;
+               | awk -F: 'NF>=7{ v=$5; for(i=6;i<=NF-2;i++) v=v ":" $i; sub(/¦.*$/, "", v);
                                  print $(NF-1) "\t" $2 "\t" $3 "\t" v }' \
                | sort -n -k1,1)
     # o que ficou esperando decisão volta para o arquivo de espera
@@ -915,4 +917,28 @@ pr_balloons_release_frozen() {
   ) 9>"$dir/.balloon.lock"
   audit_log_to "$c" balloon-freeze-release "liberados=$n by=$by"
   printf '%s' "$n"
+}
+
+# staff_regions <c> — as SEDES (nomes de `.team.region`) do escopo de $SESSION_LOGIN, 1/linha.
+# rc=1 = SEM escopo explícito no staff-filters. Quem decide o que "sem escopo" significa é o chamador:
+# nas telas de LEITURA ausente = vê tudo; em AÇÃO e em CREDENCIAL (comando do mlinux, link do
+# reveleitor do Animeitor) é fail-CLOSED — sem sede definida, nada. Token `region:<sede>` responde
+# direto; escopo por regex é resolvido pelos logins visíveis (colhe a sede de cada um).
+staff_regions(){
+  local c="$1" f="$CONTESTSDIR/$1/print-requests/staff-filters.json" out
+  [[ -s "$f" ]] || return 1
+  jq -e --arg s "$SESSION_LOGIN" 'has($s) and ((.[$s] // []) | length > 0)' "$f" >/dev/null 2>&1 || return 1
+  out="$(jq -r --arg s "$SESSION_LOGIN" \
+    '(.[$s] // [])[] | select(startswith("region:")) | .[7:] | gsub("^ +| +$"; "")' "$f" 2>/dev/null)"
+  if [[ -n "$out" ]]; then printf '%s\n' "$out"; return 0; fi
+  # escopo por regex: resolve os logins visíveis e colhe as sedes deles
+  local logins
+  if logins="$(staff_visible_logins "$c" "$SESSION_LOGIN" 2>/dev/null)"; then
+    printf '%s\n' "$logins" | while IFS= read -r lg; do
+      [[ -n "$lg" ]] || continue
+      jq -r '.team.region // empty' "$(account_file "$c" "$lg")" 2>/dev/null
+    done | sort -u
+    return 0
+  fi
+  return 1
 }
