@@ -214,6 +214,9 @@ metrics_recompute(){
          first_ac_epoch: $fac,
          counted: (if $fac != null then ($cnt|map(select(.sub_epoch <= $fac))|length)
                    else ($cnt|length) end),
+         # submissões REAIS até o 1º AC inclusive (todo veredicto, CE também): é a base do
+         # DIRT (lib/difficulty.sh, issue #30) — igual à conta do stats-gen do contest
+         tries_to_ac: (if $fac != null then ($g|map(select((.prov|not) and .sub_epoch <= $fac))|length) else null end),
          best_score: (if ($real|length)==0 then null else ($real|map(.pts)|max) end),
          heur: (($real|map(select(.hs != null))) as $h
                 | if ($h|length)==0 then null
@@ -221,7 +224,7 @@ metrics_recompute(){
     split("\n") | map(select(length>0)) | map(split(":"))
     | map({probid:.[1], lang:.[2], subid:.[-1],
            sub_epoch:((.[-2]|tonumber?) // 0),
-           verdict:(.[3:-2]|join(":"))})
+           verdict:((.[3:-2]|join(":")) | split("¦")[0])})   # classe: o ¦texto do time não pontua
     | map(. + {prov: (.verdict|test("Not Answered Yet|On queue|Running"; "i")),
                ac:   (.verdict|startswith("Accepted") and (test(" \\(Ignored\\)$")|not))})
     | map(. + {counts: ((.prov
@@ -243,7 +246,7 @@ metrics_recompute(){
                ha:  (if (.prov|not) and (.verdict|test("Score Ajustado[ \t]+-?[0-9]+(\\.[0-9]+)?")) then
                        (.verdict|capture("Score Ajustado[ \t]+(?<n>-?[0-9]+(\\.[0-9]+)?)").n|tonumber)
                      else 0 end)})
-    | { version: 2,
+    | { version: 3,
         computed_at: $now,
         freeze_time: $freeze,
         submissions: length,
@@ -387,10 +390,12 @@ count_pending(){
   # ATENÇÃO: `grep -c` IMPRIME "0" E SAI 1 quando não há match. NUNCA usar
   # `grep -c … || echo 0` (retorna "0\n0" → estoura (( )) e inunda o stderr → trava o worker
   # fcgiwrap). Capturar direto (o exit 1 é inofensivo dentro de $()) e sanear a dígitos.
-  local m; m="$( set +o noglob; shopt -s nullglob
-    local n=0 hf; for hf in "$d"/*/history; do
-      g="$(grep -cE "$re" "$hf" 2>/dev/null)"; n=$(( n + ${g//[^0-9]/} + 0 ))
-    done; echo "$n" )"
+  # UM grep p/ todos os history (find|xargs), somado no awk — era um `grep -c` POR CONTA: no treino (~1.000
+  # contas) mil processos a cada vez que o cache sujava, isto é, a cada submissão (XIV Maratona UnB, 25/09/2026:
+  # o /treino/admin/queue chegou a 8,6 s). Mesma contagem: `-c` conta linhas por arquivo e o awk soma.
+  local m; m="$(find "$d" -mindepth 2 -maxdepth 2 -name history -type f -print0 2>/dev/null \
+      | xargs -0 -r grep -chE "$re" 2>/dev/null | awk '{ s += $1 } END { print s + 0 }')"
+  m="${m//[^0-9]/}"; m="${m:-0}"
   mkdir -p "$CONTESTSDIR/$c/var" 2>/dev/null
   printf '%s\n' "$m" > "$cache.tmp.${BASHPID}" 2>/dev/null && mv -f "$cache.tmp.${BASHPID}" "$cache" 2>/dev/null
   echo "$m"
@@ -404,7 +409,8 @@ resolve_submission(){
   SUB_OWNER=""; SUB_SRC=""; SUB_LOG=""; SUB_RESULT=""
   d="$(users_dir "$c")"
   for f in "$d"/*/submissions/"$sid".*;   do SUB_SRC="$f"; break; done
-  for f in "$d"/*/mojlog/"$sid".html "$d"/*/mojlog/"$sid"; do SUB_LOG="$f"; break; done
+  # .html.gz é o formato atual (2026-09-16); .html e sem extensão = legado
+  for f in "$d"/*/mojlog/"$sid".html.gz "$d"/*/mojlog/"$sid".html "$d"/*/mojlog/"$sid"; do SUB_LOG="$f"; break; done
   for f in "$d"/*/results/"$sid".json;    do SUB_RESULT="$f"; break; done
   any="${SUB_SRC:-${SUB_RESULT:-$SUB_LOG}}"
   if [[ -n "$any" ]]; then any="${any%/submissions/*}"; any="${any%/mojlog/*}"; any="${any%/results/*}"; SUB_OWNER="${any##*/}"; fi

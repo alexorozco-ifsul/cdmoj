@@ -64,6 +64,7 @@
         <a href="#clar" data-en="9. Clarifications">9. Clarifications</a>
         <a href="#placar" data-en="10. Reading the scoreboard">10. Ler o placar</a>
         <a href="#extras" data-en="11. Printing, backup and CLI">11. Impressão, backup e CLI</a>
+        <a href="#virtual" data-en="11½. After the contest: virtual participation">11½. Depois da prova: participação virtual</a>
         <a href="#resumo" data-en="12. Summary">12. Resumo</a>
       </nav>
 
@@ -107,17 +108,18 @@
         </p>
         <figure class="shot">
           <img src="/contest/ajuda/img/comp-contest.png" alt="">
-          <figcaption data-en="The whole contest page. At the very top, the yellow bar is the notification of what changed since you last looked.">
+          <figcaption data-en="The whole contest page. At the very top, the yellow bar is the notification of what changed since you last looked; on the right of the header, your team name and login.">
             A página da prova inteira. Bem no topo, a faixa amarela é a notificação do que mudou
-            desde a última vez que você olhou.
+            desde a última vez que você olhou; à direita do cabeçalho, o nome do seu time e o login.
           </figcaption>
         </figure>
         <table class="cheat">
           <tr><th data-en="Tab">Aba</th><th data-en="What it is for">Para que serve</th></tr>
           <tr><td>Contest</td><td data-en="This page: problems, statements, submitting.">Esta página: problemas, enunciados, envio.</td></tr>
           <tr><td>Score</td><td data-en="The scoreboard.">O placar.</td></tr>
-          <tr><td>Clarification</td><td data-en="Ask the judges. The number beside it is how many answers you have not read.">Perguntar aos juízes. O número ao lado é quantas respostas você ainda não leu.</td></tr>
-          <tr><td>💾 Backup</td><td data-en="A drawer of your own on the server: you store files there so as not to lose work.">Uma gaveta sua no servidor: você guarda arquivos ali para não perder trabalho.</td></tr>
+          <tr><td>Clarification</td><td data-en="Ask the judges, only while the contest is running. The number beside it is how many answers you have not read.">Perguntar aos juízes, só durante a prova. O número ao lado é quantas respostas você ainda não leu.</td></tr>
+          <tr><td data-en="My submissions">Minhas submissões</td><td data-en="Your submissions on a page of their own: filter by problem, sort by column. The same table is at the end of the contest page.">As suas submissões numa página própria: filtro por problema, ordenação por coluna. A mesma tabela fica no fim da página do contest.</td></tr>
+          <tr><td>Backup</td><td data-en="A drawer of your own on the server: you store files there so as not to lose work. Saving works only while the contest is running; reading and downloading always.">Uma gaveta sua no servidor: você guarda arquivos ali para não perder trabalho. Gravar só funciona durante a prova; ver e baixar, sempre.</td></tr>
           <tr><td>🖨️ <span data-en="Printing">Printing</span></td><td data-en="Sends a file to the room team's printer — it only exists if the contest has printing.">Manda um arquivo para a impressora da equipe de sala — só existe se a prova tiver impressão.</td></tr>
         </table>
         <div class="tip" data-en-html="The clock at the top right counts down to the <b>END</b> of the contest. The end time comes from the server, but the ticking is done by your machine's clock — so on a computer with the wrong time the countdown is wrong too. What decides is the server: a submission that arrives after the end does not count, whatever your screen says.">
@@ -159,6 +161,25 @@
           linguagens não recebem o mesmo limite — as mais lentas ganham mais tempo, medido na
           máquina do juiz.
         </div>
+        <div class="tip" data-en-html="Every sample block has a <b>Copy</b> button in its own heading — one click puts the whole input (or output) on the clipboard, with the final line break the judge expects. Next to the HTML/PDF links, <b>Samples</b> downloads every sample of that problem as files (<code>A/sample1.in</code>, <code>A/sample1.out</code>…) in one zip, so you can run your program on them before submitting. On the command line, <code>moj-comp fetch</code> already puts them in the kit's <code>samples/</code> folder.">
+          Cada bloco de exemplo tem um botão <b>Copiar</b> no próprio título — um clique põe a entrada
+          (ou a saída) inteira na área de transferência, com a quebra de linha final que o juiz
+          espera. Ao lado dos links HTML/PDF, <b>Exemplos</b> baixa todos os exemplos daquele problema
+          como arquivos (<code>A/sample1.in</code>, <code>A/sample1.out</code>…) num zip só, para você
+          rodar o seu programa neles antes de enviar. Na linha de comando, <code>moj-comp fetch</code>
+          já os deixa na pasta <code>samples/</code> do kit.
+        </div>
+
+        <h3 data-en="When the statement comes in more than one language">Quando o enunciado vem em mais de um idioma</h3>
+        <p data-en-html="<b>Not every contest offers the statement in more than one language.</b> The statement exists in the language the author wrote it, and translation is the author's choice; most contests have one statement per problem and no language chips. When a problem does have a translation, the chips <b>PT · EN · ES</b> appear above the statement, inside the accordion. Click a chip to switch. The switch applies to every problem of the contest that has that language, and MOJ remembers your choice. The <b>HTML</b> and <b>PDF</b> links open in the chosen language. A problem without a translation shows the Portuguese text — and shows no chips."><span><b>Nem todo contest oferece o enunciado em mais de um idioma.</b> O enunciado existe no idioma em que o autor escreveu, e traduzir é escolha do autor; a maioria das provas tem um enunciado por problema e nenhum chip de idioma. Quando um problema tem tradução, aparecem os chips <b>PT · EN · ES</b> acima do enunciado, dentro da sanfona. Clique em um chip para trocar. A troca vale para todos os problemas da prova que têm aquele idioma, e o MOJ lembra a sua escolha. Os links <b>HTML</b> e <b>PDF</b> abrem no idioma escolhido. Um problema sem tradução mostra o texto em português — e não mostra chips.</span></p>
+        <figure class="shot">
+          <img src="/contest/ajuda/img/comp-idiomas.png" alt="">
+          <figcaption data-en="Problem A comes in three languages: the PT · EN · ES chips sit above the statement, and the accordion opened in English because that is the language of this contest. The other problems of the same contest have a single statement and no chips.">
+            O problema A vem em três idiomas: os chips PT · EN · ES ficam acima do enunciado, e a
+            sanfona abriu em inglês porque esse é o idioma desta prova. Os outros problemas da
+            mesma prova têm um enunciado só e nenhum chip.
+          </figcaption>
+        </figure>
 
         <h3 data-en="When the statement is PDF only">Quando o enunciado é só PDF</h3>
         <p data-en-html="Plenty of contests hand out only the problem set in PDF — no HTML version. There the row has only the <b>PDF</b> link, and the accordion opens with the <b>time limit</b> (and the editor, if there is one) and nothing else. It is not a broken screen: the statement is in the PDF, and it is the PDF you read.">
@@ -186,9 +207,10 @@
         </p>
         <figure class="shot">
           <img src="/contest/ajuda/img/comp-sem-editor.png" alt="">
-          <figcaption data-en="The same accordion with the editor off: the statement takes the whole width and there is no layout selector. Submitting still works — through the file picker on the row.">
+          <figcaption data-en="The same accordion with the editor off: the statement takes the whole width and there is no layout selector. Submitting still works — through the Choose file button on the row, which only offers the extensions the problem accepts.">
             A mesma sanfona com o editor desligado: o enunciado ocupa a largura toda e não existe
-            seletor de arranjo. Enviar continua funcionando — pelo seletor de arquivo da linha.
+            seletor de arranjo. Enviar continua funcionando — pelo botão Escolher arquivo da linha,
+            que só oferece as extensões que o problema aceita.
           </figcaption>
         </figure>
         <div class="warn" data-en-html="Which of the two screens you get is something you find out in the <b>warm-up</b>: open a problem there and see. If there is no editor, that is the session to open your editor, compile a hello world in the terminal and submit it — so that on contest day the only new thing is the problem.">
@@ -203,7 +225,7 @@
           Há dois caminhos, e os dois terminam no mesmo botão <i>Submit</i> da linha do problema:
         </p>
         <ol>
-          <li data-en-html="<b>From the file</b> — pick the file you compiled and press <i>Submit</i>. MOJ guesses the language from the extension."><b>Pelo arquivo</b> — escolha o arquivo que você compilou e aperte <i>Submit</i>. O MOJ deduz a linguagem pela extensão.</li>
+          <li data-en-html="<b>From the file</b> — pick the file you compiled and press <i>Submit</i>. MOJ guesses the language from the extension. For C++, use <code>.cpp</code>, <code>.cc</code>, <code>.cxx</code> or <code>.c++</code>."><b>Pelo arquivo</b> — escolha o arquivo que você compilou e aperte <i>Submit</i>. O MOJ deduz a linguagem pela extensão. Para C++, use <code>.cpp</code>, <code>.cc</code>, <code>.cxx</code> ou <code>.c++</code>.</li>
           <li data-en-html="<b>From the editor</b> — write in the accordion, pick the language in the dropdown and press <i>Submit</i>. There is also <i>Fullscreen</i> and <i>New window</i>, for when the split gets tight."><b>Pelo editor</b> — escreva na sanfona, escolha a linguagem no seletor e aperte <i>Submit</i>. Há ainda <i>Fullscreen</i> e <i>New window</i>, para quando a divisão apertar.</li>
         </ol>
         <div class="warn" data-en-html="The dropdown only offers the languages that problem accepts, and the server checks it again on arrival — renaming <code>.py</code> to <code>.c</code> does not get around a restriction, it just gets your submission refused.">
@@ -222,6 +244,18 @@
             Suas submissões. <i>Time</i> é o minuto de prova; <i>Date</i> é a hora do relógio. Os
             botõezinhos de cima filtram por problema, e o link <code>src</code> baixa de volta o
             arquivo que você enviou.
+          </figcaption>
+        </figure>
+        <p data-en-html="The same table has a page of its own: <b>My submissions</b>, in the navigation bar. It filters by problem, sorts by column and refreshes by itself while a verdict is pending — handy on a second tab while you keep coding.">
+          A mesma tabela tem uma página própria: <b>Minhas submissões</b>, na barra de navegação.
+          Ela filtra por problema, ordena por coluna e atualiza sozinha enquanto um veredicto está
+          pendente — útil numa segunda aba enquanto você segue programando.
+        </p>
+        <figure class="shot">
+          <img src="/contest/ajuda/img/comp-minhas-submissoes.png" alt="">
+          <figcaption data-en="The My submissions page: your submissions only, with the filter by problem and the sortable columns.">
+            A página Minhas submissões: só as suas submissões, com o filtro por problema e as
+            colunas ordenáveis.
           </figcaption>
         </figure>
         <table class="cheat">
@@ -293,15 +327,17 @@
         </p>
         <figure class="shot">
           <img src="/contest/ajuda/img/comp-clarification.png" alt="">
-          <figcaption data-en="The clarification page: the form at the top, the answers below. The first one is an official announcement — an answer nobody had to ask for.">
-            A página de clarifications: o formulário em cima, as respostas embaixo. A primeira é um
-            <i>official notice</i> — uma resposta que ninguém precisou perguntar.
+          <figcaption data-en="The clarification page: the form at the top, then two sections. &quot;Your questions&quot; shows your questions, open ones first. &quot;Public answers and notices&quot; shows the official notices and the public answers. The page refreshes by itself.">
+            A página de clarifications: o formulário em cima, depois duas seções. <i>Suas
+            perguntas</i> mostra as suas perguntas, as abertas primeiro. <i>Respostas públicas e
+            avisos</i> mostra os avisos oficiais e as respostas públicas. A página atualiza sozinha.
           </figcaption>
         </figure>
         <ul>
           <li data-en-html="<b>Pick the problem</b> (or <i>General</i>, for something that is not about a specific problem) and write the question. Be specific: “in B, can the maze have more than one exit?” gets answered; “I don't understand B” does not."><b>Escolha o problema</b> (ou <i>General</i>, para algo que não é de um problema específico) e escreva a pergunta. Seja específico: “no B, o labirinto pode ter mais de uma saída?” é respondível; “não entendi o B” não é.</li>
-          <li data-en-html="<b>You are anonymous to the judges.</b> They see the question, not who asked — so asking does not mark your team."><b>Você é anônimo para os juízes.</b> Eles veem a pergunta, não quem perguntou — então perguntar não marca o seu time.</li>
+          <li data-en-html="<b>The judges do not see who asked.</b> They see only the question. The chief judge and the administrator see your login and your name. The public report does not show who asked."><b>Os juízes não veem quem perguntou.</b> Eles veem só a pergunta. O juiz-chefe e o administrador veem o seu login e o seu nome. O relatório público não mostra quem perguntou.</li>
           <li data-en-html="<b>A public answer goes to everyone.</b> If your question is useful to the room, the answer appears for all teams; if it is only about your case, only you see it. That is why the list has answers you never asked for."><b>Resposta pública vai para todos.</b> Se a sua pergunta serve à sala, a resposta aparece para todos os times; se é só do seu caso, só você a vê. É por isso que a lista tem respostas que você não pediu.</li>
+          <li data-en-html="<b>Only while the contest is running.</b> Before the start and after the end the form is refused — the judges answer during the contest. Reading the notices and the answers stays open."><b>Só com a prova em andamento.</b> Antes do início e depois do fim o formulário é recusado — os juízes respondem durante a prova. Ler os avisos e as respostas continua aberto.</li>
           <li data-en-html="A common answer is <i>“read the statement”</i>, and it is a real answer: it means the information is already there."><i>“Leia o enunciado”</i> é uma resposta comum — e é resposta de verdade: quer dizer que a informação já está lá.</li>
         </ul>
         <p data-en="And this is what a notification looks like — you do not have to keep the page open to find out:">
@@ -369,9 +405,9 @@
 
         <h2 id="extras" data-en="11. Printing, backup and CLI">11. Impressão, backup e CLI</h2>
 
-        <h3 data-en="🖨️ Printing">🖨️ Impressão</h3>
-        <p data-en-html="Reading code on paper catches what the screen hides. In the <b>🖨️ Printing</b> tab you pick the file (source code, text, image or PDF, up to 10 MB) and press <i>Request printing</i>: the room team prints it and walks it to your desk. It comes with a cover sheet carrying your team name and a reference number, so nothing gets delivered to the wrong table. Source code is printed in a <b>monospaced font, with your indentation and numbered lines</b>, and <b>every page repeats your team login</b> and the file name — a sheet that comes loose from the pile still finds its way back to you.">
-          Ler código no papel pega o que a tela esconde. Na aba <b>🖨️ Printing</b> você escolhe o
+        <h3 data-en="Printing">Impressão</h3>
+        <p data-en-html="Reading code on paper catches what the screen hides. In the <b>Printing</b> tab you pick the file (source code, text, image or PDF, up to 10 MB) and press <i>Request printing</i>: the room team prints it and walks it to your desk. It comes with a cover sheet carrying your team name and a reference number, so nothing gets delivered to the wrong table. Source code is printed in a <b>monospaced font, with your indentation and numbered lines</b>, and <b>every page repeats your team login</b> and the file name — a sheet that comes loose from the pile still finds its way back to you.">
+          Ler código no papel pega o que a tela esconde. Na aba <b>Printing</b> você escolhe o
           arquivo (código-fonte, texto, imagem ou PDF, até 10 MB) e aperta <i>Request printing</i>:
           a equipe de sala imprime e leva até a sua mesa. Sai com uma folha de rosto com o nome do
           seu time e um número de conferência, para nada ser entregue na mesa errada. Código-fonte
@@ -392,13 +428,15 @@
           organização a desligou.
         </div>
 
-        <h3 data-en="💾 Backup">💾 Backup</h3>
-        <p data-en-html="The <b>💾 Backup</b> tab is a drawer of your own on the server: pick a file, press <i>Store file</i>, and it stays there for you to download back whenever you want. It is for <b>not losing work</b> — the version that was working before you rewrote everything, the machine that decides to die at minute 150. It does <b>not</b> count as a submission and nobody else sees it.">
-          A aba <b>💾 Backup</b> é uma gaveta sua no servidor: escolha um arquivo, aperte
+        <h3 data-en="Backup">Backup</h3>
+        <p data-en-html="The <b>Backup</b> tab is a drawer of your own on the server: pick a file, press <i>Store file</i>, and it stays there for you to download back whenever you want. It is for <b>not losing work</b> — the version that was working before you rewrote everything, the machine that decides to die at minute 150. It does <b>not</b> count as a submission and nobody else sees it. <b>Storing works only while the contest is running</b>: before the start and after the end the server refuses the file; downloading what is already there always works.">
+          A aba <b>Backup</b> é uma gaveta sua no servidor: escolha um arquivo, aperte
           <i>Store file</i>, e ele fica lá para você baixar de volta quando quiser. Serve
           para <b>não perder trabalho</b> — a versão que estava funcionando antes de você
           reescrever tudo, a máquina que resolve morrer no minuto 150. <b>Não</b> conta como
-          submissão e mais ninguém vê.
+          submissão e mais ninguém vê. <b>Guardar só funciona com a prova em andamento</b>: antes
+          do início e depois do fim o servidor recusa o arquivo; baixar o que já está lá funciona
+          sempre.
         </p>
         <figure class="shot">
           <img src="/contest/ajuda/img/comp-backup.png" alt="">
@@ -422,6 +460,21 @@
           <a href="/contest/cli.html" target="_blank">a página da CLI</a>.
         </p>
 
+        <h2 id="virtual" data-en="11½. After the contest: do it again (virtual participation)">11½. Depois da prova: refazer (participação virtual)</h2>
+        <p data-en-html="Some contests, after they end, offer the <b>virtual participation</b>. You redo the whole contest with a clock, against the official scoreboard: each team solves each problem at the same minute it did in the real contest. It is not inside the contest — it lives on the main site and uses your <b>Free Training account</b>.">
+          Algumas provas, depois de encerradas, oferecem a <b>participação virtual</b>. Você refaz a
+          prova inteira com relógio, contra o placar oficial: cada time resolve cada problema no mesmo
+          minuto em que resolveu na prova de verdade. Ela não fica dentro do contest — mora no site
+          principal e usa a sua <b>conta do Treino Livre</b>.
+        </p>
+        <ul>
+          <li data-en-html="Where: the <b>Virtual</b> button on the card of the finished contest (home page and contest archive), or the link on the contest scoreboard.">Onde: o botão <b>Virtual</b> no card do contest encerrado (página inicial e arquivo de contests), ou o link no placar da prova.</li>
+          <li data-en="One participation per account per contest. Start now or schedule a time.">Uma participação por conta por prova. Comece agora ou agende um horário.</li>
+          <li data-en-html="You may <b>give up without recording</b> in the first 15 minutes, or while you have no accepted problem — at most twice. After that the start is final.">Você pode <b>desistir sem gravar</b> nos primeiros 15 minutos, ou enquanto não tiver nenhum problema aceito — no máximo duas vezes. Depois disso a largada é definitiva.</li>
+          <li data-en-html="At the end your row stays on the virtual scoreboard, marked <b>virtual</b>. It never changes the official result.">No fim, a sua linha fica no placar virtual, marcada como <b>virtual</b>. Ela nunca muda o resultado oficial.</li>
+          <li data-en="Not every contest offers it: the organisers decide, and it only exists when all the problems are already public.">Nem toda prova oferece: quem decide é a organização, e ela só existe quando todos os problemas já são públicos.</li>
+        </ul>
+
         <h2 id="resumo" data-en="12. Summary">12. Resumo</h2>
         <table class="cheat">
           <tr><th data-en="When">Quando</th><th data-en="What to do">O que fazer</th></tr>
@@ -442,5 +495,6 @@
   </main>
 
   <script type="module" src="/shared/i18n-dom.js"></script>
+  <script type="module" src="/contest/ajuda/_tutorial.js"></script>
 </body>
 </html>

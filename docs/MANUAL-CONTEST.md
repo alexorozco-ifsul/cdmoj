@@ -117,8 +117,9 @@ encerradas** em *Arquivos & Recursos*), quando a organização os publica.
 
 Quando existirem, aparecem também as seções **Informações & Notícias** e **Arquivos & Recursos**.
 Em **Arquivos & Recursos** é onde a organização publica os documentos da prova quando quer que
-você os tenha em mãos. São até quatro: as **informações do ambiente** (versões de compilador,
-limites de memória e de tempo), o **caderno da prova**, a **folha de time limits** e o
+você os tenha em mãos. São até quatro: o **ambiente de julgamento** (sistema, versões de
+compilador, limites, linhas de compilação e execução, veredictos e penalidade), o **caderno da
+prova**, a **folha de time limits** e o
 **editorial** (as soluções — esse só aparece depois que a prova acaba para *todas* as sedes).
 
 Cada documento é uma linha com o nome à esquerda e os **idiomas como botões**: `PT`, `EN`, `ES`.
@@ -133,11 +134,21 @@ A lista de problemas é um acordeão. Cada linha tem:
 - Um **triângulo** para abrir e fechar o problema.
 - Um **balão** que fica colorido quando você resolve aquele problema.
 - O nome curto e o nome completo do problema.
-- À direita, os links do enunciado (**Enunciado**, **HTML**, **PDF**) e um **envio rápido** por arquivo.
+- À direita, os links do enunciado (**Enunciado**, **HTML**, **PDF**), o link **Exemplos** (baixa a
+  entrada e a saída de cada exemplo como arquivos, num zip) e um **envio rápido** por arquivo.
+
+Cada bloco de exemplo do enunciado tem um botão **Copiar** no título. Um clique copia o bloco
+inteiro, com a quebra de linha final. Na CLI, `moj-comp fetch` grava os exemplos de todos os
+problemas na pasta `samples/` do kit.
 
 Ao abrir um problema, a primeira linha é o **tempo-limite**, um chip por linguagem (as mais
 lentas ganham mais tempo, medido na máquina do juiz). Depois vem o enunciado e, se a organização
 habilitou o editor, ele ao lado — com as opções **Lado a lado**, **Só enunciado** e **Só editor**.
+
+> **Enunciado em mais de um idioma.** Quando a organização oferece o enunciado em outros
+> idiomas, aparecem os chips **PT · EN · ES** acima do enunciado. Clique para trocar. A troca
+> vale para todos os problemas da prova, e o MOJ lembra a sua escolha. Os links **HTML** e
+> **PDF** abrem no idioma escolhido. Um problema sem tradução mostra o português.
 O MOJ lembra a sua escolha no próximo problema que você abrir. Abrir um problema não fecha os
 outros: dá para deixar dois abertos ao mesmo tempo.
 
@@ -167,6 +178,10 @@ Para enviar uma solução:
 > houve. Uma submissão só é aceita quando o servidor confirma — não existe "sumiu no caminho".
 
 ## 4. Minhas submissões
+
+A tabela fica no fim da página do contest e também tem uma **página própria**: o botão
+**Minhas submissões** na barra abre `/contest/submissions/`, só com a tabela, o filtro por
+problema e a ordenação por coluna. A lista se atualiza sozinha enquanto há veredicto pendente.
 
 Logo abaixo da lista de problemas há um filtro por problema e uma tabela com as suas submissões. As colunas são:
 
@@ -234,24 +249,33 @@ Se o contest for secreto e você não estiver logado, é preciso entrar para con
 
 ## 6. Clarifications (`/contest/clarification/?c=<id>`)
 
-Para usar as clarifications você precisa estar logado.
+> **Só durante a prova.** Antes do início e depois do fim, o MOJ não aceita perguntas de time. A
+> API responde "A competição ainda não começou" ou "A competição já terminou". Uma sede com o
+> tempo prorrogado continua perguntando até o fim dela.
+
+Uma clarification é uma pergunta aos juízes sobre um problema. Você precisa estar logado.
 
 Para fazer uma pergunta:
 
-1. Escolha o **problema** (ou selecione **Geral**).
-2. Escreva a sua pergunta — específica: *"no B, o labirinto pode ter mais de uma saída?"* é
-   respondível; *"não entendi o B"* não é.
+1. Escolha o **problema**. Para uma dúvida geral, escolha **Geral**.
+2. Escreva a pergunta. Seja específico. *"No B, o labirinto pode ter mais de uma saída?"* tem
+   resposta. *"Não entendi o B"* não tem.
 3. Clique em **Enviar pergunta**.
 
-A sua identidade fica **anônima para os juízes**.
+Quebras de linha na pergunta e na resposta são preservadas.
 
-Na lista você vê:
+Os juízes não veem quem perguntou. O juiz-chefe e o administrador veem o seu login e o seu nome.
+O relatório público da prova não mostra quem perguntou.
 
-- As suas perguntas, marcadas com **P:** (pergunta) e **R:** (resposta).
-- Os **avisos oficiais**, que são comunicados públicos da organização.
-- **Respostas públicas de perguntas que não são suas**: quando a dúvida serve à sala inteira, o
-  juiz publica a resposta para todos os times. É por isso que a lista tem respostas que você
-  não pediu.
+A página tem duas seções:
+
+- **Suas perguntas**. Cada pergunta mostra **P:** (pergunta) e **R:** (resposta). Uma pergunta
+  sem resposta fica no topo.
+- **Respostas públicas e avisos**. Aqui ficam os **avisos oficiais** da organização e as
+  respostas públicas de perguntas de outros times. Quando uma dúvida serve à sala inteira, o juiz
+  publica a resposta para todos. Por isso a lista tem respostas que você não pediu.
+
+A página atualiza sozinha a cada 30 segundos. Você pode filtrar por problema.
 
 O aviso no topo da página principal sinaliza quando uma dúvida sua foi respondida.
 
@@ -273,6 +297,9 @@ acha o caminho de volta até a sua mesa.
 Em **Meus pedidos** você acompanha o status de cada pedido: pendente, processada ou entregue.
 
 ## 8. Backup (`/contest/backup/?c=<id>`)
+
+> **Gravar só durante a prova.** Antes do início e depois do fim, o MOJ não guarda arquivo novo.
+> Você continua vendo, baixando e apagando os arquivos que já guardou.
 
 O backup é um espaço privado para você guardar versões das suas soluções.
 

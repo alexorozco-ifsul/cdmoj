@@ -66,11 +66,11 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       bash jq git gawk sed grep findutils coreutils util-linux tar gzip zip unzip \
       rsync file bzip2 zstd xz-utils python3 python3-yaml \
-      curl ca-certificates \
+      curl ca-certificates tzdata \
       fcgiwrap \
       pandoc graphviz \
       inotify-tools socat \
-      imagemagick ghostscript poppler-utils qpdf paps fonts-dejavu-core fonts-lmodern; \
+      imagemagick ghostscript poppler-utils qpdf paps fonts-dejavu-core fonts-lmodern fonts-cmu; \
     if [ "$WITH_OFFICE" = "1" ]; then \
       apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc libreoffice-math; \
     fi; \
@@ -109,6 +109,11 @@ RUN set -eux; \
     command -v fcgiwrap; \
     for b in rsync file bzip2 zstd xz unzip zip tar gzip jq git curl inotifywait socat \
              gs pdfinfo pdfunite qpdf paps ps2pdf iconv nl python3; do command -v "$b" >/dev/null || { echo "FALTA: $b" >&2; exit 1; }; done; \
+    # FUSO: lib/common.sh exporta TZ=America/Sao_Paulo e valida nomes contra o zoneinfo; sem tzdata
+    # o glibc cai MUDO em UTC e todo horário escrito p/ gente (quartil do relatório, DM, caderno)
+    # sai 3 h deslocado — a asserção é a capacidade, não o pacote.
+    [ -f /usr/share/zoneinfo/America/Sao_Paulo ] || { echo 'FALTA: tzdata (zoneinfo America/Sao_Paulo)' >&2; exit 1; }; \
+    [ "$(TZ=America/Sao_Paulo date -d @1757000000 +%H)" = "12" ] || { echo 'FALTA: TZ America/Sao_Paulo nao aplica (-3h)' >&2; exit 1; }; \
     # ⚠ BINÁRIO PRESENTE NÃO É CAPACIDADE PRESENTE. O `command -v paps` acima passou
     # durante meses enquanto TODA impressão de código-fonte saía só com a folha de rosto:
     # o código chamava `paps --format=pdf`, opção que só existe no paps >= 0.7, e esta
@@ -146,6 +151,9 @@ RUN set -eux; \
     # imagem (fonts-dejavu-core) e sai com inclinação sintética, a assinatura do "cara de Word".
     fc-list : family | grep -qi 'Latin Modern Roman'; \
     fc-list 'Latin Modern Roman' : style | grep -qi 'Italic'; \
+    # CMU SERIF = a fonte das FÓRMULAS do caderno (lib/odt-math-bars.py): o mesmo desenho do Latin
+    # Modern, mas COM grego — sem ela o `\alpha` da fórmula cai no DejaVu Serif, no meio do resto.
+    fc-list 'CMU Serif:charset=3b1' : style | grep -qi 'Italic'; \
     bash -n /opt/moj/cdmoj/server/api/v1/router.sh
 
 # Caminhos: todos os defaults do server são `: "${VAR:=…}"` ⇒ o ENV vence (zero edição de código).

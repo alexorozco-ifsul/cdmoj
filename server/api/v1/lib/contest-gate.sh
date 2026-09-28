@@ -61,6 +61,48 @@ contest_over_for_all() {
   [[ "$e" =~ ^[0-9]+$ ]] && (( e > 0 && EPOCHSECONDS > e ))
 }
 
+# --- DESCONGELAR o placar: só a partir do fim geral + 1 min (pedido do Ribas, 2026-09-14) ---
+# "Destravar" o freeze = FREEZE_TIME passar de >0 para 0/apagado. Quatro caminhos fazem isso
+# (Encerrar evento, promoção de rodada, "Descongelar tudo" da cerimônia, edição do freeze na
+# Central/Regras/config) e a regra vale p/ TODOS: nunca antes de contest_end_all + 60 s — o
+# último segundo de prova (inclusive de sede prorrogada) ainda aceita submissão, e o placar
+# congelado é o que protege a cerimônia. Mudar o freeze para OUTRO valor >0 segue livre.
+FREEZE_RELEASE_GRACE="${FREEZE_RELEASE_GRACE:-60}"
+# freeze_release_at <contest> -> epoch a partir do qual pode descongelar (0 = sem fim definido)
+freeze_release_at() {
+  local e; e="$(contest_end_all "$1")"
+  [[ "$e" =~ ^[0-9]+$ ]] && (( e > 0 )) || { printf 0; return 0; }
+  printf '%s' $(( e + FREEZE_RELEASE_GRACE ))
+}
+# freeze_release_ok <contest> : 0 se já pode descongelar
+freeze_release_ok() {
+  local at; at="$(freeze_release_at "$1")"
+  (( at == 0 || EPOCHSECONDS >= at ))
+}
+# freeze_release_guard <contest> — p/ handlers: se há freeze em vigor e ainda não é hora,
+# 409 freeze_locked (mensagem com a hora local do contest). Sem freeze em vigor: passa.
+freeze_release_guard() {
+  local cur; cur="$(conf_value "$1" FREEZE_TIME)"; cur="${cur//[^0-9]/}"
+  [[ -n "$cur" ]] && (( cur > 0 )) || return 0
+  freeze_release_ok "$1" && return 0
+  fail 409 "O placar só pode ser descongelado a partir de $(fmt_epoch "$(freeze_release_at "$1")" '%d/%m %H:%M' "$1") (fim da prova para todas as sedes + 1 min)" "freeze_locked"
+}
+
+# freeze_change_guard <contest> <novo-FREEZE_TIME> — p/ handlers que EDITAM o freeze: barra
+# (409 freeze_locked) toda mudança que DESCONGELA antes da hora — novo = 0 (apagar) ou, com o
+# freeze JÁ EM VIGOR (0 < atual <= agora), novo no futuro/no fim (o placar voltaria a mostrar o
+# que estava escondido). Mover o freeze ANTES de ele entrar em vigor segue livre. Comparação
+# numérica ("00" é zero). Sem freeze no conf: passa.
+freeze_change_guard() {
+  local cur new="${2:-0}"; cur="$(conf_value "$1" FREEZE_TIME)"; cur="${cur//[^0-9]/}"; new="${new//[^0-9]/}"
+  [[ -n "$cur" ]] && (( cur > 0 )) || return 0
+  [[ -n "$new" ]] || new=0
+  (( new == 0 )) && { freeze_release_guard "$1"; return 0; }
+  (( cur <= EPOCHSECONDS && new > EPOCHSECONDS )) || return 0     # não descongela: livre
+  freeze_release_ok "$1" && return 0
+  fail 409 "O placar está congelado e só pode ser descongelado a partir de $(fmt_epoch "$(freeze_release_at "$1")" '%d/%m %H:%M' "$1") (fim da prova para todas as sedes + 1 min) — mover o freeze para depois de agora o descongelaria" "freeze_locked"
+}
+
 # contest_phase <contest> -> ecoa: before | running | ended  (compara EPOCH com START e o
 # fim EFETIVO do login da sessão — prorrogação por sede vale aqui, e portanto no /submit;
 # START/END==0 = sem limite naquele extremo). Roda em subshell ao ser capturado, então o
@@ -80,6 +122,18 @@ can_see_problems() {
   is_judge && return 0                       # .admin/.judge: sempre
   { is_staff || is_cstaff || is_animeitor; } && return 1   # staff/sede/telão: nunca
   [[ "$(contest_phase "$1")" != before ]]   # demais: só após o início
+}
+
+# competitor_write_guard <contest> <o-que> — p/ handlers de ESCRITA do competidor que não são
+# submissão mas seguem a MESMA janela (backup, clarification; decisão do Ribas, 2026-09-15):
+# .admin/.judge/.cjudge sempre; .staff/.cstaff/.animeitor nunca (403 role_forbidden); time e
+# .mon SÓ durante a janela (fim EFETIVO da sessão: sede prorrogada segue escrevendo) — antes
+# 403 contest_not_started, depois 403 contest_ended. Mesmos códigos do /submit.
+competitor_write_guard() {
+  can_submit "$1" && return 0
+  { is_staff || is_cstaff || is_animeitor; } && fail 403 "Conta de sala/telão não ${2:-escreve} neste contest" "role_forbidden"
+  [[ "$(contest_phase "$1")" == before ]] && fail 403 "A competição ainda não começou — ${2:-a operação} só vale durante a prova" "contest_not_started"
+  fail 403 "A competição já terminou — ${2:-a operação} só vale durante a prova" "contest_ended"
 }
 
 # can_submit <contest> : 0 se o usuário logado pode submeter AGORA.

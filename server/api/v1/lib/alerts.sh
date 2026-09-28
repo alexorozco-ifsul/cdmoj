@@ -177,9 +177,31 @@ alerts_evaluate(){
 # Ordem = nome do arquivo (o prefixo epoch dá FIFO) e TETO de ALERT_CLAIM_MAX por chamada: o bot
 # entrega em série e o Telegram corta acima de ~30 msg/s — o resto sai no poll seguinte (~25 s).
 # Item ilegível é descartado (rm antes de emitir) p/ não travar a fila para sempre.
+# ENTREGA COM ACK (2026-09-14): item .json sai do outbox p/ inflight/<id>.json em vez de ser
+# apagado; o bot confirma com POST /ops/alerts {ack:[{id,ok,error}]} (alerts_ack), que apaga o
+# inflight. Sem ack em ALERT_INFLIGHT_TTL (600 s — bot caiu entre o claim e o envio, resposta
+# HTTP perdida), o item VOLTA ao outbox e é reentregue. O .txt de incidente segue at-most-once
+# (rm no claim): alerta repetido é pior que alerta perdido; relatório perdido é o que doía.
 alerts_claim(){
-  local d; d="$(_alert_dir)"; local ob="$d/outbox"
+  local d; d="$(_alert_dir)"; local ob="$d/outbox" inf="$d/inflight"
   [[ -d "$ob" ]] || { echo '[]'; return; }
+  mkdir -p "$inf" 2>/dev/null
+  # Reenfileira o inflight vencido. O `mv` PRESERVA o mtime: sem o `touch` na ida e na volta, um
+  # item que nunca recebe ack ficava "vencido" a cada poll (reentrega infinita a cada ~25 s).
+  # Teto ALERT_MAX_ATTEMPTS (5): depois disso o item é descartado com registro no log.
+  local stale att tmpj
+  while IFS= read -r stale; do
+    [[ -n "$stale" ]] || continue
+    att="$(jq -r '(.attempts // 1) + 1' "$stale" 2>/dev/null)"; [[ "$att" =~ ^[0-9]+$ ]] || att=99
+    if (( att > ${ALERT_MAX_ATTEMPTS:-5} )); then
+      printf '%s\tdrop\t%s\tsem ack após %s tentativas\n' "$EPOCHSECONDS" "${stale##*/}" "$(( att - 1 ))" >> "$d/relatorio.log" 2>/dev/null
+      rm -f "$stale"; continue
+    fi
+    tmpj="$stale.tmp.${BASHPID}"
+    if jq -c --argjson a "$att" '. + {attempts:$a}' "$stale" > "$tmpj" 2>/dev/null; then mv -f "$tmpj" "$ob/${stale##*/}" 2>/dev/null
+    else rm -f "$tmpj"; mv -f "$stale" "$ob/" 2>/dev/null; fi
+    touch "$ob/${stale##*/}" 2>/dev/null
+  done < <(find "$inf" -maxdepth 1 -name '*.json' -mmin +"$(( ${ALERT_INFLIGHT_TTL:-600} / 60 ))" 2>/dev/null)
   local files=() chats_json="" first=1 n=0 f id out
   mapfile -t files < <( set +o noglob; shopt -s nullglob
                         for f in "$ob"/*.txt "$ob"/*.json; do printf '%s\n' "$f"; done | sort )
@@ -202,10 +224,23 @@ alerts_claim(){
       out="$(jq -cn --arg id "$id" --arg t "$(cat "$f")" --argjson c "$chats_json" \
               '{id:$id, text:$t, chats:$c, loud:false, group:true}')"
     fi
-    rm -f "$f"
+    if [[ "$f" == *.json && -n "$out" ]]; then { mv -f "$f" "$inf/$id.json" && touch "$inf/$id.json"; } 2>/dev/null || rm -f "$f"; else rm -f "$f"; fi
     [[ -n "$out" ]] || continue
     (( first )) || printf ','; first=0
     printf '%s' "$out"; n=$(( n + 1 ))
   done
   printf ']'
+}
+# alerts_ack <json-array [{id,ok,error}]> -> n confirmados. Apaga o inflight e avisa o relatório
+# (rel_ack marca sent/outcome). Id fora do padrão é ignorado (nome de arquivo).
+alerts_ack(){
+  local d n=0 id ok err; d="$(_alert_dir)"
+  declare -F rel_ack >/dev/null || source "${BASH_SOURCE[0]%/*}/relatorio.sh"
+  while IFS=$'\t' read -r id ok err; do
+    [[ "$id" =~ ^[0-9]+-[a-z]+-[A-Za-z0-9_-]+$ ]] || continue
+    rm -f "$d/inflight/$id.json" 2>/dev/null
+    rel_ack "$id" "$ok" "$err"
+    n=$(( n + 1 ))
+  done < <(jq -r '.[]? | select(type=="object") | [(.id // ""), (if .ok == true then "true" else "false" end), ((.error // "") | tostring | gsub("[\t\n]"; " "))] | @tsv' <<<"$1" 2>/dev/null)
+  printf '%s' "$n"
 }

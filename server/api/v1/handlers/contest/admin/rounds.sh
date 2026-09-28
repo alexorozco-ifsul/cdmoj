@@ -6,9 +6,11 @@
 #          next, promote_ready:{ok, blockers:[{code,detail}]}}
 # POST {action}:
 #   add      {slug,name?,kind?,start,end,freeze?}   — cria rodada PLANEJADA
-#   set      {slug,new_slug?,name?,start?,end?,freeze?,kind?} — edita/renomeia (a ATIVA vai
-#              direto p/ o conf)
-#   problems {slug, problems:[{bank_id|problem_id,name?,letter?}]}
+#   set      {slug,new_slug?,name?,start?,end?,freeze?,kind?,colors?} — edita/renomeia (a ATIVA
+#              vai direto p/ o conf). colors = cores de balão DA RODADA (formato do balloons.json;
+#              null remove; {} não mexe; ausente na rodada = herda as cores em vigor ao promover)
+#   problems {slug, problems:[{bank_id|problem_id,name?,letter?}]} — só o que o DONO do contest
+#              pode usar (público, dono, colaborador ou membro da org: problems_denied_for)
 #   remove   {slug}            — só rodada planejada (arquivada é auditoria, nunca some)
 #   publish  {slug, on:bool}   — arquivo da rodada visível p/ os times
 #   promote  {to?, force?}     — arquiva a ativa e coloca a próxima no ar
@@ -59,6 +61,7 @@ case "$action" in
         '.rounds = ((.rounds // []) + [{slug:$s, name:$n, kind:$k, start:$st, end:$en, freeze:$fz,
                                         state:"pending", published:false, problems:[]}])' <<<"$j")"
     rd_save "$contest" "$j"
+    mod_enable "$contest" rodadas
     audit_log_to "$contest" round-add "slug=$slug kind=$kd start=$st end=$en"
     ok_json '{saved:true, rounds:$r}' --argjson r "$(jq -c '.rounds' <<<"$j")"
     ;;
@@ -98,11 +101,30 @@ case "$action" in
       [[ "$k" == kind ]] && { case "$v" in warmup|official|extra) ;; *) fail 422 "kind inválido" "kind_invalid";; esac; }
       cur="$(jq -c --arg k "$k" --arg v "$v" '.[$k]=$v' <<<"$cur")"
     done
+    # cores de balão POR RODADA (2026-09-14): objeto = grava na rodada (letra -> RRGGBB, enableSonic);
+    # null = a rodada volta a herdar as cores em vigor; {} = o editor não mexeu. Na rodada ATIVA o
+    # rd_apply_obj abaixo grava o balloons.json na hora (é o mesmo que Evento › Balões).
+    if jq -e 'has("colors")' "$bodyf" >/dev/null 2>&1; then
+      cl="$(jq -c '.colors' "$bodyf")"
+      if [[ "$cl" == null ]]; then cur="$(jq -c 'del(.colors)' <<<"$cur")"
+      elif [[ "$(jq 'if type=="object" then length else -1 end' <<<"$cl")" -gt 0 ]]; then
+        jq -e 'to_entries | all(.[]; (.key == "enableSonic" and (.value|type) == "boolean")
+                 or ((.key|test("^[A-Z][A-Z0-9]{0,2}$")) and ((.value|type) == "string") and (.value|test("^[0-9A-Fa-f]{6}$"))))'           <<<"$cl" >/dev/null 2>&1 || fail 422 "colors: chaves = letras (RRGGBB) e enableSonic (bool)" "colors_invalid"
+        cur="$(jq -c --argjson cl "$cl" '.colors=$cl' <<<"$cur")"
+      elif [[ "$cl" != '{}' ]]; then fail 422 "colors deve ser objeto ou null" "colors_invalid"; fi
+    fi
+    # a rodada ATIVA vive no conf: mexer no freeze dela é o 5º caminho de descongelar — mesma
+    # guarda dos outros quatro (fim geral + 1 min), ANTES de gravar qualquer coisa
+    if [[ "$(jq -r '.active' <<<"$j")" == "$slug" ]]; then
+      declare -F freeze_change_guard >/dev/null || source "$_LIBDIR/contest-gate.sh"
+      freeze_change_guard "$contest" "$fz"
+    fi
     j="$(jq -c --arg s "$slug" --argjson r "$cur" '.rounds = [ .rounds[] | if .slug == $s then $r else . end ]' <<<"$j")"
     rd_save "$contest" "$j"
     # a rodada ATIVA vive no conf: aplica na hora, a partir do OBJETO editado (passar pelo slug
     # releria via rd_sync_active, que re-espelha a janela do conf por cima — edição no-op)
     [[ "$(jq -r '.active' <<<"$j")" == "$slug" ]] && { rd_apply_obj "$contest" "$cur" || fail 500 "Falha ao gravar no conf" "conf_write"; }
+    mod_enable "$contest" rodadas
     audit_log_to "$contest" round-set "slug=$slug"
     ok_json '{saved:true, round:$r}' --argjson r "$cur"
     ;;
@@ -114,24 +136,23 @@ case "$action" in
     probs="$(jq -c '.problems // []' "$bodyf")"
     jq -e 'type == "array"' <<<"$probs" >/dev/null 2>&1 || fail 422 "problems deve ser array" "problems_invalid"
     (( $(jq 'length' <<<"$probs") <= 200 )) || fail 422 "máximo de 200 problemas" "too_many"
-    # guarda de problema PRIVADO: mesma regra do wizard/admin (dono do contest ou público)
+    # guarda de problema PRIVADO: a MESMA de Prova › Problemas e do wizard (problems_denied_for):
+    # público, ou o DONO do contest é dono/colaborador/membro da org. Vale igual p/ rodada ativa e
+    # planejada (a planejada só tem esta porta). Negado: 404 SEM a lista — a existência de um
+    # privado alheio não vaza (o bank já listou o que é adicionável; id digitado = "não encontrado").
     source "$_DIR/lib/problems.sh"
     pids="$(jq -c '[ .[] | (.bank_id // .problem_id // "") | gsub("/";"#") | select(. != "") ]' <<<"$probs")"
     if [[ "$pids" != '[]' ]]; then
-      owner="$(cat "$CONTESTSDIR/$contest/owner" 2>/dev/null)"
-      _om="$(owners_merged)" || fail 503 "Índice de problemas indisponível" "index_unavailable"
-      denied="$(jq -r --argjson pids "$pids" --arg me "${owner:-}" '
-        (.problems | map({key:.id, value:.}) | from_entries) as $by
-        | [ $pids[] | . as $id | ($by[$id]) as $p
-            | select($p != null and $p.owner != $me and (($p.public|not))) | $id ]
-        | unique | join(", ")' <<<"$_om" 2>/dev/null)"
-      [[ -n "$denied" ]] && fail 403 "Sem acesso a problema(s) privado(s): $denied" "problem_denied"
+      owner="$(head -1 "$CONTESTSDIR/$contest/owner" 2>/dev/null)"
+      denied="$(problems_denied_for "${owner:-}" "$pids")" || fail 503 "Índice de problemas indisponível" "index_unavailable"
+      [[ -n "$denied" ]] && fail 404 "Problema não encontrado ou sem acesso ($(wc -w <<<"$denied") id(s))" "problem_denied"
     fi
     j="$(jq -c --arg s "$slug" --argjson p "$probs" \
         '.rounds = [ .rounds[] | if .slug == $s then (. + {problems:$p}) else . end ]' <<<"$j")"
     rd_save "$contest" "$j"
     cur="$(jq -c --argjson p "$probs" '. + {problems:$p}' <<<"$cur")"
     [[ "$(jq -r '.active' <<<"$j")" == "$slug" ]] && { rd_apply_obj "$contest" "$cur" || fail 422 "Falha ao gravar PROBS" "probs_write"; }
+    mod_enable "$contest" rodadas
     audit_log_to "$contest" round-problems "slug=$slug n=$(jq 'length' <<<"$probs")"
     ok_json '{saved:true, n:$n}' --argjson n "$(jq 'length' <<<"$probs")"
     ;;
@@ -173,10 +194,11 @@ case "$action" in
       || fail 409 "a rodada '$to' não está planejada" "not_pending"
     force=false; jq -e '.force == true' "$bodyf" >/dev/null 2>&1 && force=true
     bl="$(rd_promote_blockers "$contest")"; [[ -n "$bl" ]] || bl='[]'
-    # `force` ignora tudo menos o que tornaria a promoção INCORRETA (sem rodada planejada).
+    # `force` ignora tudo menos o que tornaria a promoção INCORRETA (sem rodada planejada) ou
+    # descongelaria o placar antes da hora (freeze_locked: fim geral + 1 min, 2026-09-14).
     # `shared_users` saiu da lista: contest com USERS_FROM promove normalmente — o arquivamento
     # só mexe nos diretórios LOCAIS (ver lib/contest-rounds.sh).
-    hard="$(jq -c '[ .[] | select(.code == "no_next_round") ]' <<<"$bl")"
+    hard="$(jq -c '[ .[] | select(.code == "no_next_round" or .code == "freeze_locked" or .code == "problem_denied") ]' <<<"$bl")"
     if [[ "$force" == true ]]; then blk="$hard"; else blk="$bl"; fi
     if [[ "$(jq 'length' <<<"$blk")" != 0 ]]; then
       emit_json 409 Conflict

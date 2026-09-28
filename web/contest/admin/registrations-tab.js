@@ -226,8 +226,8 @@ export function makeRegistrationsTab(CONTEST) {
         + T('. A pessoa se inscreve em ', '. People register at ')
         + '/contests/inscricao/?c=' + CONTEST),
       windowBox(),
-      el('h3', {}, T('Times', 'Teams')), teamsTable(),
-      el('h3', {}, T('Individuais', 'Individuals')), peopleTable(),
+      el('h3', {}, T('👥 Times', '👥 Teams')), teamsTable(),
+      el('h3', {}, T('🧍 Individuais', '🧍 Individuals')), peopleTable(),
       addBox());
   }
 
@@ -236,7 +236,7 @@ export function makeRegistrationsTab(CONTEST) {
     const tname = el('input', { placeholder: T('nome do time', 'team name'), style: 'width:12rem' });
     const tmem = el('input', { placeholder: T('logins separados por vírgula (o 1º é o capitão)', 'comma-separated usernames (1st is the captain)'), style: 'min-width:20rem' });
     return el('div', { class: 'section' },
-      el('h3', {}, T('Inscrever à mão', 'Register by hand')),
+      el('h3', {}, T('✍️ Inscrever à mão', '✍️ Register by hand')),
       el('div', { class: 'row', style: 'gap:.5rem; flex-wrap:wrap; align-items:flex-end' },
         field(T('individual', 'individual'), who),
         el('button', { class: 'btn ghost', onclick: () => act({ action: 'add', login: who.value.trim() }, T('Inscrito.', 'Registered.')) },
@@ -249,7 +249,7 @@ export function makeRegistrationsTab(CONTEST) {
         }, T('Time criado.', 'Team created.')) }, T('Criar time', 'Create team'))),
       el('div', { class: 'row', style: 'margin-top:.6rem' },
         el('button', { class: 'btn ghost', onclick: () => {
-          const rows = [[T('tipo', 'kind'), 'login', T('nome', 'name'), T('membros', 'members'), T('coorte', 'cohort'), T('univ', 'univ'), 'IA', T('bandeira', 'flag'), T('foto', 'photo')]];
+          const rows = [[T('tipo', 'kind'), 'login', T('nome', 'name'), T('membros', 'members'), T('coorte', 'cohort'), 'univ', 'IA', T('bandeira', 'flag'), T('foto', 'photo')]];
           (DATA.teams || []).forEach((x) => rows.push(['time', x.login, x.name, (x.members || []).join(' '), x.cohort || '', x.univ || '', x.ai === true ? 'sim' : x.ai === false ? 'nao' : '', x.flag || '', x.has_photo ? 'sim' : '']));
           (DATA.individuals || []).forEach((x) => rows.push(['individual', x.login, '', '', x.cohort || '', x.univ || '', x.ai === true ? 'sim' : x.ai === false ? 'nao' : '', x.flag || '', '']));
           downloadText(`inscricoes-${CONTEST}.csv`, toCsv(rows));

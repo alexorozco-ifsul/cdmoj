@@ -101,14 +101,17 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   contest ENTRA na lista de cópia do arquivamento de rodada** (`contest-rounds.sh`). Motor de
   anomalias: `lib/anomalies.sh` (um jq; `mkey` em jq = a MESMA regra do bash — mexeu numa, mexa na
   outra; o jq vive em VARIÁVEL, fora do `jq-portability.sh`: rode `smoke-contest-anomalies.sh` com
-  o jq 1.7). Painel: Pessoas › Sessões & anomalias (`sessions-tab.js`), só com gate ativo.
+  o jq 1.7). Painel: **Máquinas › Anomalias** (`anomalies-tab.js`, módulo `maquinas`), só com gate
+  ativo; sessões ativas + sair em massa + log de acessos ficam em **Pessoas › Sessões**
+  (`sessions-tab.js`, todo contest); o comum aos dois em `sessions-common.js`.
 - **Trava de sede por IP (`lib/site-lock.sh`, 2026-09-02)**: o isolamento por subdomínio só vale
   p/ quem entra pelo subdomínio — `curl --resolve` da máquina de prova chega ao site base pelo
   mesmo IP. Com `SITE_LOCK=1` no conf, login de competidor reivindica o IP de origem
   (`run/site-lock/<ip>`, TSV uma linha por contest, flock por IP) até `CONTEST_END+grace`; o
   `router.sh` responde 403 `site_locked` a outro alvo (papel isento; `auth/logout` passa) — custo
   `[[ -f ]]` p/ IP não preso. **Toda reivindicação nova e todo bloqueio vão ao audit** (com teto de
-  1 linha/5 min por ip+alvo) e ao painel Sessões & anomalias. Rota `/contest/admin/site-lock`.
+  1 linha/5 min por ip+alvo) e aos painéis Máquinas › Gate & trava (reivindicações/soltar/prender)
+  e Máquinas › Anomalias (bloqueios). Rota `/contest/admin/site-lock`.
 - **Auth**: `Authorization: Bearer <token>` → sessão em `run/sessions/` (700), gravada com
   `printf %q` (é *sourced*). **A sessão vale enquanto a CONTA existir** (`_session_account_alive`
   no `load_session`): sessão do MOJ não expira por tempo, então a conferência do `account.json` é
@@ -118,6 +121,12 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   Espelho disso: **conta renomeada arrasta TODAS as sessões** (`rename_contest_sessions`), não só
   o token da requisição — foi o furo que fez uma sessão velha submeter com o login antigo e
   RECRIAR o diretório do fantasma (`server/bin/user-merge.sh` conserta o resíduo).
+  **Derrubar as sessões de um login = `remove_contest_sessions[_v] <c> <login…>`** (`lib/auth.sh`): um `grep`
+  acha os arquivos com a linha `LOGIN=<login>` e só eles são confirmados por `source`. NUNCA um
+  `$( source "$f" )` por arquivo de sessão: a sessão não expira e o diretório só cresce (21.254 em
+  19/09/2026) — o "nova senha" das contas geridas levava 38 s e o admin desistia antes de ver a senha
+  (relato do Ribas, conta `zan`). A LISTAGEM (`treino/admin/sessions`, 1ª aba do painel) e o deslogar por IP
+  seguem o mesmo molde: grep + `source` no mesmo processo + UM jq (a aba levava 69 s). Teste: `smoke-session-remove.sh`.
   Papéis por sufixo no login (`.admin/.judge/.cjudge/.staff/.cstaff/.mon`).
   **`.cjudge`** = juiz-chefe: `is_judge` vale p/ ele (herda juiz) + `is_chief`/`is_admin_or_chief`
   p/ os extras escopados (editar notícias/respostas já dadas, Situação, Todas Submissões, resolver
@@ -172,7 +181,8 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   (`account.json` autoritativo — inclui perfil `university`/`favorite_editor`/`public`/
   `uname_changes` e time `.team{name,univ_short,univ_full,flag}`; `history` próprio de 6 campos
   `tempo:probid:lang:verdict:sub_epoch:subid`, login implícito; `metrics.json`;
-  `submissions/<subid>.<ext>`, `mojlog/<subid>.html`, `results/<subid>.json`, `photo.png` — **sem
+  `submissions/<subid>.<ext>`, `mojlog/<subid>.html.gz` (gzip em repouso desde 2026-09-16; `.html` = legado,
+  os dois aceitos por `resolve_submission`), `results/<subid>.json`, `photo.png` — **sem
   login no nome**). **NÃO existe `passwd`**: auth (`verify_password`), placar (`sc_users`),
   perfis e listagens leem os `account.json` direto (agregações SEMPRE por `find|xargs jq` —
   ARG_MAX); `USERS_FROM=<src>` cai p/ o `users/` do contest-fonte (participante compartilhado tem
@@ -224,7 +234,14 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   (`orgs_rename_login` em lib/orgs.sh — sem isso a conta renomeada ficava órfã de TODAS as orgs;
   o nome da org e o `owner` histórico dos problemas não mudam: acesso vem da membership)
   **e as SESSÕES também** (`rename_contest_sessions`, resposta `sessions_updated`) **e as
-  INSCRIÇÕES** (`reg_rename_login`). Item novo na cascata de rename ⇒ entra aqui, no
+  INSCRIÇÕES** (`reg_rename_login`) **e os snapshots de participação virtual** (`vr_rename_login`) **e a POSSE** (`lib/owner-rename.sh`,
+  2026-09-18: dono de problema — `.moj-meta.json` + índice + overlay —, de contest (`contests/<c>/owner`), de
+  coleção e as permissões de criar contest; o barato é síncrono, os metas — 1 commit por pacote — vão
+  destacados e são retomáveis. ⚠ `owner` CONCEDE acesso (`owners_visible`, `problems_denied_for`): dono
+  apontando p/ login que não existe mais é posse SOLTA, e os problemas somem de "Meus" — foi o relato do
+  Daniel Saad, 201 problemas + 87 contests no login antigo. Passado se conserta com
+  `server/bin/owner-rename.sh <antigo> <novo> [--apply]`, dry-run por padrão, que RECUSA se o antigo ainda
+  existe — aquilo é rename, não transferência entre contas. Teste: `smoke-owner-rename.sh`). Item novo na cascata de rename ⇒ entra aqui, no
   `username.sh` E no `smoke-profile.sh`.
 - **Inscrição em contest (`lib/registration.sh`)**: `contests/<c>/registrations.json` — **existir =
   ligado** (doutrina do `cohorts.json`: ausente = comportamento de sempre, custo zero). Vale só p/
@@ -261,13 +278,26 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   próprio (`ch_views`/`build.sh`, seletor no `/contest/score/`). O **bot** (`mojinho-bot/mojinho-api.sh`) é transporte fino:
   autentica com **bot-token** `mojb_…` (`lib/bot-auth.sh` `require_bot`, `run/secrets/bot.token`) — não
   loga como `.admin`, sem GODS. Em produção roda **ENJAULADO** (`mojinho-bot/run-caged.sh`: bwrap
-  sem /home/workspace/contests/run; segredos só no dir vivo `~/mojinho-live`, nunca no repo). **Alertas**: `lib/alerts.sh` + `GET /ops/alerts` (a API avalia com
+  sem /home/workspace/contests/run; segredos só no dir vivo `~/mojinho-live`, nunca no repo). ⚠ **A jaula COPIA o código do bot na largada** (tmpfs `/bot`): mudou
+  `mojinho-bot/*.sh` ⇒ `systemctl --user restart moj-bot` no servidor, senão o processo segue com o código
+  antigo (16/09: o bot de 26/08 não mandava `chat_type` e o `/relatorio aqui` respondia `not_group`). O
+  Bearer `mojb_…` do bot NUNCA recebe a dica de "CLI antiga" (`cli-version.sh`). **Alertas**: `lib/alerts.sh` + `GET /ops/alerts` (a API avalia com
   histerese/cooldown e enfileira no outbox `run/alerts/`; o bot drena e entrega a `.admin` vinculados
   + grupo). O outbox tem **TRÊS formatos**: `*.txt` = incidente (destino resolvido no claim = os
   `.admin`), `*-dm-*.json` = **DM dirigida** (`alert_dm`: o produtor resolve o chat; `group:false` p/ não
   copiar no grupo, `loud:true` p/ notificar) e `*-grp-*.json` = **só grupo** (`alert_group`:
   `chats:[]` + `group:true`; o claim SÓ aceita chats vazio quando `group` — DM sem destino segue
-  descartada). O claim entrega no máx. `ALERT_CLAIM_MAX`(30) por poll
+  descartada). **Entrega com ACK (2026-09-14)**: item `.json` vai p/ `run/alerts/inflight/` no claim e o
+  bot confirma com `POST /ops/alerts {ack}`; sem ack em 10 min volta ao outbox. O relatório de
+  quartil marca `sent` SÓ no ack (`rel_ack`); destino = `chat_id` registrado por `/relatorio aqui`
+  (senão o `ALERT_GROUP_CHAT` do bot). O bug de 12/09 ("preso enviando p/ o grupo errado"): o
+  `rel_mark_sent` falhava mudo — `${BASHPID}` no alvo de redirect de um `jq` expande no FILHO, o
+  `mv` não achava o tmp — e o sweep reenfileirava a cada hora; hoje o tmp é resolvido em variável
+  ANTES do comando externo (regra p/ todo `> "$x.tmp.${BASHPID}"` de comando não-builtin) e o
+  sweep escreve em `run/alerts/relatorio.log`. O inflight sem ack volta ao outbox com `touch`
+  (o `mv` preserva o mtime e o item ficava "vencido" a cada poll = reentrega infinita) e um
+  contador `attempts`: depois de `ALERT_MAX_ATTEMPTS` (5) o item é descartado com registro no
+  `relatorio.log` (revisão de 15/09). O claim entrega no máx. `ALERT_CLAIM_MAX`(30) por poll
   (teto do Telegram) — o resto sai no seguinte. No bot, ler `group` com **`.group == false`**: o `//`
   do jq trata `false` como vazio e o grupo receberia a DM de todo mundo.
   Senha nova **só por DM** (nunca na web).
@@ -287,6 +317,24 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `import`/`export` saem no `sed`) — **o mesmo módulo que a página do admin usa**, senão as
   duas telas divergem. ⚠ Ao criar classe CSS no relatório, cuidado com colisão com o `ui.css`
   (um `.bar{height:14px}` local achatou a topbar inteira: `.bar` é o contêiner dela).
+  **JSON embutido num `<script>` passa por `rep_js_json`** (todo `<` vira `\u003c`; U+2028/9
+  escapados): o parser de HTML fecha o script no PRIMEIRO `</script>` que vê, mesmo dentro de
+  uma string — um time chamado `<script>alert(1)</script>` (LATAM 2026) quebrou `statistics.html`
+  inteiro ("literal not terminated before end of script"). Vale p/ `STATS`, `NBDATA`, `RTREE`,
+  `CNAMES` e qualquer literal novo; o smoke confere que cada `</script>` fecha uma tag real.
+  **A nav é decidida UMA vez, pelos DADOS** (`NAV_FROZEN/NAV_QUAL/NAV_DOCS/NAV_ML`, antes de
+  qualquer página): `rep_head` testava "o arquivo já existe?" e as páginas escritas antes de
+  `mlinux.html` saíam sem a aba Máquinas (relato de 03/09). Toda aba tem emoji; o smoke compara
+  a nav de TODAS as páginas. **Publicação (histórico)**: `score/report-publish.sh` gera em
+  `contests/<c>/relatorio.tmp/`, troca atômica p/ `contests/<c>/relatorio/`, carimba
+  `var/report-published.json` e grava `REPORT_PUBLISHED=<epoch>` no conf (mtime = invalida o
+  cache do `/index/contests`, que devolve `report_url`); o nginx serve `/relatorio/<c>/` por alias
+  (bloco em `server/etc/nginx/moj-app.conf.in` — o worker está no grupo do dono, os arquivos
+  nascem 660/770). Rota `admin/report-publish` (job destacado; `MOJ_JOBS_SYNC=1` nos testes).
+  **Rodadas arquivadas** publicam por SYMLINK (`relatorio-rodadas/<slug>` → `rounds/<slug>/relatorio`,
+  o site gerado na promoção — auditoria, não se regenera), servido em `/relatorio/<c>/rodada/<slug>/`
+  (regex do nginx ANTES da genérica); a index principal só linka rodadas quando gerada com
+  `REPORT_PUBLISH=1` (no tar.gz offline o link não teria destino).
   **É bilíngue como qualquer tela**: `rep_t <chave>` (molde do `_doc_t`) resolve pelo `LOCALE`
   do contest — string nova entra na tabela, e bloco awk/jq recebe o rótulo já traduzido por
   `-v`/`--arg` (nunca literal no meio do programa).
@@ -391,7 +439,7 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   do `.calib-sols.json` do calibreitor via `/judge/calib-report` — que PRESERVA sols/reports
   quando o POST vem sem eles com o MESMO checksum: re-envio de boot/agente velho não apagam;
   o editor web o renderiza no cartão de cada juiz — `solsBlock` em `web/problemas/editar.js`,
-  linha por solução com expectativa da categoria + tabela de testes expansível; host sem sols
+  linha por solução com o `expect` do servidor (✓/≈/✗ + "esperado · obtido") + tabela de testes expansível; host sem sols
   cai no fluxo antigo de log/reports);
   (2) **`TLOVERRIDE[<lang>|default]`** no conf do PACOTE = o autor manda no TL — julgamento
   (build-and-test) e TODA exibição usam o efetivo (`tl_store_served` aplica; servidor lê por
@@ -400,8 +448,62 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   avulsa no juiz com o contest **sentinela `_testrun`** (id de contest criável começa com
   `[a-z0-9]` — sentinela inatingível), desviado p/ `run/testrun/` no `ingest_result` — nunca
   history. Gate de tudo: `require_problem_edit`. Testes: `smoke-{tl-override,calib-sols,testrun}.sh`.
+- **"PRONTO" = pacote × calibração × soluções × entradas × issues** (relato do Arthur Botelho,
+  22/09/2026: "validado" seguia verde com solução de veredicto errado). "Validado" era só a conferência
+  ESTÁTICA do `validate-problem.sh` — virou **Pacote** nas telas e na CLI. O juízo "cada solução fez o que
+  a categoria pede?" é do SERVIDOR: **`lib/calib-expect.sh`** (`CALX_JQ`: `calx` por solução pelos
+  códigos de CADA teste contra o TL **efetivo**, `calx_sum` por problema, `calx_val` do validador de
+  entrada). O `/problems/calib` serve `expect` + `summary` + `hosts[].validator`; o `/judge/calib-report`
+  grava `run/calib-sum/<id>.json` + o mapa `run/calib-summary.json` (upsert por evento, rebuild a frio
+  sem abrir pacote); o **`problem_commit` marca o sumário velho** (`calx_mark_stale`) quando o commit
+  toca `sols/ tests/ scripts/ conf` (`git status --porcelain`, só p/ quem tem sumário); delete/move
+  chamam `calx_drop`. O `/problems/status` devolve `sols`, `inputs`, `pending` (códigos) e `ready`, e
+  aceita `?id=`. Web: `web/problemas/readiness.js` só TRADUZ os códigos (o `solOk` do editor saiu — ele
+  lia a string do veredicto); publicar com pendência pede confirmação (editor, Painel e `moj public on`),
+  nada bloqueia (decisão do Ribas). ⚠ O jq mora em variável: rode `smoke-calib-expect.sh` também com o
+  jq 1.7. Testes: `smoke-calib-expect.sh`, `smoke-sols-expect.gjs.sh`.
+  **Tolerância (drift)**: o `over_tl` compara com TL efetivo + tolerância do conf (`calx_drift`, grep de
+  `TLMOD[<lang>.drift]` › `TLMOD[default.drift]`) — a MESMA conta do `mojtools/build-and-test.sh`; mexeu
+  numa, mexa na outra. Na tabela de testes do editor (`testsTable`) e no `report.html`, teste aceito acima
+  do TL = amarelo (relato do Daniel Saad, 24/09: saía vermelho, a cor do WA).
+  **Issues por problema** (`lib/problem-issues.sh` + `/problems/issues`, aba 🐞 do editor =
+  `web/problemas/issues.js`, `moj issues`): loja FORA do pacote em `contests/treino/var/problem-issues/
+  <org>/<prob>.json` (dentro do repo a issue mudaria o `pkg_rev` e daria 409 à toa, sumiria no upload e
+  iria ao juiz); sumário `problem-issues-summary.json` p/ o Painel; gate `require_problem_edit` (404 igual
+  ao de inexistente); move/delete chamam `pi_move`/`pi_drop`. O `by` é texto histórico e NÃO entra na
+  cascata de rename (não concede acesso — como o autor de um commit). Texto do usuário só por arquivo no
+  jq; na tela, `textContent`. Testes: `smoke-problem-issues.sh`, `smoke-issues-panel.gjs.sh`.
+  **Validador de ENTRADA** (`scripts/validator.cpp`, testlib): quem roda é o juiz, na calibração completa
+  (`mojtools/testlib/validator-run.sh`); a linha `category:"validator"` chega no `sols` do calib-report (o
+  agente não mudou) e o `calib-expect.sh` a separa (`hosts[].validator`, `summary.validator`, `inputs` do
+  status). No editor, `slotOfPath('validator.cpp')` = `validator` (compõe com todos os slots; sem isso
+  caía em `run` e dava falso conflito com submissão de função). `.validator-cache/` fica fora do git do
+  pacote (`problem_commit`) e do `moj upload`.
+- **ESCALONADOR POR LARGURA (`CPUNEEDED`/`SAMENUMA`/testes em paralelo, 24/09/2026)** —
+  `server/judge-gw/sched-lib.sh` + `handlers/judge/{heartbeat,register,decline}.sh`; doc
+  completa em `judge-gw/PULL.md` ("Largura k"). Os juízes oficiais são slots de 1 CPU; um job de
+  `CPUNEEDED=k` ocupa `k_slots = ceil(k/slot_cpus)` do MESMO juiz. O `conf` do pacote é lido por
+  REGEX (`sched_pkg_par`; nunca sourced) e memoizado no sidecar `.cmeta` **v2** (12 campos; v1 é
+  reescrito). `q_claim` é por largura: `k_slots ≤ livres`, `SAMENUMA` ⇒ `≤ max_free_group`, memória
+  por slot; não cabe ⇒ pula (backfill). Env `QC_*` do heartbeat (slot_cpus, max_free_group,
+  total/mem, política) — juiz LEGADO (beat sem `slot_cpus`) só k=1 e sem campos novos. `par_max`
+  (testes em paralelo) SÓ com política `"*".parallel=auto` (judges-config; fora do `cfg_hash`),
+  fila vazia e nada pulado por porta de tempo/largura: sobra além do colchão, rodízio, teto
+  `min(MAXPARALLELTESTS, parallel_max)` e `share_max×total`. **HOLD** (`run/hold/<host>.json`)
+  segura um juiz p/ o largo faminto (1 por juiz; 1 global com `020-prova` não vazia; TTL 600 s);
+  **decline** (`/judge/decline`) devolve o que o agente não alocou (epoch novo, backoff 60 s, 3ª =
+  Judge Error); job largo sem juiz capaz há 120 s = Judge Error pelo spool (`sched_spool_judge_error`,
+  host `scheduler`). `upd_claim`/`cmd_claim` também são por largura (calibração = k_slots, P=1).
+  ⚠ A ordem dos campos do cmeta é `…m\x01memmb\x01enq\x01decl` — os TRÊS leitores (`q_claim`,
+  `_wide_jobs`, `q_claim_id`) fazem o mesmo `read`; o smoke pegou um `enq`/`memmb` trocado que
+  fazia toda regra de memória comparar com o epoch. Testes: `smoke-sched-width.sh` (68),
+  `smoke-judge-config.sh` (rode também com o jq 1.7).
 - **Contrato do resultado do juiz**: além do `verdict` de display (com o score embutido, ex.
-  `Accepted,100p` — gerado por `mojtools/build-and-test.sh`), o JSON traz **`verdict_canon`**
+  `Accepted,100p` — gerado por `mojtools/build-and-test.sh`; com grupos,
+  `Time Limit Exceeded,30p. Pontos | 30 | 0 | quantitativos …`: o prefixo é o veredicto do PIOR teste,
+  nunca mais o `Wrong,<n>p` fixo de antes de 24/09/2026, e pacote quebrado é `Judge Error,0p. …` — o
+  aluno lê esse prefixo pelo `canon_team`, então prefixo e `verdict_canon` andam juntos; contrato preso
+  em `smoke-verdict-scored.sh`), o JSON traz **`verdict_canon`**
   (canônico, **sem** score) + `score/score_max/score_kind/correct/total_tests` +
   **`groups`** (subtarefas: `[{earned,max},…]` na ordem do `tests/score`, quando o problema
   pontua por grupos; ausente = sem grupos). Fonte única = `report.env` do mojtools (os dois
@@ -418,16 +520,45 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `SHOWLOG` explícito no conf manda; **ausente = OCULTO em modo icpc** (anti-vazamento de prova)
   e visível nos demais modos. Religar em icpc = o settings POST grava `SHOWLOG=1` explícito.
 - **Veredicto manual** (`MANUAL_VERDICT`, opt-in): o **daemon** (`daemons/judged.sh`) SEGURA o
-  veredicto computado (grava `contests/<c>/review/<id>.json`, history fica provisório) salvo o que
-  a matriz `auto-verdicts.json` (problema×lang×veredicto, casada pelo **canônico**) libera; **erros
+  veredicto computado (grava `contests/<c>/review/<id>.json`, history fica provisório) SÓ p/ o que
+  `auto-verdicts.json` manda p/ revisão — regra **OPT-OUT** desde 25/09/2026 (`lib/review-rules.sh`, fonte
+  única de daemon+API; **espelhada em Python no `ingest-drain.py`** — mexeu numa, mexa na outra, o
+  `smoke-review-rules.sh` compara caso a caso): grade problema × classe + exceções por linguagem, casada
+  pelo **canônico**; sem arquivo = tudo automático; ilegível = tudo em revisão; o v1 (opt-in) vale até
+  ser salvo de novo; tela "🔎 O que vai para revisão" com "liberar" os retidos que a regra nova solta; **erros
   de juiz também são segurados** (o competidor só vê `Not Answered Yet`); **N `.judge` decidem** —
   N = `REVIEW_JUDGES` do conf (1..5, default 2; settings `review_judges`; `rv_quorum` em
   `lib/review.sh` — N votos unânimes liberam, divergência = conflito p/ o chief)
   (`handlers/contest/review/*` + `lib/review.sh`, flock + TTL), e o veredicto vai ao aluno pelo
-  **escritor único** via o consumidor `setverdict` do daemon. O **voto é permanente e libera o juiz**
+  **escritor único** via o consumidor `setverdict` do daemon. **Opções com 3 campos (2026-09-14)**:
+  `final-verdicts.json` = `[{label, verdict, team}]` — `verdict` é a CLASSE (uma das 6 de
+  `VERDICT_CLASSES`, `verdict_class_ok`), `team` o texto que o time vê; `rv_canon_verdict` devolve
+  `classe¦team` e é isso que vai ao history. Regra de leitura em `lib/verdict.sh`: `canon`/`vcanon`
+  tiram o `¦…` ANTES de classificar (placar, metrics, stats, webcast, panorama, matriz auto);
+  `canon_team`/`vteam` devolvem o texto (history do time, summary, runs do relatório). Consumidor
+  novo de veredicto = decide em qual dos dois lados está. ⚠ O awk de `canon_team` corta com
+  `substr(v, t + length("¦"))` — a imagem roda em locale C (gawk em BYTES, `¦` tem 2 bytes) e o
+  `t+1` deixava um `\xA6` solto na frente do texto do time; o `smoke-contest-review.sh` só pega
+  isso rodado com `LC_ALL=C` (revisão de 15/09). O balão (`pr_reconcile_balloons`) decide pela
+  CLASSE (`Accepted*` depois de cortar o `¦…`), nunca por `*Accepted*` na string crua.
+  ⚠ **A FILA SE LÊ NUMA PASSADA** (`rv_scan` em `lib/review.sh`, 25/09/2026): rota que percorre `review/*.json`
+  usa o `rv_scan <dir> <filtro> [args]` — um jq só, com fallback arquivo a arquivo se um arquivo estiver
+  corrompido (e aí AVISA no error.log: `rv_scan: ilegível: <arquivo>` — a fila fica no caminho lento até
+  alguém consertar). NUNCA um jq (ou `$(…)`) por arquivo dentro de laço: na XIV Maratona UnB o `review/list`
+  levava 1,13 s por chamada com 81 arquivos (~63% de um núcleo só nele, crescendo a prova inteira) e o
+  `review/conflicts` (o alerta do chefe, a cada 8–12 s por aba) 0,8 s; com o rv_scan, 0,06 s e 0,04 s (81) e
+  0,11 s e 0,05 s (500), saída idêntica. Guarda no `smoke-contest-review.sh` (nº de jq por chamada).
+  `set-verdict` legado só aceita label/classe
+  da lista. Teste: `smoke-contest-review.sh`. O **voto é permanente e libera o juiz**
   (pega outra na hora); o **alerta de conflito é global** (`web/shared/chief-alert.js`, disparado pelo
   `auth.status` → segue o chief/admin em qualquer página); o painel **Operação › Situação** traz estatística por juiz
-  (`review/stats`, derivada do `admin-audit.log`). **Mexeu no `judged.sh` → reinicie o
+  (`review/stats`, derivada do `admin-audit.log`). **Watch do spool = `inotifywait -m`
+  PERSISTENTE (coproc) + `read -t`** (03/09/2026): nunca volte ao `inotifywait` de um evento por
+  giro — o `.in.*` do escritor atômico acordava o laço e o `mv` caía no buraco do rearme (~15 %
+  das submissões/results esperavam o re-drain de 30 s: piso de 30 s no veredicto). Não feche fd de
+  coproc com `exec {var}>&-` (redirect que falha num `exec` encerra o shell em silêncio) e trate
+  `INW_PID` como `${INW_PID:-}` (o bash o apaga ao colher o coproc). Smoke: `smoke-judged-watch.sh`
+  (inotifywait falso no PATH). **Mexeu no `judged.sh` → reinicie o
   daemon** (mantendo `INTAKE_MODE`/`JUDGE_BACKEND`); handlers/score são frescos por requisição.
 - **SHARDS do escritor (`JUDGED_SHARDS=K`, default 1)**: o judged particiona em K workers por
   `hash(login) % K` (`lib/spool-shard.sh` — a MESMA lib nos handlers e no daemon), porque o
@@ -449,8 +580,22 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `GET /treino/admin/activity-log` (aba 📜 Atividade) unifica 6 fontes + `format=csv`.
   **Evento novo de leitura ⇒ instrumente com `activity_log`** (login/submit/verdict já são
   deriváveis de access.log/history/results — não duplique).
-- Clarifications: o **asker é anônimo** p/ os juízes (handler corta `.login`); responder exige
-  **reserva** (`clarification-claim`). Sempre auditar (`audit_log_to`) toda ação de juiz/chefe.
+- **Escrita do competidor fora da submissão (backup, clarification) segue a JANELA do `/submit`**
+  (`competitor_write_guard` em `lib/contest-gate.sh`, 2026-09-15): time/`.mon` só durante a prova
+  (403 `contest_not_started`/`contest_ended`, fim efetivo da sessão), `.staff`/`.cstaff`/`.animeitor`
+  nunca (403 `role_forbidden`), admin/juiz/chefe sempre. Rota nova de escrita do competidor chama
+  a guarda. Leitura (listar/baixar backup, ler clarifications) segue livre. Testes:
+  `smoke-contest-backup.sh`, seção "janela" do `smoke-contest-clar.sh`.
+- Clarifications: o **asker é anônimo** p/ `.judge`/`.mon` (handler corta `.login`); o
+  **juiz-chefe/admin veem `login` + `asker_name`** (mapa login→fullname em UMA varredura, por
+  `--slurpfile`; 2026-09-14) e o relatório público segue anônimo. Responder exige **reserva**
+  (`clarification-claim`): ninguém reserva por cima (409, chefe incluso); `release` de reserva
+  alheia só com `force:true` + chefe/admin (audit `forced_from`) — o "pegar sem querer" do chefe
+  era o release silencioso. Aviso oficial = `answer` obrigatório + `question` (assunto) opcional.
+  A página (`web/contest/clarification/`) separa abertas × respondidas, atualiza EM LUGAR a cada
+  30 s (cartão por id, adia se há resposta sendo digitada) e usa `white-space:pre-wrap` — o
+  relatório (`report-gen.sh`) já preservava a quebra de linha. Sempre auditar (`audit_log_to`)
+  toda ação de juiz/chefe. Teste: `smoke-contest-clar.sh`.
 - **FIRST-TO-SOLVE SÓ COM CERTEZA** (2026-08-25), no placar E no balão. O `*` do ICPC era o mínimo
   puro dos `first_ac_epoch` e ignorava run pendente: nascia no time errado e MIGRAVA quando o AC
   mais antigo era julgado. Hoje o `updatescore-icpc.sh` retira a estrela do problema enquanto
@@ -530,12 +675,12 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `ug_expected` resolve na ordem isentos › papel › `by_regex` › `by_region` › `from_login`
   (captura `\1`) › `fallback`/`LOGIN_UA_SUBSTRING` legado; `ug_ok` é o match (substring,
   case-insensitive) e `login.sh`/`logout-mismatch.sh` usam os dois. **`ug_expected_map` é o MESMO
-  programa jq em lote** (`UG_JQ`) — o painel **Pessoas › Máquinas & gate** precisa do esperado por time e não pode
+  programa jq em lote** (`UG_JQ`) — o painel **Máquinas › Gate & trava** precisa do esperado por time e não pode
   forkar por login; se mudar a ordem, mude nos dois. Armadilhas jq que isto pisou: `first()` de
   stream vazio e **`match()` SEM casamento** devolvem VAZIO, e `vazio as $v | …` anula a
   expressão inteira (use `// null`); `sub()` **não entende `\1`** — as capturas vêm do `match`.
 - **Coortes de placar** (`lib/cohorts.sh` + `handlers/contest/admin/cohorts.sh`, UI no painel
-  **Pessoas › Coortes** = `web/contest/admin/cohorts-tab.js`): times oficiais ×
+  **Evento › Coortes** = `web/contest/admin/cohorts-tab.js`, módulo `coortes`): times oficiais ×
   **convidados** (extra-oficiais/"CCL"). Coorte privada não aparece no placar público nem no
   `/contest/teams`; os convidados veem todos; `results_released` libera. O corte **sobe até
   `sc_users`** (`score/score-common.sh`, env `MOJ_COHORTS`) porque a ESTRELA de first-to-solve é
@@ -552,6 +697,93 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `sc_load` — vale p/ todos os modos): os times da visão pública SEM coluna de problema;
   `is_judge` segue no completo. `/index/contests` emite `problems_count:0` p/ `upcoming` pela
   mesma regra. Teste: `smoke-score-prestart.sh`. Ver `docs/SCOREBOARD.md`.
+- **jplag** (`handlers/contest/admin/jplag-{run,results,match}.sh` + `server/score/jplag-run.sh`
+  + `web/contest/jplag/`): run = `is_admin_or_chief`; results/match = `is_judge` (juiz comum
+  recebe os pares SEM `*_name/*_univ` — o handler poda; chefe/admin `full:true`, `can_run:true`).
+  O runner segura `jplag/.lock` (flock -n) porque apaga os `r-*.json` na largada; o handler
+  devolve 429 `busy` com lock preso. A página tem barra de filtro (problema · linguagem ·
+  limiar, `localStorage` por contest) e atualiza EM LUGAR (nunca `app.innerHTML=''` no poll).
+  Link no nav de admin, chefe e juiz (`navbuttons.sh`). Teste: `smoke-contest-jplag.sh` (sem
+  java/jar roda os handlers sobre fixture sintética).
+- **Rodapé** (`web/shared/site-footer.js`, issue #20) — ⚠ **o rodapé e o alerta do juiz-chefe NUNCA
+  vão ao papel** (`@media print` no `ui.css`; relato do Daniel Saad, 24/09/2026: nas etiquetas o rodapé
+  entrava entre o `<main>` e as folhas e empurrava a grade Pimaco, cortando etiquetas — página que
+  imprime tem de esconder o cromo e pôr o `<footer id="siteFooter">` onde ele deve ficar; teste
+  `smoke-print-chrome.sh`): versão de `/version.json` (gravado por
+  `make deploy` → alvo `version-json`, gitignored; `MOJ_CONTACT` vira o link contato), repositório,
+  issues e atribuição das bandeiras; páginas do site carregam o módulo, as de contest chamam
+  `mountSiteFooter()` via `contest-shell`/`contest-chrome`/`contest.js`/`score.js`.
+  **Minhas submissões** (issue #26): a tabela do competidor é o módulo `web/contest/submissions-table.js`
+  (`makeSubmissionsTable`) usado pela página principal E por `/contest/submissions/` — nunca duplique.
+  **Convidados numerados** (issue #25): `GUEST_NUMBERING=1` (settings `guest_numbering`) ⇒ 1ª
+  linha do TXT `icpc s g` só na visão com coluna guest; `parseICPC(lines, balloons, secs, guestNum)`
+  dá `gplace` (sequência própria, mesma regra de empate); placar/revelação/relatório (awk `GNUM`)
+  mostram em itálico (`.gplace`). A revelação agora respeita convidado (antes numerava como oficial).
+- **A TELA DE LOGIN DO CONTEST É `/contest/?c=<id>` — `/contest/login/` NUNCA EXISTIU** (2026-09-20).
+  Cinco páginas (`admin`, `jplag`, `clarification`, `docs`, `rounds`) mandavam o não-logado para essa
+  rota e o nginx respondia **404**: quem criou um contest e clicou em "Admin do contest" batia num
+  beco (relato do Arthur Botelho). Fonte única: **`contestLoginHref(contest, next)`** +
+  `hereAsNext()` em `web/shared/contest-guard.js` — página nova de contest que precise de login usa
+  o helper, nunca monta a URL à mão (o teste `smoke-contest-login-link.gjs.sh` proíbe a string
+  `/contest/login/` em todo o `web/`). O `?next=` é honrado depois do login por **`safeNext`**
+  (`contest.js`, função PURA e testada): só caminho começando em `/contest/`, sem `//host`, sem
+  esquema, sem `..` — em caso de dúvida, `location.reload()` como antes. Duas armadilhas que vêm
+  junto: o formulário fica escondido antes de `login_start_time ?? start_time` (o link "Organização?
+  Entrar" o revela — a API já isenta conta de papel), e **quem administra um contest é
+  `<criador>.admin`**, conta LOCAL criada pelo wizard com senha mostrada UMA vez; `is_admin` é só o
+  sufixo do login, o `owner` do contest não dá poder nenhum na tela.
+- **Nav do contest SEM emoji** (issue #28, 2026-09-15): `navbuttons.sh` e `web/shared/nav-i18n.js`
+  só texto ("Administração", "Avaliar", "Rodadas"…); emoji fica nos títulos de painel/seção e nas
+  abas internas (chief, admin). Tutoriais/manuais citam os botões sem emoji. **Chip "Nome · login"**
+  (`mountContestUserChip`, issue #29) em TODA página de contest: `contest-chrome.js` e
+  `contest-shell.js` já montam; página principal e placar chamam explicitamente.
+- **Estático SEM cache velho** (issue #22, 2026-09-15): `moj-app.conf.in` `location /` manda
+  `Cache-Control: no-cache, must-revalidate` — módulo ESM revalida por ETag a cada uso. Sem isso
+  um deploy que muda o CONTRATO (TXT em segundos `icpc s`, 30/08) deixa JS velho no navegador do
+  time lendo dado novo. Mudou o `.conf.in` ⇒ reinstalar/recarregar o nginx no deploy.
+- **Nome de bandeira = `flagName()` de `web/shared/flags.js`** (issue #21): nunca remonte o mapa
+  do `index.json` à mão (UF só com prefixo `br-`; `sc` solto É Seychelles) e `flagEl` sem `title`
+  já mostra o nome. No placar a regra por regex do `teams-meta` (`country`) é **FALLBACK**: a bandeira do
+  próprio time vence (a regra da sede "CA" = Central America pôs "Canada" no tooltip de times CR/GT na LATAM 2026;
+  teste `smoke-score-flag-title.gjs.sh`). **★ do placar** é `position:absolute` na célula (issue #24) — não volte a
+  pô-la inline. **Seletor de arquivo do envio** é input escondido + botão + nome + `accept` das
+  linguagens do problema (issue #23) — o padrão das outras telas.
+- **Dificuldade e dirt de problema — FONTE ÚNICA** (issue #30, 2026-09-15): `lib/difficulty.sh`
+  (`DIFF_JQ`: `diff_rate`/`diff_label`/`dirt_of`/`diff_bucket`) e o gêmeo `web/shared/difficulty.js`.
+  Dificuldade = taxa POR USUÁRIO (resolveram ÷ tentaram) ≥.9 veasy ≥.7 easy ≥.5 med hard, `new`
+  sem tentantes; dirt = métrica do resolver ICPC (subs de quem resolveu até o 1º AC − ACs) ÷ essas
+  subs, do campo `tries_to_ac` do `metrics.json` (v3; v2 cai em `counted+1`). Quem CALCULA:
+  `treino-list-gen.sh` (→ `var/problems.json` `user_rate/difficulty/dirt`), `problem-stats.sh`,
+  `cc_problem_metrics_file`/`cc_bank_filter` (sorteio: bucket pela taxa por usuário, era por
+  submissão .5/.2), `stats-gen.sh` (`problems[].difficulty`). Quem MOSTRA só lê a chave
+  (`treino.js`, `stat.js`, `problema/stats`, `bank-panel`, `lib/stats-view` — este embutido no
+  relatório, então `difficulty.js` entra na lista do `report-gen.sh` ANTES dele). Nunca reescreva
+  faixa ou fórmula inline: era isso que dava "fácil" na busca e "difícil" na estatística
+  (`acceptance_rate` por submissão fica só como número). Pós-deploy: `touch contests/treino/conf`
+  força o recompute em massa dos metrics (ganha `tries_to_ac`).
+- **ENUNCIADO EM VÁRIOS IDIOMAS (2026-09-15)** — é OUTRO eixo que o `i18n.js` (interface pt|en):
+  o eixo dos DOCUMENTOS (pt/en/es). Fonte única da descoberta de arquivo: `mojtools/statement-langs.sh`
+  (`stmt_file`/`stmt_langs_of`/`stmt_note_file`/`stmt_samples_html` — o ÚNICO gerador do HTML dos
+  exemplos, usado pelo `gen-problem-json` E pelo `problems/preview`); pacote em `docs/PACOTE.md`
+  "Idiomas". Servidor: `lib/problems.sh` lê/grava `translations{<lang>:{title,enunciado_md,
+  editorial_md,notes}}` + `titles` (write_meta poda idioma sem arquivo; salvar as notas PT NUNCA
+  apaga as traduzidas — `_notes_rm_lang`, com `find`, porque a API roda `noglob`); o índice serve
+  `statement_langs` + `statements{<lang>}`. Contest: `lib/contest-statement.sh` (`cs_langs` = conf
+  `STATEMENT_LANGS`; **ausente = AUTOMÁTICO** — todo idioma que cada problema tem, e o envelope do `/contest/problems` lista a união do que existe; lista fixa `pt\ en`, `pt` sozinho = só PT; `cs_mode` auto|list; `cs_default` = LOCALE se oferecido senão o 1º; `cs_file` = arquivo
+  do idioma › PT; `cs_bank_write` materializa PT e traduções do banco — o tmp é resolvido em variável
+  ANTES do jq, o `${BASHPID}` no alvo do redirect expandia no FILHO e a materialização preguiçosa do
+  `/contest/problems` falhava MUDA), handler `admin/statement-langs.sh` (**`is_admin_or_chief`**: o
+  `.cjudge` também define), `/contest/statement?lang=` (400 fora da allowlist, **404** se a prova não
+  oferece, PT se oferece sem arquivo; `X-MOJ-Statement-Lang`), `/contest/problems` com
+  `statement_langs` por problema + `default_statement_lang`. Web: `shared/statement-langs.js`
+  (chips, `pickStmtLang` = `?lang=` › `moj_stmt_lang` › default do servidor › interface), treino
+  (`problema.js`), sanfona (`contest.js`, troca EM LUGAR em toda sanfona aberta), painel
+  `admin/statement-langs-panel.js` (Prova › Problemas e aba 🌐 do chefe), editor (chips PT·EN·ES,
+  título/editor/notas por idioma, **✂ Separar em seções por idioma** — `SEC_HEAD` escreve `## Input/Output/Notes`,
+  `## Entrada/Salida/Observaciones`; `statementOf(l)` é a fonte única do texto —, Pré-visualizar por idioma e do
+  editorial `kind:"editorial"`).
+  Teste: `smoke-statement-langs.sh` (69) + `smoke-statement-chips.gjs.sh` (os chips VOLTAM ao idioma de partida — o clique lê o ativo do DOM, nunca do parâmetro inicial). Regra: **idioma sem tradução cai no PT** em toda ponta;
+  a CLI nunca adivinha idioma — só pede o que `statement_langs` listou.
 - **Rodadas do contest** (`lib/contest-rounds.sh` + `handlers/contest/{admin/rounds,rounds,round,
   admin/round-archive}.sh`): **aquecimento → prova oficial NO MESMO contest** (mesma URL, mesmo
   login, config preservada). `rounds.json` é o plano; **a rodada ativa É o `conf`** — não torne
@@ -563,9 +795,35 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `.seq`, balões, `time-overrides.json` e `resources.json`. Ao mexer, mantenha a fronteira
   CONFIG × DADO DE RODADA documentada no topo da lib. `CC_KEEP_STATEMENTS=1` (em
   `cc_build_probs`) existe para a troca não re-baixar o enunciado do banco por cima do que o
-  admin subiu à mão.
+  admin subiu à mão. **Problema na rodada** (2026-09-14): a guarda é `problems_denied_for
+  <login> <ids>` (`lib/problems.sh`) com o **dono do contest** como sujeito — público, dono,
+  colaborador ou membro da org — a MESMA função de `admin/problems.sh` (404) e do wizard
+  (`SESSION_LOGIN`); nunca reescreva o predicado inline (a cópia das rodadas esquecia
+  colaborador/org). A recusa é **404 `problem_denied` SEM listar ids** em todas as portas
+  (rounds/create/duplicate — o 403 com a lista revelava a existência do privado alheio). O
+  spec unificado leva rodadas com `problems`: o `create`/`duplicate` checam `.problems` E
+  `.modules.rodadas.rounds[].problems`, e `rd_promote_blockers` repete a checagem como
+  bloqueador DURO `problem_denied` — a promoção era a porta que materializava o enunciado do
+  `jsons-private` sem ninguém conferir (revisão de 15/09). **Cores por rodada**: campo `colors` no objeto (formato do `balloons.json`);
+  `rd_apply_obj` grava via `cc_balloons_write` (escritor ÚNICO de `balloons.json`, também usado
+  por `admin/config.sh`; `cc_balloons_clear` apaga) só quando a rodada tem cores — ausente =
+  herda; `rd_sync_active` espelha o arquivo na ativa; a promoção arquiva `rounds/<slug>/balloons.json`.
+  Teste: `smoke-contest-rounds.sh`.
+- **Descongelar o placar só a partir do fim geral + 1 min** (`lib/contest-gate.sh`:
+  `freeze_release_at` = `contest_end_all` + `FREEZE_RELEASE_GRACE` (60 s), `freeze_release_ok`,
+  `freeze_release_guard` → 409 `freeze_locked`; pedido do Ribas, 2026-09-14). Vale p/ TODO
+  caminho que leva `FREEZE_TIME` de >0 a 0: `admin/settings.sh` (`freeze:0` — cerimônia e
+  Central), `admin/config.sh` (`basic.freeze:0`), `admin/finish.sh` (além de
+  `contest_over_for_all`; `can_finish` já considera), `admin/rounds.sh` `set` na rodada ATIVA
+  (5º caminho, achado na revisão de 15/09) e `rd_promote_blockers` (`freeze_locked` é
+  bloqueador DURO junto de `no_next_round` e `problem_denied` — `force` não passa). Quem EDITA
+  o freeze usa **`freeze_change_guard <c> <novo>`** (contest-gate.sh): compara NUMERICAMENTE
+  (`"00"` é zero) e barra também **empurrar um freeze já em vigor para depois de agora** — é
+  descongelar com outro nome; mover o freeze antes de ele valer segue livre. `settings`/`finish` GET expõem `freeze_release_at` p/ a UI
+  (reveal, Central, rodadas) explicar a hora. Teste: seção "guarda do freeze" do
+  `smoke-contest-rounds.sh`.
 - **Documentos da prova** (`lib/contest-docs.sh` + `handlers/contest/{admin/docs,doc}.sh`, painel
-  **Prova › Documentos** do admin e aba 📄 do `.cjudge`): info sheet, caderno (capa + enunciados), folha de
+  **Evento › Documentos** do admin (módulo `documentos`) e aba 📄 do `.cjudge`): info sheet, caderno (capa + enunciados), folha de
   time limits e **EDITORIAL** (o `docs/solucao.md` do PACOTE de cada problema, via `pkg_path` —
   o campo que nunca vai ao aluno), em **PDF+HTML × pt/en/es** (`DOC_LANGS`; a INTERFACE segue pt/en —
   são eixos diferentes), tudo derivado do que o contest já tem (conf, `PROBS`, `enunciados/`,
@@ -573,16 +831,33 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   ternário `[[ $l == pt ]] && … || …` solto é o que travava um 3º idioma.
   **PDF PRONTO enviado** (`action:upload` → `docs/<tipo>.<lang>.uploaded.pdf`) **vence o gerado**
   em tudo que é servido (`doc_pdf_served`), deixa publicar sem nunca ter gerado, e `remove_upload`
-  volta ao gerado — que nunca é apagado. É como entra prova traduzida por fora.
+  volta ao gerado — que nunca é apagado. É como entra prova traduzida por fora. ⚠ `doc_index`
+  tem de listar o enviado MESMO SEM `index.json` (2026-09-14: o early-return escondia o PDF
+  num contest que nunca gerou nada e a UI não oferecia "publicar"); a promoção de rodada
+  restaura `*.uploaded.pdf` (config feita à mão). **Info sheet = "Ambiente de julgamento e
+  submissão"** (`env_title`; era "Testing environment"), templates `server/etc/info-sheet.*.md`
+  no padrão da folha da SBC com blocos condicionais `{{#LANG c cpp}}…{{/LANG}}`
+  (`_doc_lang_blocks`, filtrados pela whitelist) e marcadores `{{OS}}` (campo `os` do registry,
+  reportado pelo agente), `{{TOOLCHAIN}}`, `{{SOURCE_MAX}}`/`{{OUTPUT_MAX}}`/`{{COMPILE_TL}}`,
+  `{{MEMLIMIT_MB}}`/`{{STACK_KB}}` (os `-Xmx/-Xss` do juiz), `{{VERDICTS}}`, `{{PENALTY}}`/
+  `{{PENALTY_EXCEPTIONS}}` — as linhas de compilação/execução dos templates ESPELHAM
+  `mojtools/lang/*/{compile,run}.sh`: mudou flag lá, mude aqui. **Editorial = capa + UM
+  problema por página**: `<h1 style="page-break-before:always">` inline (o importador do Writer
+  ignora a regra em `div`), Heading 1 do reference.odt quebra na rota ODT, e os títulos do
+  `solucao.md` são rebaixados (`_doc_demote_headings`) — senão `# Ideia` abria página. **Folha de
+  TL**: `_doc_tl_matrix` + tabela com uma coluna por linguagem só quando o TL difere.
+  `render-docs.sh` roda no dev (tem pandoc/soffice) e afirma tudo isso.
   ⚠ **Tipografia**: `server/etc/contest-doc.css` (rota HTML→soffice) e `server/etc/caderno-reference.odt`
   (rota pandoc→ODT, que IGNORA CSS) descrevem o MESMO documento por caminhos diferentes — mexeu num,
   confira o outro. Ambos em **A4 + Latin Modern** (a cara de LaTeX; `fonts-lmodern` é asserção de
   build). Antes divergiam: capa A4 + miolo US Letter no mesmo caderno, `Heading 1` menor que o
   `Heading 2` e itálico SINTÉTICO (o DejaVu da imagem não tem itálico). Regenerar o ODT: receita no
   cabeçalho do `_doc_html2pdf_odt` — **mimetype primeiro, `zip -0`**, senão o LO recusa calado.
-  Renderização real (pandoc+soffice) só é exercida por `server/test/render-docs.sh`, que roda
-  DENTRO da imagem (A4 em toda página, Latin Modern embarcada, texto extraído). **Gates de FASE no `/contest/doc`**
-  (quem não é organização): `contest`/`times` publicados só a partir do INÍCIO (`contest_phase`),
+  Renderização real (pandoc+soffice) só é exercida por `server/test/render-docs.sh` (dev ou
+  DENTRO da imagem; A4 em toda página, Latin Modern embarcada, texto extraído, páginas do editorial). **Gates de FASE no `/contest/doc`** (e no `/contest/resources`)
+  — organização = SÓ admin/chefe/juiz; `.staff`/`.cstaff`/`.mon` esperam a fase como o time
+  (decisão do Ribas, 2026-09-15: a sede não recebe o caderno antes da prova — é a mesma regra do
+  `can_see_problems`): `contest`/`times` publicados só a partir do INÍCIO (`contest_phase`),
   `editorial` só com `contest_over_for_all` — que também trava o **publish** do editorial; `news:true`
   de caderno/times antes do início = 409 (a notícia anexa o PDF por fora do gate). Teste:
   `smoke-contest-docs.sh`. **PDF só por `soffice --headless
@@ -591,22 +866,118 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   Writer NÃO o entende (achatava as fórmulas + duplicava o TeX do `<annotation>`) — por isso o
   enunciado do caderno vai por **`pandoc -f html -t odt` → soffice** (fórmula ODF de verdade;
   a imagem tem `libreoffice-math`), com fallback soffice-HTML + strip de `<annotation>`
-  (`_doc_strip_annotation`, aplicado também em `_doc_html2pdf` p/ capa/errata). O ESTILO da rota
+  (`_doc_strip_annotation`, aplicado também em `_doc_html2pdf` p/ capa/errata). ⚠ **BARRA `|` NA
+  FÓRMULA** (relato do Arthur Botelho, 24/09/2026: "sai com um ¿ em volta, tem que escapar?" — NÃO):
+  o pandoc marca TODO `|` do MathML como `form="prefix"`, inclusive o que fecha, e o LibreOffice Math
+  desenha o erro de sintaxe (¿ vermelho); não há grafia do lado do autor que escape (`\lvert`,
+  `\left|`, `\vert`, `\|` quebram igual). Entre o pandoc e o soffice, **`_doc_odt_fix_math`** roda o
+  `lib/odt-math-bars.py` no ODT: barra que abre/fecha vira `fence="true"` prefix/postfix EM PAR, a do
+  meio vira `∣` (o `\mid`), a sem par vira `<mtext>` — papel pela vizinhança numa linha achatada (a
+  base de `msup` entra: `|x|^2`). Armadilhas do texmath que o teste prende: `-` depois de barra sai
+  `<mi>−</mi>`, e `\bigr|` sai `form="prefix"` (só o postfix esticável é confiável). ⚠ **A IMAGEM NÃO
+  TEM O PANDOC NEM O LIBREOFFICE DO DEV** (pandoc 3.1.11 × 3.7, LibreOffice 25.2 × 26.2): o 1º deploy
+  deste conserto passou no dev e deixou `¿` na produção — lá o `\|` vem como `<mo>∥</mo>` nu, o
+  `vmatrix` como `<mi>∣</mi>…<mo>∣</mo>`, e `x | |x|` agrupado num `mrow` que põe a barra do meio na
+  borda (vira solta). Por isso TODA barra é candidata e os dois testes rodam DENTRO do container
+  depois do deploy (receita: copiar o `server/` para um temporário do container, sobrepor os arquivos
+  novos e rodar com `MOJ_SERVER_ROOT` — valida ANTES de subir). O mesmo passo conserta o **NOME DE
+  FUNÇÃO** (`fix_names`): no pandoc 3.1 `\log`/`\sin`/`\max` vêm como `<mo>log</mo>` e o LibreOffice
+  25.2 desenhava só a 1ª letra (`O(n \log n)` → "O(n l n)" no caderno); sai `<mi>log</mi>`. E a
+  **TIPOGRAFIA da fórmula** (`fix_settings`, 24/09/2026 — "o texto entre $ sai com outro tamanho"):
+  cada fórmula é um objeto do LibreOffice Math que NÃO herda nada do parágrafo nem do reference-doc;
+  o `settings.xml` do pandoc só diz `IsTextMode`, e o Math desenhava em 12pt Liberation Serif —
+  ausente na imagem, caía no **DejaVu Serif**. O script grava em cada `Formula-N/settings.xml` o
+  tamanho do corpo (lido da default-style do `styles.xml`, isto é, do `caderno-reference.odt`), a
+  família **CMU Serif** (`fonts-cmu`, asserção de build: o Latin Modern não tem grego e o `\alpha`
+  caía no DejaVu Serif; sem o CMU, a do corpo) e índices/limites a 70%; ⚠ `FontVariablesIsItalic`
+  DEPOIS do `FontNameVariables` (o nome zera o itálico). **Chave para depurar**: o LibreOffice NÃO
+  desenha o MathML — traduz para StarMath e lê esse texto; `soffice --convert-to odt` e o
+  `<annotation encoding="StarMath 5.0">` de cada fórmula mostram o que ele entendeu. Daí os
+  **DELIMITADORES** (`fix_brackets`): `stretchy="true"` vira `left ( … right )`, que estica, e o
+  pandoc 3.1 marca assim até o `(` comum — só estica em volta de conteúdo alto (fração, `\binom`,
+  matriz, ∑), barras idem; par trocado (`[l, r)`, era ¿) vira literal; o `cases` ganha o fecho vazio
+  (era a chave espelhada). E a **SINTAXE** (`fix_syntax`): `\#` (¿), `\&` (virava ∧), `\_` viram
+  texto; e o **OPERANDO** (`fix_operands`): relação na ponta do grupo (`$\le 10^9$`, `$= 0$`, a
+  coluna `&= …` do `aligned`, eram ¿) ganha o grupo vazio `{}` — na RAIZ, embrulhado num grupo só
+  (lá cada filho vira uma linha do StarMath). E o **ÍNDICE SOZINHO** (`fix_scripts`): operador que
+  ocupa sozinho um índice/expoente (`\mathbb{R}^+`, `\Sigma^*`, `x^-`) era ¿ — vira texto; só em
+  msub/msup (munder/mover são limites e acentos). E as **IMAGENS** (`fix_images` + `--html-widths`,
+  24/09/2026 — "não podem ficar gigantes nem sair da página"): ODT ignora o `img{max-width:100%}` da
+  web, o pandoc punha PNG sem DPI a 1 px = 1 pt e o LibreOffice CORTAVA o que passava da página (13 das
+  72 imagens de pacote da produção passavam do A4). Hoje o tamanho natural é o MENOR entre o do pandoc
+  (DPI do arquivo) e o da web (px × 0,75 pt) — nunca maior do que já saía — com teto na área útil da
+  página mestra do reference-doc (largura; altura a 90% do corpo); o `{width=50%}` do autor (que chega
+  como `style=`, ignorado pelo leitor de HTML do pandoc) vira atributo ANTES do pandoc e sai como
+  `rel-width`. Edita só a tag de abertura do `draw:frame` com `draw:image` (regex; fórmula é
+  `draw:object`). A rota `_doc_html2pdf` (soffice direto no HTML) ainda corta imagem grande — hoje sem
+  imagem nos documentos que a usam. Fail-open
+  (erro = PDF como antes); o `build-ensaio-pdf.sh` faz o mesmo passo. Testes: `smoke-odt-math-bars.sh`
+  (papéis, tipografia, `--fix`, imagens) e `render-docs.sh` (nenhum `¿` e nenhuma imagem além da área
+  útil, no papel). Sem conserto pelo MathML:
+  **acentos** (`\bar`, `\hat`, `\vec`, `\overline`…) — o importador do 25.2 escreve o acento SEM NOME
+  no StarMath e ele some (hoje sai como sinal solto acima, `csup`); o **primo** (`f'`) vem do DejaVu
+  Sans (nenhuma fonte Computer Modern da imagem tem o `′`). O **`::: center`** do enunciado (`<div class="center">`; no site é o `.center` do ui.css) o
+  pandoc DESCARTA no ODT — tudo saía à esquerda: o `lib/odt-center.lua` (`--lua-filter` do
+  `_doc_html2pdf_odt` e do `build-ensaio-pdf.sh`) dá ao bloco o `custom-style` `Center` (parágrafo
+  do reference-doc: centralizado, sem recuo) e desmonta a figura de dentro em imagem + legenda em
+  itálico (o estilo de figura não aceita `custom-style`). O ESTILO da rota
   ODT vem do **`etc/caderno-reference.odt`** (`--reference-doc`; ODT ignora CSS): corpo
   JUSTIFICADO + Preformatted Text com fundo/borda (a caixa dos exemplos) — receita de
-  regeneração comentada no `contest-docs.sh`. O caderno prefere o **PDF próprio** do problema; a **capa** tem 3 modos (PDF enviado ›
-  markdown editado com marcadores `{{…}}` › gerada) e é **regerada no fim** com o total real de
-  páginas. **PT/EN é só o chrome** — o MOJ não tem enunciado bilíngue; diga isso na UI, não finja.
+  regeneração comentada no `contest-docs.sh`. O caderno prefere o **PDF próprio** do problema; a **capa** tem 2 modos (PDF enviado ›
+  markdown com marcadores `{{…}}`) — desde 25/09/2026 a capa PADRÃO também é template (`etc/cover.<lang>.md`,
+  reproduz a de antes pixel a pixel; blocos com `{{N_PAGES}}`/`{{SITES}}`/`{{NOTE}}` vazio somem) — e é
+  **regerada no fim** com o total real de páginas. **Todo PDF gerado tem o gêmeo `.odt`** (`fmt=odt`,
+  só admin/chefe): a rota HTML virou HTML→ODT→PDF (o `.odt` É o intermediário; medido: PDF idêntico ao
+  direto) e a rota pandoc guarda o ODT dela (`_doc_html2odt` = a metade pandoc, a MESMA do miolo); o do
+  caderno traz a capa editável (Title/Subtitle/Center) + os enunciados. Templates (capa, info sheet) no
+  editor do MOJ com aba por idioma; salvar o texto IGUAL ao padrão (ou só espaço) apaga a cópia do
+  contest. Testes: `render-docs.sh` (real), `smoke-contest-docs.sh`, `smoke-docs-tab.gjs.sh`. **O corpo TAMBÉM segue o idioma do documento** (2026-09-15, revoga o "PT/EN é só o
+  chrome"): `_doc_probs_l`/`_doc_stmt_file` pegam `enunciados/<skey>.<lang>.html|pdf` › tradução do
+  banco › PT, o editorial lê `docs/solucao.<lang>.md` › `solucao.md`, o título vem de
+  `titles[<lang>]` — idioma sem tradução CAI NO PT, nunca sai só a capa localizada.
   `publish` escreve `resources.json` (seção "Prova") e opcionalmente a notícia com anexo; o gate
   de download é do handler (`/contest/doc`: não publicado ⇒ **404** p/ quem não é admin/chefe).
 - **Checklist pré-prova** (`handlers/contest/admin/preflight.sh`): a lista que a **🏁 Central**
   do painel renderiza — `{id, level:ok|warn|fail, label, detail}` + `summary`. Feature de contest
   nova que possa dar errado no dia da prova **ganha uma checagem aqui**, com o `id` no mapa
   `TARGET` do `central-tab.js` (é o botão "resolver →") e uma asserção em
-  `server/test/smoke-preflight.sh`. `fail` significa BLOQUEIA a prova — use `warn` p/ escolha
+  `server/test/smoke-preflight.sh`. `fail` significa CRÍTICO (a prova não deveria começar assim) — mas o checklist é CONSULTIVO: nada no
+  login/submit o consulta, e a tela diz "crítico", não "bloqueia" (2026-09-18: um professor leu
+  "BLOQUEIAM a prova" e achou que o sistema travaria). Use `warn` p/ escolha
   legítima (isento de gate declarado, coorte privada) e nunca transforme configuração
   deliberada em aviso eterno. Libs pesadas (rodadas) só são `source`adas dentro do `if` que
-  precisa delas: o handler roda a cada abertura da Central.
+  precisa delas: o handler roda a cada abertura da Central. **Checagem de MÓDULO só roda com o
+  módulo ligado** (`mod_on`: `ua_gate site_lock session_single mlinux site_short`=maquinas,
+  `next_round reg_warmup`=rodadas, `docs`=documentos, `balloons balloons_freeze`=baloes,
+  `cohorts reg_cohorts`=coortes, `registration reg_*`=inscricoes, `tov`=sedes, `telao`=telao — chave do Animeitor e última conferência) e a checagem
+  `modules` avisa módulo DESLIGADO com dados (`mod_detect`). Checagem nova de módulo entra
+  dentro do `if mod_on`, e o fixture do `smoke-preflight.sh` liga todos. **Checagem nova nasce
+  bilíngue**: `add2 <id> <level> <label> <detail> <label_en> <detail_en> [action]` (a Central usa
+  `label_en`/`detail_en` em inglês; o `add` antigo é só-PT, legado). `action` põe um BOTÃO no item —
+  hoje só `warm_judges` (`judges_warm`: juiz frio × problema, `lib/judge-warm.sh`, e o
+  `POST /contest/admin/warm-judges`; teste `smoke-judge-warm.sh` + caso `central` do
+  `admin-inplace.gjs.sh`).
+- **MÓDULOS DO CONTEST (`lib/modules.sh`, 2026-09-05)** — grupos de recursos que o admin LIGA por
+  contest (`CONTEST_MODULES=a,b` no conf, `%q` escapa a vírgula ⇒ `mod_raw` tira as barras; ausente
+  = nenhum). Catálogo ÚNICO `MODULES=(sedes maquinas rodadas documentos baloes coortes inscricoes
+  telao classificacao virtual)`, espelhado em `web/contest/admin/modules.js` (paridade testada em
+  `smoke-admin-nav.sh`); `mod_on/mod_any/mod_list_json/mod_set/mod_detect`. O gate é **UX** (decide
+  nav/painéis/checagens/cartões); **o acesso continua cortado em cada rota**. **Desligar nunca apaga
+  dado** (o painel avisa; `detected` mostra que há arquivo). **Gravar o artefato de um módulo LIGA o
+  módulo** (`mod_enable <c> <id>`, união idempotente, auditado `modules-auto`) — cada handler chama
+  no ponto de escrita (rounds/cohorts/ua-gate≠off/site-lock/nutella/docs/registrations/classify/
+  config/time-overrides/webcast/team-assets); GET nunca liga; desligar é sempre manual. Handler novo
+  de módulo ⇒ `mod_enable` ao gravar + asserção no `smoke-contest-modules.sh` (seção mod_enable). Rota `admin/modules` GET/POST; `basic` e
+  `settings` expõem `modules[]`. **Spec UNIFICADO** (`cc_apply_modules_spec`/`cc_modules_spec` em
+  `lib/contest-create.sh`): `spec.modules = {id: true | {on?, …seção…}}` — cada seção grava pelo
+  MESMO arquivo/conf que o painel edita (formato no cabeçalho da função); export devolve só módulos
+  ligados, dados reeditáveis, NUNCA segredo (chave nutellaboot, chaves de webcast → o create gera
+  chaves NOVAS a partir de `views`); template tira `rounds/active/time_overrides`; duplicate desloca
+  o plano de rodadas pelo delta das datas. Compat: `colors/regions/teams_meta` no topo seguem
+  aceitos. Contests antigos: `server/bin/contest-modules-detect.sh [--apply]` (uma vez).
+  **Classificação por catálogo**: `admin/classify.sh` despacha `config.algorithm` por allowlist
+  `CL_ENGINES` (`sbc-fase1` → `score/classify-br.sh`); a PDA = motor novo + 1 linha + smoke.
+  Testes: `smoke-contest-modules.sh` (57), `smoke-preflight.sh`, `smoke-contest-create.sh`.
 - **FUSO (2026-08-06)**: a imagem é debian-slim **sem TZ** ⇒ o servidor rodava em UTC e TUDO que
   ele escrevia p/ humano saía 3 h adiantado (DM do convite, preflight, caderno, relatório). Hoje
   `lib/common.sh` faz `export TZ="$MOJ_TZ"` (default `America/Sao_Paulo`, em `etc/common.conf`) e
@@ -629,24 +1000,172 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   determinística** (a parte "decorrida" depende do relógio — é arredondada a minuto cheio e
   `window_minutes` a fixa, senão o mesmo `seed` dá placares diferentes e ninguém reproduz bug de
   telão). Receita fim a fim em `docs/WEBCAST.md`; teste: `smoke-contest-seed.sh`.
+- **Telão: API do ANIMEITOR (2026-09-21)** — doc completa em `docs/ANIMEITOR.md`. ⚠ **24/09/2026: o serviço mudou o
+  contrato** — os templates de mídia (`photo_url_format`/`sound_url_format`) passaram do contest para o **EVENTO** e o
+  contest ficou estrito (`unknown field` = 400 `invalid_json`, a publicação parou): `an_event_json` os manda, `an_resolved`
+  não. O mock ESTRITO é a cópia do contrato — a cada versão do serviço confira o `/internal/openapi.json` contra ele. O Animeitor 2.1.0 (Emilio) tem API
+  própria e o sentido INVERTEU: o MOJ EMPURRA evento/placares/sedes/runs/relógio (`lib/animeitor.sh`, rota
+  `/contest/animeitor/api`, gate `is_animeitor || is_admin`); o zip do BOCA (`docs/WEBCAST.md`) ficou LEGADO, dobrado
+  na tela. Regras que doem se quebrarem: (1) **nunca `PUT`** — é substituição total e zera o `salt` ⇒ troca os links
+  de revelação já entregues; é `POST` e, no 409, `PATCH`; (2) o servidor deles **não avança o relógio** ⇒
+  `daemons/animeitor-feed.sh` (relógio 1 s, runs 2 s só se algum `history` mudou, roster a cada 60 s por
+  assinatura), processo À PARTE — o `judged` nunca espera a rede do telão; (3) run tem **id inteiro estável**
+  (`var/animeitor-ids.tsv`, só apêndice; `score/telao-runs.sh` é a FONTE ÚNICA das runs/flags p/ a API e p/ o pacote
+  BOCA — duas cópias da regra Y/N/X/? seriam dois placares no telão); (4) `codes` = o regex existente SÓ se ele
+  reproduz o recorte do MOJ no roster, senão lista exata (coorte/sede por campo da conta não é regex); (5) evento
+  que já existe lá e não é nosso só com `adopt`, e `reset` só do que o `managed` diz que criamos — o servidor é
+  compartilhado; (6) credencial em `secrets/animeitor.cred` via `-K <(printf)`, links de revelação buscados ao vivo
+  e nunca gravados; (7) **reveleitor nas sedes**: um interruptor do `.animeitor` (`reveal-release`) e aí
+  `GET /contest/animeitor/reveal` dá a cada `.cstaff`/`.staff` SÓ os links da sede dele (`staff_regions`, agora na
+  `lib/print.sh` — fonte única com os comandos do mlinux), em todos os placares; **fail-closed** sem sede (link é
+  credencial — diverge de propósito do "sem filtro = vê tudo" das telas de leitura); botão `Reveleitor` na barra
+  via marcador sem fork; (8) **prorrogação por sede é MASCARADA p/ o telão**: o relógio enviado tem teto no
+  `contest_end_all` (fim da ÚLTIMA sede), só p/ o Animeitor — o resto do MOJ não muda (memo de 5 s devolvido por
+  VARIÁVEL: por `$(…)` o memo morre no subshell e vira um jq por segundo). **Custo medido** (2.000 times): 4 % de um
+  núcleo por contest ocioso, 22 % em rajada de 10 veredictos/s, ZERO efeito na latência das rotas (processo à parte);
+  serial entre contests ⇒ ~4 simultâneos antes de o relógio pular segundos (aí: paralelizar por contest). 404 no
+  relógio = evento apagado lá ⇒ zera managed/sent e republica. (9) **CHAVE DO MOJ** (25/09/2026):
+  `$ANIMEITOR_CRED_FILE` (`run/secrets/animeitor.cred`) vale p/ todo contest SEM chave própria e SÓ no servidor padrão
+  (`$ANIMEITOR_URL`; `an_cred_source` decide pela URL que a requisição de fato usa) — nunca volta p/ a tela, nem o
+  usuário; a própria do contest vence. Credencial COMPARTILHADA ⇒ o serviço não separa mais os contests: o registro
+  `run/animeitor/events.json` (`an_reg_set`, flock) é o dono de verdade — nome de evento de outro contest = 409
+  `event_taken` ANTES de qualquer request, e a chave do MOJ não faz `adopt` de evento de fora (`adopt_forbidden`).
+  Caminho novo que toca evento lá ⇒ passa pelo registro. (10) **CONFERÊNCIA** (`an_verify`): rota PÚBLICA
+  `runs_secret` com Bearer = a chave da sede (o `secret` do `revelation_urls`, ao vivo, nunca gravado); compara as runs
+  vivas + as removidas (X) sede a sede (regex da sede por `grep -P` sobre os logins; mesmo regex = 1 consulta), marca
+  p/ reenvio sob o lock do push (`_an_sent_fix`) e grava `var/animeitor-verify.json` SEM chave nem resposta; `final` =
+  ok + prova encerrada p/ todas as sedes + nada pendente (o "validado" do reveleitor). O alimentador a roda DESTACADA
+  (um GET por sede não pode segurar o relógio dos outros contests). ⚠ Campo com regex/nome indo de jq p/ bash: **nunca
+  `@tsv`** (ele escapa a barra invertida e o `\-` do login escapado virava `\\-` — a sede não casava ninguém e a
+  conferência dizia "ok, 0 conferidas"): `@base64` por campo. Testes: `smoke-animeitor-verify.sh`,
+  `smoke-animeitor-key-verify.gjs.sh`. ⚠ URL de botão da nav NÃO leva `#hash` (o `navHref` cola `?c=` depois) — use query. Armadilhas pagas aqui: `for b in "$W"/b.*` não expande (os handlers rodam com `noglob` ⇒ `find`);
+  `awk 'NR==FNR{…}' vazio arquivo` casa o 2º arquivo inteiro (1º arquivo por `getline`); `> "$f.tmp.$BASHPID"` num
+  pipeline expande no FILHO (resolver o nome ANTES). Mock ESTRITO `animeitor-mock.py`; servidor real só em evento
+  de teste próprio, apagado no fim.
 - **Integração NUTELLABOOT (máquinas mlinux, 2026-08-30)** — doc completa em
-  `docs/NUTELLABOOT.md`. O essencial: chave por contest em
+  `docs/NUTELLABOOT.md`. ⚠ **O serviço virou NutellaBoot 3 e o MOJ estava QUEBRADO contra ele
+  (21/09/2026)**: comando por máquina ia a `POST …/machines/{mac}/commands`, que NÃO existe (405); o
+  de frota ia sem `targets` a uma rota que ainda exige console (400/401); e só se aceitava chave
+  `nb3a_` (administração), quando a integração documentada usa `nb3s_` (**serviço**, com escopos e
+  glob de imagens — e que leva 401 em `/whoami` e na listagem `/site-images`). Hoje: comando SEMPRE
+  pela rota da sede (`{command, target:"all"|[mac]}`), "todas" = uma ordem por sede DO CONTEST (nunca
+  a frota do serviço, que tem sedes de outros eventos), `nb_key_kind`/`nb_images`
+  (`NUTELLABOOT_IMAGES` no conf) em `lib/nutella.sh`, preflight que não depende do `/whoami`.
+  **Lição: o mock aceitava qualquer POST/PUT e escondeu os dois comandos por semanas — o
+  `nutella-mock.py` agora é ESTRITO como o serviço (conferido na 26tete); mock permissivo de serviço
+  externo é dívida.** O essencial: chave por contest em
   `contests/<c>/secrets/nutellaboot.key` (600; **nunca** no conf nem em argv — o curl da
   `lib/nutella.sh` recebe o header por `-K <(printf …)`, molde do mojinho-api); coletor
   `score/nutella-gen.sh` agrega POR SEDE + rollups pela árvore de regions.json (idioma do
   stats-gen) em `var/nutella.cache.json`; rota `/contest/nutella` (GET escopado p/
   `.cstaff`/`.staff`; POST config/collect/push-roster/command — **comando é fail-closed**:
   staff sem escopo explícito = 403); view única `web/lib/mlinux-view.js` p/ painel
-  (Operação → mlinux), página avulsa `/contest/mlinux/` e o `mlinux.html` do relatório
+  (Máquinas › mlinux, módulo `maquinas`), página avulsa `/contest/mlinux/` e o `mlinux.html` do relatório
   (SEM MAC/teams/_rows). **Relatório 2.0 (01/09)**: o coletor deriva POR MÁQUINA só dos
   pontos DENTRO da prova (samples com `since/until`; bruto em `var/nutella-raw/` +
   `--reaggregate`), casa máquina↔time pelo `machine_id` do UA do login (`var/access.log`)
   e guarda por sede só somas/contagens (`pop`, `ram_bands`, `ed_adopt`, `profiles`,
   `pressure`, `rank_ed`); `sc_place_map` (score-common) é a posição no placar dos dois
-  consumidores (relatório e coletor). O jq do coletor mora em VARIÁVEIS — o
+  consumidores (relatório e coletor). **NutellaBoot 3 (21/09)**: séries em LOTE (1 request por sede, NDJSON,
+  `limit=5000` ⇒ sem reamostragem; fallback por máquina no 404; o leitor junta os DOIS leiautes de bruto e
+  o `--reaggregate` do bruto antigo tem de dar o MESMO cache), cadência pelo `interval_s`, e a telemetria
+  do agente novo (`health{…}` com `agent_new` de DENOMINADOR, `psi_*`, `model_tm`, `alert_kinds`) — tudo
+  SOMA+N e tudo OPCIONAL do coletor à tela (frota mista é o caso real; `smoke-mlinux-view.gjs.sh` prende
+  cache novo × antigo). Sedes da coleta = times do roster ∪ logins com o UA da imagem ∪ imagens listadas à
+  mão (o roster do serviço pode estar VAZIO — estava, em todas, em 21/09). ⚠ Lição: **filtro que descarta
+  o vazio esconde a falha** — "nenhuma sede casa" mascarava serviço mudo/URL errada; hoje sede sem resposta
+  vai p/ `skipped` (o painel avisa) e, sem nenhuma, a coleta FALHA e o cache anterior fica. **Elo pelo MAC +
+  binding no login**: o UA do agente novo termina no MAC (`…/<boot_id>/<mac>`, `machine_id = md5(MAC)`); o
+  coletor liga máquina↔time por MAC › mid/boot › mid único › `binding` do serviço (só se o time é da sede), e
+  o LOGIN publica o `binding` (`lib/nutella-bind.sh`: fila em `var/nutella-bind.queue` + drenador DESTACADO,
+  no máx. 1 a cada 10 s — o login nunca espera o serviço; dedup em `var/nutella-macs.tsv`; trilha em
+  `var/nutella-bind.log`; `NUTELLA_BIND=0` desliga; imagem do UA tem de ser sede DO contest; `push-bindings`
+  = replay do access.log). ⚠ **A chave de máquina GRAVADA não mudou** (`m:<mid>/<boot>` em sessão/
+  submit-origin): trocar formato no meio de uma prova faz sessão antiga × requisição nova divergirem — a
+  identidade estável (`m:<mid>` quando o mid foi visto com MAC) é só na APURAÇÃO (`lib/anomalies.sh`);
+  bash (`sess_machine_key`) e jq (`mkey`) continuam gêmeos. Teste de processo destacado: pergunte ao LOCK
+  (`flock -n`), não ao `pgrep -f` (ele casa com o shell que roda o teste). **Webhooks de alerta**: `POST
+  /hooks/nutella?contest=<c>` (`handlers/hooks/nutella.sh`) é a ÚNICA rota sem Bearer que ESCREVE — autentica
+  por HMAC do corpo cru (python3 stdlib, segredo e corpo lidos de ARQUIVO; nunca `openssl -hmac <segredo>` em
+  argv), responde **401 opaco** p/ tudo que não autentica (rota pública não é oráculo de existência) e só
+  depois valida imagem/MAC; `at` do corpo assinado dá o frescor, (evento,id,mac) dá a idempotência. Alertas →
+  `var/nutella-events.log` → `events[]` do `/contest/admin/anomalies` (`machine_alert`, chave `m:md5(MAC)`) +
+  DM ao dono SÓ durante a prova e com teto. `webhooks-install` exige chave admin e recusa atropelar webhook
+  alheio (o PUT do serviço substitui a lista). **Protocolo fase 1 (em produção desde 21/09 à noite)**: `/whoami`
+  e `/site-images` respondem à chave de serviço (o que ela lista É a lista do evento — `NUTELLABOOT_IMAGES`
+  opcional); erros com `code` (`nb_code`; 404 só é noroster com `user_not_in_roster`); 429 + `Retry-After`;
+  webhooks POR ENTRADA (POST/DELETE por id, `var/nutella-webhooks.json`; sem chave admin, sem `force`); `delivery`
+  no corpo = chave de dedup; `webhook.test` → 200 sem registro; `machine.rebooted/offline/online` na trilha
+  (`machine_event`); `NUTELLA_BIND_ROSTER=1` = `create_roster_entry` opt-in; `push-bindings` em LOTE
+  (`PUT …/bindings`); `command-status`; `agent_version`; gzip no lote. Mock: sem o arquivo `legacy` é o protocolo
+  novo. ⚠ Duas vezes a mesma armadilha: função chamada por `$(…)` roda em SUBSHELL — variável global
+  "de retorno" (NB_BIND_CODE) morre lá: devolva por stdout; e `for f in "$W"/*.tsv` sob `noglob` = literal
+  (`find`). O jq do coletor mora em VARIÁVEIS — o
   `jq-portability.sh` não o compila: rode os smokes com o jq 1.7 antes de deployar. Teste
   com mock: `smoke-contest-nutella.sh`. Comando novo se valida na imagem de TESTE `26tete`,
   nunca numa sede real.
+- **Painel do treino › Contests (2026-09-15)**: `SUPERADMINS` no conf do TREINO (logins; sem UI de
+  propósito) ⇒ `superadmin_login`/`is_superadmin` (`lib/auth.sh`). **`cc_contest_visible_to <viewer>
+  <owner>`** (`lib/contest-create.sh`) é a FONTE ÚNICA de "quem vê o contest de quem" — super-admin
+  tudo; `.admin` comum os seus + os de criadores sem papel de admin; nunca o de outro `.admin` — usada
+  em `admin/contests`, `admin/contest-remove` (404), `contest-create/{duplicate,export}`.
+  `cc_list_created <viewer> [mine]` é a leitura única da lista (admin e `mine`). Id **`icpc*`** só
+  super-admin cria (`cc_create` 403 `id_prefix_reserved`; `permission` expõe `is_superadmin` +
+  `reserved_id_prefixes`). `contest-perms.json` ganhou `allow_meta`/`deny_meta` `{login:{by,at,note}}`
+  (a trilha); `allow`/`deny` seguem listas de login p/ todo leitor. Teste: `smoke-treino-admin-contests.sh`.
+- **Espaço em disco (2026-09-16, 185 GB usados)**: `done/` guarda o result SEM `report_html_b64`
+  (`judged.sh` ramo result + `ingest-drain.py`) e o GC apaga com > 7 d (`SPOOL_DONE_KEEP_DAYS`); mojlog
+  é `.html.gz` (escrita `write_report_gz`, leitura em `submission/log.sh` com `Content-Encoding` e em
+  `treino/admin/queue.sh`); `gen-report.sh` corta cada bloco em `REPORT_MAX_BYTES` (64 KB); sample de
+  enunciado > 256 KB é truncado no HTML e > 4 MB vira `too_big` no json; json público é HARDLINK do
+  privado. Ferramentas dry-run: `bin/mojlog-compress.sh` (`--jobs N`; rodar no HOST), `bin/cache-purge.sh`,
+  `bin/mojlog-prune.sh`. **Política automática**: `etc/systemd/moj-housekeeping.{service,timer}`
+  (`install-housekeeping.sh`, root) roda diário prune `--ended-days 180` + cache-purge — reports de
+  contest encerrado há > 6 meses SOMEM (decisão do Ribas, 16/09). Testes: `smoke-report-caps.sh`, `smoke-judged-watch.sh`, `smoke-handlers.sh`
+  (gzip), `smoke-statement-langs.sh` (tetos). Doc: `docs/ADMIN.md` §9.
+- **PARTICIPAÇÃO VIRTUAL (`lib/virtual.sh`, módulo `virtual`, 2026-09-18)** — conta do treino refaz um
+  contest ENCERRADO contra o placar oficial, no próprio tempo; doc em `docs/VIRTUAL.md`. Invariantes:
+  (1) **a submissão virtual É submissão do TREINO etiquetada** (`/submit … virtual:<cid>` anexa o
+  subid em `treino/users/<l>/virtual/<cid>.subs`); o resultado é DERIVADO do history — spool, judged,
+  metrics e placar não sabem do virtual, e **nada é escrito em `contests/<c>/users/`** (doutrina das
+  rodadas: não tornar o caminho quente ciente de janela); (2) **portão ÚNICO `vr_load`, fail-closed,
+  a CADA requisição e ANTES de qualquer cache**: módulo ∧ não-SECRET ∧ icpc ∧ `contest_over_for_all`
+  ∧ `FREEZE_TIME=0` ∧ **todo problema PÚBLICO no treino** — falhou = **404 `virtual_unavailable`
+  byte-idêntico a contest inexistente** e os caches do virtual são APAGADOS; nada lê `jsons-private/`
+  nem o pacote, e o enunciado vem da rota pública `/treino/problem` (o virtual não cria caminho novo
+  até conteúdo de problema); `VR_IGNORE` existe SÓ p/ o painel do dono ("dá p/ ligar?") — nunca use
+  em rota que serve dado; (3) regra de desistência (≤15 min OU 0 AC; máx. 2; 3ª largada definitiva;
+  0 AC no fim = descarte) mora em `vr_can_discard`/`vr_refresh`; (4) **duas implementações da regra
+  ICPC** — `VR_FLAG_JQ` espelha o `counts` de `metrics_recompute` e `web/shared/virtual-board.js`
+  espelha `updatescore-icpc.sh`: mexeu numa, rode o **diferencial** `smoke-virtual-board.gjs.sh`
+  (motor em t=∞ == `placar.txt`); (5) times do feed = as LINHAS do `placar.txt` público final (truque
+  do webcast-gen: coorte/desclassificado/papel já filtrados); (6) rename de conta leva o snapshot
+  (`vr_rename_login`, com `find` — a API roda `noglob`); (7) **os filtros do placar virtual SÃO os do
+  placar oficial**: a lógica (enriquecer times, casar bandeira/sede/escola, opções de sede) mora em
+  `web/contest/score/score-filters.js`, sem estado, e tanto `score.js` quanto `treino/virtual/virtual.js`
+  a importam — mudou regra de filtro, mude LÁ (o gêmeo inevitável segue sendo o script inline do
+  relatório); COORTE recorta no MOTOR (`teamOk`: posição e ★ = as do placar próprio da visão; diferencial
+  contra `placar-view-<id>.txt`), bandeira/universidade/sede/busca recortam LINHA no renderizador, a
+  virtual acompanha via `sliceVirtualPlaces` e NUNCA leva ★ (nem a do recorte — `sliceFts` a pula); linha
+  virtual obedece a bandeira/universidade/busca mas IGNORA o filtro de SEDE (não fez em sede nenhuma —
+  é p/ se comparar com a sede; `keepFn` em `virtual.js`);
+  o feed (v2) só traz coorte PÚBLICA com time no placar público; **"meus escolhidos"** = lista POR CONTA
+  (`/treino/virtual/friends`, `virtual/_friends.json` — o `_` impede colisão com cid e faz o rename pulá-lo)
+  de virtuais que ficam na tela em qualquer filtro de linha (`pickVirtuals` marca `pinned`; 📌 pelo gancho
+  `teamExtra` do `renderICPC`, que o placar oficial não usa); a rota NÃO confere existência da conta
+  (oráculo) e o rename reescreve as listas que citam o login antigo; (8) `reset` no painel do dono devolve
+  a tentativa (estado posto de lado, não apagado). Rota nova do virtual ⇒ `vr_gate` na 1ª linha
+  **e** uma linha na matriz `smoke-virtual-leak.sh`. Testes: `smoke-virtual{,-leak}.sh`,
+  `smoke-virtual-board.gjs.sh`. Fora do v1: times, OBI, rodadas arquivadas, `moj-comp --virtual`.
+- **FONTE, REPORT e RESUMO de uma submissão = DONO ou JUIZ/ADMIN, sempre** (`submission/{source,log,summary}.sh`).
+  A opção `SHOWCODE`/`show_code` ("mostrar o código das submissões a todos") foi **REMOVIDA em 2026-09-18**:
+  abria, só pela API, fonte+report+resumo de TODO MUNDO a qualquer login do contest; ninguém soube dizer
+  quando isso era desejável, e quem a ligava (relato do Daniel Saad) achava que ela liberava o PRÓPRIO
+  código — que sempre foi visível. Linha `SHOWCODE` em conf antigo é morta (o settings POST a apaga e
+  aceita-e-ignora a chave; spec de criação com `showcode` idem). Não reintroduza um "abrir soluções" sem
+  um pedido explícito. ⚠ A tela **Regras** agrupa os campos do `settings-editor.js` por ÍNDICE: tirar um
+  campo do MEIO desloca −1 todos os seguintes no `GROUPS` de `settings-tab.js`. Teste:
+  `smoke-submission-access.sh` (parte do conf LEGADO com `SHOWCODE=1`).
 - **ACESSO É RESPONSABILIDADE DA API, NUNCA SÓ DA INTERFACE.** Todo endpoint que devolve
   conteúdo/metadados/**existência** de um recurso CORTA na própria API (`fail 403/404`) quando o
   login não tem permissão. Assuma que clientes (`moj-cli`, `curl`, scripts) vão tentar burlar — a
@@ -676,6 +1195,13 @@ navegação/curadoria, sem acesso. Registro CURADO em `collections.json` (`lib/p
 `{name:{owner,created_by,at}}`, nome é TEXTO LIVRE, pode ter espaços); marcar exige que a coleção
 exista (`set-collections`/`edit` validam). `/problems/collection*` = coleção-tag; `/orgs/*` = acesso.
 O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `server/bin/seed-collections.sh`.
+**SEM coleção (`[]`/ausente/lixo) = a coleção homônima da ORG, em TODO leitor** — o índice de donos
+(`mojtools/gen-problem-owners.sh`, a gestão) e o json servível (`mojtools/gen-problem-json.sh`, o treino e o
+sorteio do wizard) aplicam a MESMA regra, e o `/problems/create` grava a da org quando a lista chega vazia.
+Divergiram até 25/09/2026 (o json copiava o `[]`): a gestão dizia "grub" e o treino não listava a coleção
+(21 públicos em 5 orgs). O `smoke-colecao-org.sh` compara os dois geradores caso a caso — mexeu numa regra,
+mexa na outra. O índice separa as coleções por `\u001f` (nome é texto livre: a vírgula de antes partia
+"A, B" em duas).
 
 - **Acesso a problema (helpers centrais em `lib/problems.sh`):** ver **source/pacote/soluções/
   calibração** = só **membro da ORG** (`require_problem_edit` → `org_is_member`,
@@ -734,6 +1260,14 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   commit: `web/contest/contest.js` (busca ao abrir a sanfona/clicar; abre a aba ANTES da rede,
   senão o navegador bloqueia como pop-up) e o **`moj-comp`** (`_stmt_get`, um GET por enunciado —
   o `fetch` continua baixando o kit completo). Teste: `smoke-contest-statement.sh`.
+  **Exemplos como DADO (2026-09-16)**: `/contest/samples?contest&problem` devolve `samples:[{name,input,
+  output}]` lendo SÓ o json servível do banco (`cs_bank_json` → `.samples`, que o `gen-problem-json.sh`
+  gera com a MESMA seleção do HTML — `stmt_sample_names`; teste oculto nunca entra), gate do enunciado
+  (404), chave do `PROBS`. Alimenta o link **Exemplos** da sanfona (zip store-only feito à mão em
+  `web/shared/statement-samples.js`, que também põe o botão **Copiar** em cada `h3+pre` dos
+  `.moj-exemplo` — decorador idempotente chamado após cada `innerHTML` do enunciado) e o
+  `moj-comp samples`/`fetch`. Testes: `smoke-statement-langs.sh` (campo + rota + hidden),
+  `smoke-contest-statement.sh` (gates), `smoke-statement-samples.gjs.sh` (decorador + zip validado pelo python).
 - **`/contest/problems` tem CACHE POR VARIANTE** (2026-08-20): a rota monta o mesmo payload p/ todo
   time (~79 processos com 12 problemas) e 2000 deles a pedem no segundo em que a prova abre. O
   cache é `var/problems-cache.<author|noauthor>.json`, e a **variante é regra de segurança**: o
@@ -802,6 +1336,46 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   `contest_is_secret`, que roda em TODA rota pública de contest, gastava um `grep | cut` (2
   processos) p/ ler `SECRET=`. `$(<arquivo)`/`read` são builtins. Não confundir com
   `load_contest_conf`: no caminho de auth o conf **não pode** ser *sourced*.
+- **NOME DO PROBLEMA NO CONTEST = o do spec, senão o TÍTULO DO BANCO — nunca o id** (2026-09-18, relato do
+  Daniel Saad: contest criado pela API com um JSON sem `name` mostrava "saad-problems#knight-moves" na
+  sanfona). `cc_prob_title` (`lib/contest-create.sh`) serve as DUAS cópias do laço de problemas
+  (`cc_create` e `cc_build_probs` — mexeu numa, mexa na outra); o spec aceita `name` ou `title`. Para os
+  contests que JÁ nasceram com o id como nome, o `/contest/problems` troca o nome-que-é-só-o-id pelo título
+  do banco na regeração do cache (nome de verdade nunca é trocado). Testes: `smoke-contest-problem-title.sh`
+  e a seção "sem name" do `smoke-contest-create.sh`.
+- **CARIMBO DO CHECKSUM FRESCO (`tl_fresh_*`, `lib/tl-store.sh`, 2026-09-18)** — o `tl_checksum` do índice de
+  donos só se refaz em background (30 min + a varredura); entre "editei + recalibrei" e o índice alcançar,
+  o checksum de `run/tl` (novo) ≠ o do índice (velho) e o `/contest/problems` servia **`time_limits:{}`** —
+  o TL SUMIA da prova (relato do Daniel Saad: `saad-problems#metro`; achou que era por ser rascunho, não
+  era) e o Painel seguia em "precisa recalibrar". O `/judge/tl-report` JÁ confere o checksum real do pacote,
+  então é ele quem carimba `treino/var/tl-checksum-fresh.json` (`{id:cks}`), ANTES do `tl_store_record` (o
+  `mv` em `run/tl` invalida o cache do contest — o carimbo tem de já estar lá). O carimbo VENCE o índice em
+  `tl_index_checksums` (contest) e em `owners_merged` (Painel). Morre no `problem_commit` **só se o checksum
+  mudou** (edição de enunciado o mantém — senão o TL sumiria a cada Salvar), em delete/move, e é podado
+  quando o índice alcança (`tl_fresh_prune`, junto do `authored_prune`). A fronteira segue de pé: escreve
+  rota de juiz/gestão; o contest só lê um json minúsculo (`sem-pacote.sh` inalterado). Teste:
+  `smoke-tl-fresh.sh`. Irmão: o `moj-entrypoint` tira o lock órfão do gerador no arranque da API (restart
+  matava o `gen-problem-owners.sh` no meio e o lock segurava a regeneração por 20 min — num dia de 12
+  deploys o índice ficou 80 min velho).
+- **DUAS CHAVES DE PACOTE: `tl_checksum` (estreito) × `pkg_version` (largo)** (2026-09-20, relato do
+  Arthur Botelho). O carimbo estreito (`mojtools/tl-checksum.sh`: conf+tests/{input,output,score}+
+  sols/good+scripts) responde *"o TL medido ainda vale?"* — é o `checksum` de `run/tl`, do índice de
+  donos e do `/contest/problems`, e por isso **não pode** mudar quando o autor salva uma solução
+  `wrong` (o TL sumiria da prova — o furo que o `tl_fresh_*` acima consertou). O largo
+  (`tl-checksum.sh --all-sols`, + `sols/{pass,slow,wrong,upcoming}`; `pkg_judge_version` em
+  `lib/tl-store.sh`, memoizado em `run/tl/<id>.pkv` no molde do `pkg_tl_checksum`) responde *"o juiz
+  ainda tem o pacote certo?"* — é o `checksum` de `/judge/package-meta` e o `X-Moj-Checksum` do
+  `/judge/package`, **e o agente o trata como opaco**, então a troca valeu sem tocar no repo `judge/`.
+  Com uma chave só, mexer em `sols/{pass,slow,wrong}` não invalidava o cache do juiz e **o "Calibrar"
+  explícito rodava o `sols/` do pacote velho** (`moj-agent.sh`: "em full reaproveita o pacote do
+  cache") — julgando solução apagada, ignorando a nova, cada host com um conjunto diferente sob o
+  MESMO checksum. Consequências: `tl-report` VALIDA a versão reportada mas grava o TL sob o carimbo
+  estreito **calculado no servidor** (`tl_store_record` leva a `pkg_version` na entrada do host);
+  `/problems/calib` devolve `version` + `hosts[].{version,stale}` e **não serve `sols`/`reports` de
+  host stale** (o editor mostra "desatualizado — recalibre"). ⚠ Deploy que muda a FUNÇÃO de hash faz
+  o juiz re-baixar o pacote no 1º uso — **fora de horário de prova**. (Na estreia foi barato: pacote
+  SÓ com `sols/good` tem os dois carimbos IGUAIS, então só os que têm `pass|slow|wrong|upcoming`
+  re-baixam — 26 de 456 no checkout de dev.) Testes: `smoke-pkg-version.sh`, `smoke-calib-sols.sh`.
 - **Caches de problemas invalidam POR EVENTO, não por TTL** (2026-07-17): a lista do treino
   (`/treino/problems` → `var/problems.json`) é invalidada pelo stamp **`var/.treino-list-dirty`**
   — TODO ponto que cria/remove json servível TOCA o stamp (`index_problem_bg` pós-gen;
@@ -823,7 +1397,18 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   (lê 1 history; 0,09s).
 - **Painel de status (`GET /problems/status`, aba "Painel" da gestão):** agrega, dos problemas de que
   o login é **dono, colaborador ou membro da org**, validação/calibração/time-limits + estados **"calibrando"**
-  (varredura única de `run/updates`+`run/commands` por `kind/action==calibrate` — `calibrating_set`) e
+  (varredura única de `run/updates`+`run/commands` por `kind/action==calibrate` — `calibrating_set`, e
+  **`calibrating_for <id>`** com o detalhe `{host,since,state}` que a tela do AUTOR mostra: `/problems/calib`
+  devolve `being_calibrated`+`calibrating[]` e é com ISSO que o editor espera a calibração terminar,
+  nunca com o relógio — ele desistia em 80 s e uma calibração leva 3 a 7 min, então o aviso sumia, o
+  polling parava p/ sempre e o autor clicava de novo achando que não pegou (relatos do José Leite e do
+  Arthur Botelho, 21/09/2026; `smoke-calib-poll.gjs.sh` tranca as invariantes da tela: sem âncora de
+  relógio, erro de rede não apaga os cartões, poll serializado, re-arme no `visibilitychange`). A
+  calibração DIRIGIDA aparece pelo **marcador** que a entrega do comando deixa em
+  `run/updates/inprogress/<host>/cmd-*.json` — o comando some do diretório ao ser entregue e sem ele o
+  Painel/`calib_targeted`/`moj judges show` diziam "nada" enquanto o juiz calibrava por minutos, relato
+  do Ribas 20/09/2026; o marcador é DISPLAY-ONLY — não dedupa, não serializa, não volta p/ a fila e não
+  é re-carimbado pelo heartbeat, e quem o apaga é o report do juiz. Teste: `smoke-calib-queue.sh`) e
   **"precisa recalibrar"** (checksum calibrado em `run/tl/<id>.json` ≠ `tl_checksum` **carimbado no
   índice** por `mojtools/gen-problem-owners.sh`). A FRONTEIRA de acesso é **`owners_visible`** (extraído
   de `owners_emit` — UMA definição do filtro público∪dono∪colaborador∪membro-da-org; o handler
@@ -860,7 +1445,36 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   ficavam com "sem HTML" eterno no painel. O overlay é **PODADO** (`authored_prune`, chamado pelo
   `ensure_owners_index` com throttle por mtime): entrada já refletida no índice sem divergência nos
   campos de setter sai; divergente/não-indexada fica até o índice alcançar.
+  ⚠ **O MESMO FURO MORDEU O `title`** (21/09/2026): o `authored_upsert` gravava o **slug** quando o
+  título vinha vazio — e vazio é o caso NORMAL de todo chamador que lê `.display_title // ""` de um
+  pacote migrado sem o campo (set-public, set-collections, move, upload, import, `coll_bulk_retag`).
+  Overlay vence + divergente nunca poda = o Painel mostrando `obi2023f2pj_pizza` no lugar de "Pizza
+  da OBI", **para sempre**, em 21 problemas. Hoje: o upsert **não inventa título** (sem título, a
+  chave não entra), a mescla **descarta título de overlay vazio ou igual ao `prob`** quando o índice
+  tem um de verdade (cura o que já está no disco, sem migração), e a poda só compara título quando o
+  overlay **tem** um. Regra geral: **o overlay só escreve o que o setter realmente informou** — campo
+  inventado aqui vence o índice e não poda nunca. O título de verdade vem do índice, que o tira do
+  json servível (derivado do enunciado por `gen-problem-json.sh`); `read_problem_source` deriva igual,
+  p/ o editor nunca abrir com o campo em branco — era esse branco que o autor salvava. Problema sem
+  título em lugar nenhum sai com **`untitled:true`** no `/problems/status` e ganha o selo "sem título"
+  no Painel. Teste: `smoke-owners-index.sh`.
 
+- **TRAVA DE EDIÇÃO CONCORRENTE (`rev`, 2026-09-22; pedido do Daniel Saad + decisão do Ribas: "a trava
+  também na web").** `pkg_rev <pkg>` (`lib/problems.sh`) = hash de `git ls-tree HEAD` SEM a linha do
+  `.moj-meta.json` + `jq -cS` dos campos de autoria do meta (`display_title`/`titles`/`languages`/
+  `collections`). NÃO é o sha do HEAD de propósito: `set-public`, `move` e `owner-rename` commitam só
+  metadado e travariam todo mundo à toa; coleção ENTRA porque o push manda a lista inteira (sem isso o
+  push velho a apagaria calado). `source`/`get`/`create` devolvem `rev` (source também `rev_by`/`rev_at`
+  via `pkg_rev_who`, que pula os commits de sistema); `edit`/`upload` aceitam `base_rev`+`force` e
+  `pkg_rev_guard` responde **409 `stale_rev`** com `current_rev/changed_by/changed_at` DENTRO do
+  `error` (`FAIL_EXTRA` = objeto JSON que o `fail()` mescla no `error`). Conferência + escrita + commit
+  sob o MESMO flock por problema (`problem_lockfile`), e o `problem_commit` não trava de novo com
+  `_PC_LOCK_HELD=1` (nunca aninhe o flock — lição do owner-rename). Sem `base_rev` = comportamento
+  antigo (CLI velha, scripts). Clientes no MESMO trabalho: editor web (`REV` do `loadSource`, caixa
+  `#revConflict` com Recarregar / Salvar por cima → `force:true`; `ApiError.data` traz o `error`
+  inteiro) e `moj-cli` (`push`/`upload` + `--overwrite`, `moj pull`). Testes: `smoke-problem-rev.sh`
+  (inclui a corrida de dois edits com o mesmo `base_rev`: um 200, um 409) e
+  `smoke-editor-conflict.gjs.sh`; ponta a ponta: `moj-cli/test/pull-push.sh`.
 - **Histórico git por problema** (`/problems/history` lista/diff, `/problems/download?sha=` versão
   antiga via `git archive`, `/problems/restore` = **commit NOVO por cima** — história nunca é
   reescrita e o `.moj-meta.json` é PRESERVADO no restore, senão um meta antigo republicaria prova
@@ -869,6 +1483,15 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
 - `lib/problems.sh` (`apply_problem_fields` / `read_problem_source` / `write_meta` / `problem_commit`
   = commit git LOCAL por problema, sem Gitea) + `lib/orgs.sh` (acesso por org). Handlers em
   `handlers/problems/` (+ `handlers/orgs/`).
+- **PROBLEMA SEM EXEMPLO = `SAMPLE=no` no `conf` do pacote** (2026-09-23, pergunta recorrente — Daniel
+  Saad, problemas de função). Exemplo é SÓ `tests/input/sample*`; teste oculto NUNCA vira exemplo (o
+  fallback de legado que mostrava os 2 primeiros testes e o arquivo `samples` saíram do mojtools). Com a
+  flag: enunciado sem a caixa, `samples:[]` no json servível (treino sem botão, `/contest/samples` vazio,
+  `/contest/problems` `has_samples:false` ⇒ `contest.js` esconde o link), validação passa sem `sample*`.
+  Editor: aba **Limites**, "este problema não tem exemplos" (`cf_nosample`/`sampleOff`, preview sem
+  exemplos, prontidão "Sem exemplos"). A linha NÃO entra no tl-checksum (não recalibra). Pacotes antigos:
+  `server/bin/sample-flag-migrate.sh [--apply]` (dry-run; põe a linha no COMEÇO do conf, tira o `samples`,
+  commita como `moj` e reindexa). Teste: `smoke-sample-flag.sh` + seção SAMPLE=no do `smoke-statement-langs.sh`.
 - **Pacote canônico**: o formato é descrito, por inteiro e num lugar só, em **`docs/PACOTE.md`**
   (arquivos do pacote, `.moj-meta.json`, `.moj-id`, ORG, COLEÇÃO, ciclo validar→calibrar→publicar).
   **Mudou o pacote? Atualize o `docs/PACOTE.md` no MESMO commit** — é a fonte única, e os outros
@@ -880,6 +1503,14 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   ÚNICA em **`lib/langs.sh`** (`effective_problem_langs`/`lang_allowed`) e é **FORÇADA no
   `/submit` e no `/contest/offline-submit`** (`400 lang_not_allowed`, extensão canonicalizada
   py3→py/cc→cpp) — a listagem `contest/problems.sh` usa a mesma função; o dropdown é só
+  conveniência. **A PORTA grava a linguagem CANÔNICA** (`lang_canon_ext`, 2026-09-14): `/submit`,
+  `offline-submit` e `test-run` mandam `lang:"CPP"` p/ `.cpp/.cc/.cxx/.c++` (e `.hpp`), `C` p/
+  `.h`, `PY` p/ `.py3` — spool, history, archive, TL, auto-verdicts e roteamento por linguagem
+  veem só o canônico (antes `lang:"CC"` não casava juiz nenhum e morria em "Language 'cc' not
+  availale"). O `filename` do aluno fica intacto; quem renomeia a cópia de trabalho é o
+  `mojtools/build-and-test.sh` (gêmeo `mojtools/lang-canon.sh`). Normalizadores de chave de TL
+  (`tl-store.sh`, `calib.sh`, `preflight.sh`) usam a mesma função. Teste: seção "C++" do
+  `smoke-submit-pipeline.sh`. Era assim (2026-07-22): o dropdown é só
   conveniência (2026-07-22; antes era decorativa e trocar a extensão burlava o ban de função). **Linguagens EXÓTICAS/custom** (`pddl`, `grepe` do curso de compiladores,
   `sas`/`l`/`lpp`/`downward`, …) são **opt-in** em `web/shared/languages.js` (flag `optIn`): NÃO
   aparecem no dropdown por padrão — só quando o problema as **declara** em `languages`. Um id
@@ -918,6 +1549,23 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   fallback textarea), gráficos SVG, bandeiras/assets offline.
 - Editar e recarregar vale na hora (sem bundler). Validar: `node --check web/**/<arquivo>.js`.
 - Editor de problema: `web/problemas/editar.{html,js}` (abas; chama `/problems/*`).
+  **🧪 testar no juiz** (2026-09-24): sub-aba de Soluções & Correção = o `moj testrun` na web — módulo
+  `web/problemas/testrun.js` (`makeTestRun(ctx)`; API injetada por `ctx`, testável no gjs:
+  `smoke-testrun-panel.gjs.sh`), painel `#trunPanel` fora do `#solsWrap` como o `#scrPanel`; arquivo
+  escolhido e não editado vai com os BYTES (`fileToBase64`), colado vai como texto; lista de runs por
+  problema no `localStorage` (`moj_testruns_<id>`), cartões EM LUGAR, poll serializado; o 🧪 de cada
+  solução testa a versão do editor sem salvar. `testsTable` (tabela `soltests`) é a fonte única da tabela
+  de testes — o `solsBlock` da calibração usa a mesma. **Editorial por idioma**: a barra da aba Resolução
+  tem os chips "+ EN/+ ES" (`renderEdLangBar` → `addTransLang`) sem exigir enunciado traduzido — o
+  servidor grava só `docs/solucao.<l>.md`; "✕ remover o editorial em X" zera só o editorial
+  (`smoke-editorial-langs.gjs.sh`).
+- **Aba Limites do editor = TRI-ESTADO (24/09/2026)**: `CF_YN = [[id, chave, default]]` — chave AUSENTE
+  no conf = o default do juiz (`ALLOWPARALLELTEST`/`TLERERUN` ausentes = ligados; `STOPWHEN_*`/`SAMENUMA`
+  ausentes = desligados); o checkbox mostra o EFETIVO e salvar só escreve a chave quando difere do default
+  ou já existia. Antes um `ALLOWPARALLELTEST` ausente aparecia desmarcado e qualquer clique gravava todos
+  os checkboxes como `=y/=n`. Card **🧩 Problemas paralelos** (`CPUNEEDED`, `SAMENUMA`). Teste:
+  `smoke-limits-tab.gjs.sh`. **Máquinas** (treino/admin): linha da política global de testes em paralelo
+  (`host:"*"`), `P≤` = `parallel_max` por juiz, largura/SMT/nó/hold na célula de slots.
 - **i18n pt/en (mecanismo ÚNICO, `shared/i18n.js`)**: `T('texto pt','text en')` é o jeito
   canônico de escrever QUALQUER string de exibição no JS; o par do HTML estático é o atributo
   **`data-en`** (+ `data-en-ph`/`-title`/`-html`/`<html data-en-doctitle>`), traduzido por
@@ -925,8 +1573,11 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   **precedência**: **LOCALE do contest** (explícito, via `setLang(loc)` sem persist nas páginas de
   contest — `basic.locale` de `/contest/basic`) **> `?lang=` na URL > seletor pt/en do usuário**
   (header do site, `setLang(l,{persist:true})`, localStorage `moj_lang`) **> idioma do browser**
-  (`navigator.language` não-pt ⇒ en). O seletor vive só no `site-header.js` (páginas públicas);
-  dentro do contest o `LOCALE` fixa o idioma. O **`?lang=`** (2026-08-24) é para o link que alguém
+  (`navigator.language` não-pt ⇒ en). Os botões PT · EN são **`shared/lang-toggle.js`** (fonte única): no
+  `site-header.js` recarregam a página; nos **tutoriais de papel** (`contest/ajuda/_tutorial.js`) trocam EM
+  LUGAR (o `i18n-dom.js` é reversível) — e o `?lang=` da URL acompanha o clique, senão um reload com
+  `?lang=en` na barra desfaria o PT escolhido (teste `smoke-lang-toggle.gjs.sh`). Dentro do contest o
+  `LOCALE` fixa o idioma e não há seletor. O **`?lang=`** (2026-08-24) é para o link que alguém
   MANDA — e-mail de convocação p/ sede de fora, tutorial passado adiante: sem ele quem escreve o
   e-mail não tem como garantir a versão que o destinatário vai abrir. Ele **grava** (senão o
   idioma se perderia no primeiro clique) e **perde para o LOCALE do contest**, igual ao seletor.
@@ -939,9 +1590,14 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   conteúdo dos contêineres dinâmicos; `<details>`, inputs de filtro, foco, caret e scroll ficam
   nos MESMOS nós; e se o dado não mudou (compare uma assinatura do que aparece — sem
   `computed_at`/relógio), **não toque no DOM**. `panel.innerHTML = ''` só no primeiro carregamento
-  e no erro inicial. Moldes: `sessions-tab.js` (`skeleton()`/`swap()`/`sig()`), `central-tab.js`
-  (só a caixa "Ao vivo" se refaz). Teste no harness gjs: `load()` duas vezes com o mesmo dado
-  tem de manter a identidade dos nós.
+  e no erro inicial. Helpers em `shared/admin-ui.js`: `swap(box,node)`, `swapIf(box, sig, build)`
+  (assinatura em `box.dataset.sig`), `sigOf(...)`, `everyVisible(panel, ms, fn)`. Moldes:
+  `status-tab.js` (esqueleto + `swapIf` por seção), `anomalies-tab.js` (`sig()` sem `computed_at`),
+  `tasks.js` (ADIA o re-render enquanto um textarea está sujo/focado), `mlinux-tab.js` (na coleta só
+  a caixa da coleta troca), `central-tab.js` (só "Ao vivo" se refaz). O `review-board.js` (12 s)
+  ainda refaz o DOM — pendente. **Teste**: `server/test/admin-inplace.gjs.sh` (FakeNode + dom.js +
+  admin-ui.js + o painel sem imports; `load()` 2× com o mesmo dado mantém a identidade dos nós,
+  `<details>` aberto e o texto digitado) — painel novo com timer ganha um caso lá.
 - **Toda tela/string nova NASCE nos DOIS idiomas** (`T('pt','en')` no JS, `data-en` no HTML) — deixar
   só em PT é **bug**, igual doc atrasada; nunca renderize texto de exibição sem passar pelo `T`/`data-en`.
 - ⚠️ **Campo de data/hora: SEMPRE o par `toLocalDT`/`dtToEpoch`** (`shared/contest-config/util.js`),
@@ -961,17 +1617,30 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   **Botão novo no `navbuttons.sh` ⇒ linha nova no mapa do `nav-i18n.js`** (sem a linha ele cai no
   label PT do servidor — não some, mas vira string só-PT, que é bug). Datas: `toLocaleString()` SEM
   `'pt-BR'` fixo (o formato segue `document.documentElement.lang`, que o `applyHtmlLang` ajusta).
-- **Painel de admin do contest = SHELL + módulos.** `web/contest/admin/admin.js` só navega: 4 grupos
-  (`central|prova|pessoas|operacao`) × painéis, hash **`#grupo/painel`** e o mapa `ALIAS` com TODOS
-  os hashes antigos (link salvo/manual não pode quebrar — ao renomear um painel, ATUALIZE o ALIAS).
-  Cada painel é um `web/contest/admin/<nome>-tab.js` exportando `make<Nome>Tab(CONTEST)` →
-  **`{panel, load}`** (construído uma vez e escondido: mantém filtros/timers; `load()` roda de novo
-  a cada volta ao painel). Helpers compartilhados (CSV, `downloadAuthed`, `fmtS/fmtDate`,
-  `field/chk/mkBool`) em **`shared/admin-ui.js`** — não recrie a 4ª cópia. A **Central**
-  (`central-tab.js`) renderiza o `preflight` como lista acionável: o mapa `TARGET` (id da checagem →
-  `[grupo, painel]`) mora no FRONT, então checagem nova do servidor aparece sozinha e só ganha botão
-  quando entrar no mapa. `settings-tab.js` REALOCA os nós vivos do `makeSettingsEditor` em 5
-  `<details>` por ÍNDICE — mudou a ordem dos campos no editor? Ajuste o `GROUPS` de lá.
+- **Painel de admin do contest = SHELL + nav por MÓDULOS + painéis.** `web/contest/admin/admin.js`
+  só renderiza; a navegação vive em **`nav.js`** (puro, testável em gjs): `GROUPS()` (4 grupos
+  comuns `central|prova|pessoas|operacao` + os de EVENTO `evento|maquinas`, que só aparecem com
+  módulo ligado, depois de `span.groupbar-sep`), `PANEL_MODULE` (painel → módulo que o liga; ids de
+  painel são ÚNICOS no painel inteiro), `ALIAS` com TODOS os hashes antigos — 1ª geração (13 abas)
+  e 2ª (4 grupos de agosto: `pessoas/maquinas`→`maquinas/gate`, `prova/rodadas`→`evento/rodadas`…) —
+  e `resolveHash(hash, mods)`, que resolve pelo ID em qualquer grupo visível e manda painel de
+  módulo desligado p/ **Central › Módulos** com aviso (`inst.notice(texto)`). Renomeou/moveu painel?
+  ATUALIZE o ALIAS e o `TARGET` da Central. Os módulos vêm de `basic.modules`; o painel Módulos
+  dispara `moj:modules` e o shell re-renderiza. Cada painel é um `<nome>-tab.js` exportando
+  `make<Nome>Tab(CONTEST, opts)` → **`{panel, load}`** (construído uma vez e escondido: mantém
+  filtros/timers; `load()` roda de novo a cada volta) e recebe **`opts.has(mod)`** p/ gatear as
+  próprias seções (Staff: balões; Situação: cards de balão; Sessões: dica de rodada; Relatório:
+  rodadas; Regras: campo legado do gate). Helpers compartilhados (CSV, `downloadAuthed`,
+  `fmtS/fmtDate/fmtEpoch`, `PRIV_RE`, `field/chk/mkBool`, `swap/swapIf/sigOf/everyVisible`) em
+  **`shared/admin-ui.js`** — não recrie a 4ª cópia. A **Central** (`central-tab.js`) renderiza o
+  `preflight` como lista acionável: o mapa `TARGET` (id da checagem → `[grupo, painel]`) mora no
+  FRONT (checagem nova aparece sozinha e só ganha botão quando entrar no mapa — e só se
+  `opts.visible(painel)`); cartões "Gerar" de módulo (documentos/rodadas/telão) só com o módulo.
+  `settings-tab.js` REALOCA os nós vivos do `makeSettingsEditor` em 5 `<details>` por ÍNDICE —
+  mudou a ordem dos campos no editor? Ajuste o `GROUPS` de lá (campo que precisa ser achado por
+  nome leva `data-k`, como o `login_ua_substring`). Raiz do painel: uma caixa = raiz `.section`;
+  várias caixas/esqueleto = raiz `div` + caixas `.section`. Botão destrutivo: com texto `btn
+  danger`; ícone em linha `btn ghost danger` (+ `small` só de tamanho).
 
 ## Testar / rodar
 
@@ -995,6 +1664,11 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
 - **Documentação junto com o código** (doc atrasada = bug): rota/campo novo → `docs/API.md` **e**
   `web/api/openapi.json` (manter os dois em sincronia); arquitetura/fluxo → `docs/OVERVIEW.md`/`docs/FLOW.md`.
   `bash docs/build-html.sh` p/ refazer o HTML.
+- **Aviso de CLI desatualizada é do SERVIDOR** (`lib/cli-version.sh`, 2026-09-03): toda resposta a
+  uma CLI leva `X-Moj-Cli-Status`/`X-Moj-Cli-Latest` (referência `web/moj.build`, regenerado pelo
+  `make cli-dist`); CLI ANTIGA (UA `curl/*` + Bearer, sem marcador) ganha a dica "rode moj update"
+  ANEXADA à `error.message` — é o único canal que alcança quem nunca atualizou (caso Edson
+  02/09: create 400 mascarado como 404 por CLI de antes de agosto). Teste: `smoke-cli-version.sh`.
 - **API mudou ⇒ ressincronizar `web/` E `moj-cli/` no MESMO commit** (não só a doc). Os dois são
   clientes do contrato da API. Antes de fechar, VERIFIQUE de fato: a home carrega, o login funciona,
   `moj login`/`moj whoami` funcionam contra a base real. Regressão de API costuma se manifestar como
@@ -1007,6 +1681,13 @@ O aluno navega por coleção no treino (`web/treino` `?searchcol=`). Semear: `se
   *default* é seguro (o fallback é o próprio valor falsy) — o veneno é `//` com um sentinela.
   O portão da lista pública tem teste: `server/test/smoke-public-index.sh`; a rede de segurança é
   `server/bin/audit-public-index.sh`.
+- **`/submit` do TREINO confere a VISIBILIDADE do problema** (2026-09-18): público = um teste de
+  arquivo em `var/jsons/` (caminho quente intacto); não-público só passa p/ dono/colaborador/membro
+  da org (`problems_denied_for` + o id tem de CONSTAR do índice de donos — o "desconhecido não nega"
+  daquela função seria fail-open aqui). Privado alheio e inexistente = o MESMO `404
+  problem_notfound`, nada vai ao spool nem ao history. Antes, um id privado conhecido era julgado e
+  devolvia veredicto + report a qualquer conta. Teste: `server/test/smoke-submit-visibility.sh`.
+  Fixture de teste que submete no treino precisa do `var/jsons/<id>.json` público.
 - **NOME DE ARQUIVO DO ALUNO É ENTRADA HOSTIL, e ele viaja até um `/bin/sh`.** O `filename` do
   `/submit` vai no job, o agente do juiz materializa a fonte **preservando o nome**, o
   `build-and-test.sh` a copia p/ dentro da jaula e o `mojtools/lang/*/compile.sh` monta um

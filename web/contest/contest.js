@@ -7,11 +7,27 @@ import { createEditor } from '/shared/editor.js';
 import { LANGUAGES, DEFAULT_SUBMIT_LANGUAGES, langById, extCanon } from '/shared/languages.js';
 import { T, setLang, getLang } from '/shared/i18n.js';
 import { navLabel } from '/shared/nav-i18n.js';
+import { mountContestUserChip } from '/shared/contest-shell.js';
+import { makeSubmissionsTable } from '/contest/submissions-table.js';
+import { mountSiteFooter } from '/shared/site-footer.js';
 import { openHtmlReport } from '/shared/submission-links.js';
 import { balloonColorHex, balloonSVG, balloonEdge, balloonTint } from '/contest/score/score-colors.js';
+import { pickStmtLang, makeStmtLangChips, setChipsActive, rememberStmtLang, stmtHtmlLang } from '/shared/statement-langs.js';
+import { decorateSamples, downloadSamplesZip, SAMPLES_TAB_SCRIPT } from '/shared/statement-samples.js';
 
 const qs = new URLSearchParams(location.search);
 const CONTEST = (window.__MOJ_CONTEST || qs.get('c') || '');
+
+// safeNext(raw) — p/ onde voltar depois do login (`?next=`). SÓ caminho absoluto do PRÓPRIO site e
+// dentro de /contest/: recusa `//host` (protocolo-relativo), `http:`, `javascript:`, `/../` e
+// qualquer outra área. Função pura de propósito: é o que o smoke-contest-login-link.gjs.sh exercita.
+export function safeNext(raw) {
+  const v = String(raw || '');
+  if (!v.startsWith('/') || v.startsWith('//') || v.includes('\\')) return '';
+  if (v.includes('..')) return '';
+  const path = v.split(/[?#]/)[0];
+  return path === '/contest/' || path.startsWith('/contest/') ? v : '';
+}
 // modo "só editor" (janela dedicada aberta pelo botão ⧉ Nova janela) p/ UM problema.
 const EDITOR_ONLY = qs.get('editoronly') === '1';
 const ONLY_PROB = qs.get('prob') || '';
@@ -60,10 +76,6 @@ let problems = [];
 let balloons = {};
 let userinfo = null;
 let submissions = [];
-let subSumm = {};   // subid -> resumo do /submission/summary (redigido por modo no servidor)
-let subFilter = 'ALL';
-let sortField = 'epoch', sortAsc = false;
-let pollTimer = null;
 let loginCountdownTimer = null, loginPollTimer = null;
 let preStartTimer = null, preStartPoll = null;
 
@@ -154,8 +166,21 @@ function renderLoginStatic() {
   document.getElementById('loginPassLbl').textContent = T('Senha', 'Password');
   document.getElementById('loginBtn').textContent = T('Entrar', 'Log in');
   document.getElementById('loginCountdownLbl').textContent = T('Abertura em', 'Opens in');
+  const ol = document.getElementById('orgLoginLink');
+  if (ol) {
+    ol.textContent = T('organização', 'organization');
+    ol.title = T('Entrar como organização (admin, juiz, staff) antes da abertura',
+                 'Log in as organization (admin, judge, staff) before the opening');
+    if (!ol.dataset.wired) { ol.dataset.wired = '1';
+      ol.addEventListener('click', (e) => { e.preventDefault(); enableOrgLogin(); }); }
+  }
 }
 
+// a organização pede a tela de login antes da abertura. O link é uma PORTA DE SERVIÇO: canto
+// inferior direito, apagado, minúsculo — quem não é da organização não deve nem reparar nele
+// (pedido do Ribas, 20/09/2026: link visível = competidor clicando à toa antes da prova).
+let orgLogin = false;
+function enableOrgLogin() { orgLogin = true; updateLoginCountdown(); document.getElementById('loginPass')?.focus(); }
 function updateLoginCountdown() {
   clearTimeout(loginCountdownTimer);
   const now = Math.floor(Date.now() / 1000);
@@ -163,9 +188,20 @@ function updateLoginCountdown() {
   const left = loginStart - now;
   const box = document.getElementById('loginCountdown');
   const form = document.getElementById('loginForm');
-  if (left > 0) {
+  const ol = document.getElementById('orgLoginLink');
+  // o link só existe enquanto a porta está fechada E ninguém o usou: depois some (o formulário
+  // já está na tela) e, com a prova aberta, não tem razão de ser.
+  if (ol) ol.classList.toggle('hidden', !(left > 0 && !orgLogin));
+  if (left > 0 && !orgLogin) {
     box.classList.remove('hidden');
     form.classList.add('hidden');
+    document.getElementById('loginCountdownTime').textContent = fmtLeft(left);
+    loginCountdownTimer = setTimeout(updateLoginCountdown, 1000);
+  } else if (left > 0) {
+    // ORGANIZAÇÃO antes da abertura: a API isenta conta de papel (.admin/.judge/.staff…) do
+    // LOGIN_START_TIME, mas a tela escondia o formulário de todo mundo — o organizador não tinha
+    // como entrar no próprio contest antes da prova. O time comum continua vendo só a contagem.
+    box.classList.remove('hidden'); form.classList.remove('hidden');
     document.getElementById('loginCountdownTime').textContent = fmtLeft(left);
     loginCountdownTimer = setTimeout(updateLoginCountdown, 1000);
   } else {
@@ -203,8 +239,10 @@ function bootLogin() {
     btn.disabled = true;
     try {
       await login(CONTEST, form.username.value.trim(), form.password.value);
-      // recarrega a página: agora logado, cai no fluxo principal
-      location.reload();
+      // `?next=` = a página de onde a pessoa veio (o painel do admin, clarifications…): volta p/ lá.
+      // Sem next válido, recarrega — agora logada, cai no fluxo principal.
+      const nx = safeNext(qs.get('next'));
+      if (nx) location.replace(nx); else location.reload();
     } catch (ex) {
       err.textContent = ex && ex.message ? ex.message : T('Erro de login, tente novamente', 'Login error, try again');
       // A PORTA do contest (roster/janela): a mensagem sozinha não resolve — quem não se
@@ -356,7 +394,7 @@ function openAuthed(url) {
 // DOCUMENTO e traz o sufixo " (pt)" — aqui o idioma virou chip, o rótulo é do tipo)
 const DOC_NAME = {
   'contest':    () => T('📘 Caderno de problemas', '📘 Problem set'),
-  'info-sheet': () => T('📋 Informações do ambiente', '📋 Testing environment'),
+  'info-sheet': () => T('📋 Ambiente de julgamento', '📋 Judging environment'),
   'times':      () => T('⏱️ Limites de tempo', '⏱️ Time limits'),
   'editorial':  () => T('📝 Editorial', '📝 Editorial'),
 };
@@ -478,14 +516,30 @@ async function uiCssText() {
 // lista, e num contest de PDF isso é 3,8 MB por time no segundo da abertura. Guarda a PROMESSA
 // (não o texto): dois cliques rápidos no mesmo problema fazem uma requisição só.
 const _stmt = new Map();
-function statementUrl(p, fmt) {
-  return '/contest/statement?contest=' + encodeURIComponent(CONTEST)
-    + '&problem=' + encodeURIComponent(p.short_name) + '&format=' + fmt;
+// IDIOMA DO ENUNCIADO (2026-09-15): o contest OFERECE uma lista (`statement_langs` da resposta de
+// /contest/problems, decidida pelo admin/chefe) e um default (`default_statement_lang`, o LOCALE
+// se estiver na lista). A escolha do time fica em localStorage (moj_stmt_lang) e vale p/ todos os
+// problemas; um problema que não tem o idioma escolhido cai no 1º dele. Chips só quando há >1.
+let STMT_OFFERED = ['pt'], STMT_DEFAULT = 'pt', stmtLang = 'pt';
+const _stmtRefresh = new Map();   // problem_id -> fn(lang) que troca o corpo da sanfona já aberta
+function stmtLangFor(p) {
+  const av = (Array.isArray(p.statement_langs) && p.statement_langs.length) ? p.statement_langs : ['pt'];
+  return av.includes(stmtLang) ? stmtLang : av[0];
 }
-function statementHtml(p) {
-  const k = p.short_name + ':html';
+function setStmtLang(l) {
+  stmtLang = l; rememberStmtLang(l);
+  _stmtRefresh.forEach((fn) => fn());   // toda sanfona aberta troca em lugar
+}
+function statementUrl(p, fmt, lang) {
+  return '/contest/statement?contest=' + encodeURIComponent(CONTEST)
+    + '&problem=' + encodeURIComponent(p.short_name) + '&format=' + fmt
+    + '&lang=' + encodeURIComponent(lang || stmtLangFor(p));
+}
+function statementHtml(p, lang) {
+  const l = lang || stmtLangFor(p);
+  const k = p.short_name + ':' + l + ':html';
   if (!_stmt.has(k)) {
-    _stmt.set(k, apiGetText(statementUrl(p, 'html'), { contest: CONTEST, auth: true })
+    _stmt.set(k, apiGetText(statementUrl(p, 'html', l), { contest: CONTEST, auth: true })
       .catch((e) => { _stmt.delete(k); throw e; }));   // erro não fica grudado no cache
   }
   return _stmt.get(k);
@@ -505,22 +559,44 @@ function openTabThen(fill) {
   });
 }
 async function openStatementNewTab(p) {
-  const html = await statementHtml(p);
+  const lang = stmtLangFor(p);
+  const html = await statementHtml(p, lang);
   // MESMA cara da sanfona/Treino Livre: miolo do body em .statement-content com o ui.css
   // INLINE (num documento blob: nem <link href="/shared/ui.css"> resolve — base URL opaca;
   // e o <style> próprio do renderer tem OUTRAS cores, divergia do enunciado embutido)
   let body = html;
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    decorateSamples(doc.body);   // os botões "Copiar" já vão no HTML; o clique é o script inline abaixo
     if (doc.body && doc.body.innerHTML.trim()) body = doc.body.innerHTML;
   } catch {}
   const css = await uiCssText();
-  const full = `<!DOCTYPE html><html lang="${getLang() === 'en' ? 'en' : 'pt-br'}"><head>
+  const full = `<!DOCTYPE html><html lang="${stmtHtmlLang(lang)}"><head>
     <meta charset="utf-8"><title>${(p.short_name || '') + ' — ' + (p.full_name || '')}</title>
     <style>${css}</style>
     <style>body{padding:1.4rem;max-width:900px;margin:auto}</style></head>
-    <body><div class="statement-content">${body}</div></body></html>`;
+    <body><div class="statement-content">${body}</div><script>${SAMPLES_TAB_SCRIPT}</script></body></html>`;
   return full;
+}
+const _samples = new Map();   // problem_id -> Promise([{name,input,output}])
+function fetchSamples(p) {
+  const k = p.problem_id || p.short_name;
+  if (!_samples.has(k)) {
+    _samples.set(k, apiGet('/contest/samples?contest=' + encodeURIComponent(CONTEST) + '&problem=' + encodeURIComponent(p.short_name), { contest: CONTEST, auth: true })
+      .then((j) => (j && Array.isArray(j.samples)) ? j.samples : []).catch((e) => { _samples.delete(k); throw e; }));
+  }
+  return _samples.get(k);
+}
+async function downloadSamples(p, link) {
+  const before = link ? link.textContent : '';
+  if (link) link.textContent = '…';
+  try {
+    const s = (await fetchSamples(p)).filter((x) => x && !x.too_big);   // too_big: acima do teto, sem bytes
+    if (!s.length) { alert(T('Este problema não tem exemplos para baixar. Se ele tem exemplo, está no texto do enunciado.', 'This problem has no samples to download. If it has an example, it is in the statement text.')); return; }
+    const L = String(p.short_name || 'X').replace(/[^A-Za-z0-9._-]/g, '_');
+    downloadSamplesZip(s, L, L + '-exemplos.zip');
+  } catch (e) { alert(T('Não deu para baixar os exemplos: ', 'Could not download the samples: ') + (e.message || '')); }
+  finally { if (link) link.textContent = before; }
 }
 function openHtmlTab(p) {
   return openTabThen(async (w) => {
@@ -532,7 +608,7 @@ function openHtmlTab(p) {
 }
 function openPdfTab(p) {
   return openTabThen(async (w) => {
-    const blob = await apiGetBlob(statementUrl(p, 'pdf'), { contest: CONTEST, auth: true });
+    const blob = await apiGetBlob(statementUrl(p, 'pdf', stmtLangFor(p)), { contest: CONTEST, auth: true });
     const url = URL.createObjectURL(blob);
     if (w) w.location.replace(url); else window.open(url, '_blank');
     setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -571,6 +647,11 @@ function renderProblems() {
     if (p.url) linksWrap.append(el('a', { href: p.url, target: '_blank' }, T('Enunciado', 'Statement')));
     if (p.has_statement_html) linksWrap.append(el('a', { href: '#', onclick: (e) => { e.preventDefault(); openHtmlTab(p); } }, 'HTML'));
     if (p.has_statement_pdf) linksWrap.append(el('a', { href: '#', onclick: (e) => { e.preventDefault(); openPdfTab(p); } }, 'PDF'));
+    // ⬇ Exemplos: /contest/samples (o MESMO conjunto que o enunciado mostra; gate do enunciado) num zip.
+    // has_samples:false = o problema não tem exemplo p/ baixar (SAMPLE=no ou sem sample*): sem link.
+    // Ausente (enunciado enviado à mão, servidor antigo) = o link fica, como antes.
+    if ((p.has_statement_html || p.has_statement_pdf) && p.has_samples !== false) linksWrap.append(el('a', { href: '#', title: T('Baixa entrada e saída de cada exemplo (.in/.out) num zip', 'Downloads each sample input and output (.in/.out) in a zip'),
+      onclick: (e) => { e.preventDefault(); downloadSamples(p, e.currentTarget); } }, T('Exemplos', 'Samples')));
 
     // form de submit ao lado (editor abre no detalhe; aqui só upload rápido + botão)
     const submitWrap = renderSubmitInline(p);
@@ -649,15 +730,27 @@ function toggleDetail(p, item, toggle, submitWrap) {
       const stmtDiv = el('div', { class: 'statement-content' },
         el('span', { class: 'muted' }, T('carregando o enunciado…', 'loading the statement…')));
       stmtCol = el('div', { class: 'prob-statement-col' }, stmtDiv);
-      statementHtml(p).then((html) => {
-        stmtDiv.innerHTML = (() => {
-          try { const d = new DOMParser().parseFromString(html, 'text/html'); return d.body ? d.body.innerHTML : html; }
-          catch { return html; }
-        })();
-      }).catch(() => {
-        stmtDiv.textContent = T('não deu para carregar o enunciado — recarregue a página.',
-                               'could not load the statement — reload the page.');
-      });
+      // chips de idioma (só quando ESTE problema oferece mais de um); a troca vale p/ a prova toda
+      const av = (Array.isArray(p.statement_langs) && p.statement_langs.length) ? p.statement_langs : ['pt'];
+      const chips = makeStmtLangChips(av, stmtLangFor(p), (l) => setStmtLang(l));
+      if (av.length > 1) stmtCol.prepend(el('div', { class: 'row', style: 'align-items:center;gap:.5rem;margin-bottom:.4rem' },
+        el('span', { class: 'small muted' }, T('Idioma:', 'Language:')), chips));
+      const fill = () => {
+        const l = stmtLangFor(p); setChipsActive(chips, l);
+        statementHtml(p, l).then((html) => {
+          stmtDiv.innerHTML = (() => {
+            try { const d = new DOMParser().parseFromString(html, 'text/html'); return d.body ? d.body.innerHTML : html; }
+            catch { return html; }
+          })();
+          decorateSamples(stmtDiv);   // botão "Copiar" por bloco de exemplo (idempotente; troca de idioma refaz)
+          stmtDiv.setAttribute('lang', stmtHtmlLang(l));
+        }).catch(() => {
+          stmtDiv.textContent = T('não deu para carregar o enunciado — recarregue a página.',
+                                 'could not load the statement — reload the page.');
+        });
+      };
+      _stmtRefresh.set(p.problem_id, fill);
+      fill();
     }
     if (editorOn) {
       const edCol = el('div', { class: 'prob-editor-col' }, submitWrap.editorBlock);
@@ -708,10 +801,19 @@ function renderSubmitInline(p) {
   }
 
   // ---- linha sempre visível: upload rápido de arquivo ----
-  const fileInput = el('input', { type: 'file', style: 'max-width:170px' });
+  // O input nativo ficava com max-width:170px e mostrava "No…d" (issue #23): agora ele é
+  // escondido, o botão "Escolher arquivo" abre o seletor, o nome do arquivo aparece ao lado e o
+  // `accept` lista as extensões das linguagens DESTE problema (fonte: shared/languages.js).
+  const acceptLangs = (p.languages && p.languages.length) ? p.languages.map(langById)
+    : (LANGS === LANGUAGES ? DEFAULT_SUBMIT_LANGUAGES : LANGS);
+  const acceptExts = [...new Set(acceptLangs.flatMap((l) => (l.exts && l.exts.length) ? l.exts : [l.id]))].map((e) => '.' + e).join(',');
+  const fileInput = el('input', { type: 'file', style: 'display:none', accept: acceptExts });
+  const fileName = el('span', { class: 'small muted', style: 'max-width:12rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' });
+  const pick = el('button', { class: 'btn ghost', type: 'button', onclick: () => fileInput.click() }, T('Escolher arquivo', 'Choose file'));
+  fileInput.addEventListener('change', () => { fileName.textContent = (fileInput.files && fileInput.files[0]) ? fileInput.files[0].name : ''; fileName.title = fileName.textContent; });
   const steps = el('span', { class: 'submit-steps' });
   const btn = el('button', { class: 'btn', type: 'button' }, T('Enviar', 'Submit'));
-  const row = el('span', { class: 'prob-submit' }, fileInput, btn, steps);
+  const row = el('span', { class: 'prob-submit' }, fileInput, pick, fileName, btn, steps);
   btn.addEventListener('click', async () => {
     if (fileInput.files && fileInput.files[0]) {
       const f = fileInput.files[0];
@@ -824,132 +926,17 @@ function renderSubmitInline(p) {
   return { row, editorBlock, mountEditor, refreshEd };
 }
 
-// minuto de prova de um instante: é o que a coluna "Tempo" significa (e o que o placar mostra
-// nas células, "1/12" = acertou na 1ª tentativa no minuto 12). Antes do início dá negativo —
-// e isso é informação, não erro: é submissão de juiz testando a prova.
-function minutoDeProva(epoch) {
-  const ini = (basic && basic.start_time) || 0;
-  if (!ini || !epoch) return '—';
-  return String(Math.floor((epoch - ini) / 60));
+// ---- submissões: a tabela é o módulo compartilhado contest/submissions-table.js (issue #26) ----
+// A página própria /contest/submissions/ usa o MESMO módulo; aqui ela vive na seção do fim e,
+// ao carregar, re-tinge os problemas resolvidos (onLoaded).
+let subsTable = null;
+function mountSubmissionsTable() {
+  if (subsTable) subsTable.stop();
+  subsTable = makeSubmissionsTable({ contest: CONTEST, basic, problems, userinfo,
+    filterEl: document.getElementById('subFilter'), tableEl: document.getElementById('submissionsTable'),
+    onLoaded: (list) => { submissions = list; retintProblems(); } });
 }
-
-// ---- submissões (tabela + filtro + ordenação + polling) --------------------
-function parseHistLine(line) {
-  const a = line.split(':');
-  if (a.length < 7) return null;
-  // tempo:username:problemid:lang:verdict:epoch:subid  (verdict pode conter ':')
-  // ⚠ o campo 0 ("tempo") NÃO é minuto de prova: a reforma do store passou a gravar o EPOCH
-  // nele (o submit.sh escreve `$AGORA` nos campos 0 e 4, e a migração fez `tempo := sub_epoch`
-  // porque o campo 0 do legado era lixo). Mostrá-lo cru punha um número de 10 dígitos numa
-  // coluna chamada "Tempo", ao lado de "Data" com o MESMO instante formatado. O minuto de
-  // prova — que é o que "Tempo" quer dizer no ICPC e o que o placar usa nas células — é
-  // calculado na hora de renderizar, a partir do início do contest.
-  return {
-    sinceStart: parseInt(a[0], 10) || 0,
-    user: a[1],
-    problem: a[2],
-    lang: a[3],
-    subid: a[a.length - 1],
-    epoch: parseInt(a[a.length - 2], 10) || 0,
-    verdict: a.slice(4, a.length - 2).join(':'),
-  };
-}
-
-function renderSubFilter() {
-  const bar = document.getElementById('subFilter');
-  bar.innerHTML = '';
-  const mk = (label, val) => {
-    const t = el('span', { class: 'tag' + (subFilter === val ? ' active' : ''), onclick: () => { subFilter = val; renderSubFilter(); renderSubmissions(); } }, label);
-    bar.append(t);
-  };
-  mk(T('Todos', 'All'), 'ALL');
-  problems.filter(p => p.show !== false).forEach(p => mk(p.short_name || p.problem_id, p.problem_id));
-}
-
-function shortNameOf(pid) {
-  const p = problems.find(x => x.problem_id === pid);
-  return p ? (p.short_name || pid) : pid;
-}
-function fullNameOf(pid) {
-  const p = problems.find(x => x.problem_id === pid);
-  return p ? (p.full_name || '') : '';
-}
-
-function renderSubmissions() {
-  const box = document.getElementById('submissionsTable');
-  let rows = submissions.filter(s => subFilter === 'ALL' ? true : s.problem === subFilter);
-  rows = rows.slice().sort((a, b) => {
-    if (sortField === 'epoch') return sortAsc ? a.epoch - b.epoch : b.epoch - a.epoch;
-    if (sortField === 'problem') {
-      const sa = shortNameOf(a.problem), sb = shortNameOf(b.problem);
-      return sortAsc ? sa.localeCompare(sb) : sb.localeCompare(sa);
-    }
-    if (sortField === 'verdict') return sortAsc ? (a.verdict || '').localeCompare(b.verdict || '') : (b.verdict || '').localeCompare(a.verdict || '');
-    return 0;
-  });
-
-  box.innerHTML = '';
-  if (!rows.length) { box.innerHTML = `<span class="muted small">${T('Nenhuma submissão ainda.', 'No submissions yet.')}</span>`; return; }
-
-  const arrow = (f) => sortField === f ? (sortAsc ? ' ▲' : ' ▼') : '';
-  const th = (label, f) => el('th', { onclick: () => { sortAsc = (sortField === f) ? !sortAsc : false; sortField = f; renderSubmissions(); } }, label + arrow(f));
-  const canLog = !!(userinfo && (userinfo.show_log || userinfo.is_admin || userinfo.is_judge));
-
-  const head = el('thead', {}, el('tr', {},
-    th(T('Tempo', 'Time'), 'epoch'),
-    th(T('Problema', 'Problem'), 'problem'),
-    el('th', {}, T('Arquivo', 'File')),
-    th(T('Resultado', 'Result'), 'verdict'),
-    el('th', {}, T('Data', 'Date')),
-    canLog ? el('th', {}, 'Log') : null));
-
-  const tb = el('tbody');
-  rows.forEach(s => {
-    const pending = isPending(s.verdict);
-    const fileLink = el('a', {
-      href: '#', onclick: (e) => { e.preventDefault(); downloadAuthed(`/submission/source?contest=${encodeURIComponent(CONTEST)}&id=${encodeURIComponent(s.subid)}&time=${encodeURIComponent(s.epoch)}`, s.subid + '.' + (s.lang || 'txt').toLowerCase()); },
-    }, T('cód', 'src'));
-    // detalhe sob o veredicto canônico (pontos/grupos/heurístico): o servidor redige por
-    // modo — em contest binário (icpc) o summary vem null e a linha simplesmente não existe.
-    const rtxt = pending ? '' : resumoText(subSumm[s.subid]);
-    const vcell = el('td', {}, el('span', { class: 'verdict ' + vClass(s.verdict) },
-      pending ? el('span', {}, el('span', { class: 'spin' }), ' ' + s.verdict) : s.verdict),
-      rtxt ? el('div', { class: 'small muted', style: 'margin-top:.15rem' }, rtxt) : '');
-    const logCell = canLog ? el('td', {},
-      el('a', { href: '#', onclick: (e) => { e.preventDefault(); openReportAuthed(`/submission/log?contest=${encodeURIComponent(CONTEST)}&id=${encodeURIComponent(s.subid)}&time=${encodeURIComponent(s.epoch)}`); } }, 'log')) : null;
-    tb.append(el('tr', {},
-      el('td', {}, minutoDeProva(s.epoch)),
-      el('td', {}, el('b', {}, shortNameOf(s.problem)), ' ', el('span', { class: 'small muted' }, fullNameOf(s.problem))),
-      el('td', {}, fileLink),
-      vcell,
-      el('td', {}, fmtDate(s.epoch)),
-      logCell));
-  });
-
-  box.append(el('table', { class: 'moj' }, head, tb));
-}
-
-async function loadSubmissions() {
-  let txt;
-  try { txt = await apiGetText('/contest/history?contest=' + encodeURIComponent(CONTEST), { contest: CONTEST, auth: true }); }
-  catch { return; }
-  submissions = txt.split('\n').map(s => s.trim()).filter(Boolean).map(parseHistLine).filter(Boolean);
-  // resumo (pontos/grupos/heurístico) das já julgadas — em lotes de 100 (URL curta), best-effort;
-  // o servidor redige por modo (icpc devolve tudo null e nada é mostrado).
-  const done = submissions.filter(s => !isPending(s.verdict)).map(s => s.subid).filter(id => !(id in subSumm));
-  for (let i = 0; i < done.length; i += 100) {
-    try { Object.assign(subSumm, await apiGet('/submission/summary?contest=' + encodeURIComponent(CONTEST) + '&ids=' + done.slice(i, i + 100).join(','), { contest: CONTEST, auth: true }) || {}); }
-    catch { /* best-effort */ }
-  }
-  renderSubFilter();
-  renderSubmissions();
-  retintProblems(); // re-tinge problemas que viraram accepted (sem reconstruir a lista)
-
-  clearTimeout(pollTimer);
-  if (submissions.some(s => isPending(s.verdict))) {
-    pollTimer = setTimeout(loadSubmissions, 5000 + Math.random() * 5000); // 5–10s
-  }
-}
+async function loadSubmissions() { if (!subsTable) mountSubmissionsTable(); return subsTable.load(); }
 
 // Faixa da RODADA: um contest pode rodar aquecimento (ensaio) antes da prova oficial, no mesmo
 // endereço e com o mesmo login. O time não pode confundir os dois — então, quando a rodada no ar
@@ -1042,12 +1029,16 @@ async function loadContestBody() {
   }
   if (j) {
     problems = Array.isArray(j) ? j : (j.problems || []);
+    STMT_OFFERED = (j && Array.isArray(j.statement_langs) && j.statement_langs.length) ? j.statement_langs : ['pt'];
+    STMT_DEFAULT = (j && j.default_statement_lang) || STMT_OFFERED[0];
+    stmtLang = pickStmtLang(STMT_OFFERED, STMT_DEFAULT);
+    _stmtRefresh.clear();
   } else {
     if (lista) lista.innerHTML = `<span class="error-box">${T('Falha ao carregar problemas. Recarregue a página.', 'Failed to load problems. Reload the page.')}</span>`;
     problems = [];
   }
   renderProblems();
-  renderSubFilter();
+  mountSubmissionsTable();
   await loadSubmissions();
 
   // notificações (notícias + clarifications respondidas): poll leve a cada 30s
@@ -1122,6 +1113,9 @@ async function boot() {
     location.replace('/contest/animeitor/?c=' + encodeURIComponent(CONTEST));
     return;
   }
+  // quem está logado aparece no cabeçalho em TODA página do contest (issue #29)
+  if (st.logged_in && !EDITOR_ONLY) mountContestUserChip(st);
+  if (!EDITOR_ONLY) mountSiteFooter().catch(() => {});
   if (st.logged_in) { if (EDITOR_ONLY) await bootEditorOnly(); else await bootMain(); }
   else bootLogin();
 }

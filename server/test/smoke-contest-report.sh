@@ -14,15 +14,15 @@ T0=$(( $(date +%s) - 7200 )); TE=$(( T0 + 18000 )); FZ=$(( T0 + 3600 ))
   printf "PROBS=( x col#pa Alfa A col#pa x col#pb Beta B col#pb )\n"; } > "$C/conf"
 fx_user "$C" rp.admin p "Admin"
 fx_user "$C" alice a "Time Alice"
-fx_user "$C" bob b "Time Bob"
+fx_user "$C" bob b '<script>alert(1)</script> Bob'   # nome HOSTIL (LATAM 2026 teve um assim): tem de sair escapado em HTML e nunca fechar um <script>
 fx_user "$C" rp.cstaff s "Chefe de Sede"
 # bandeira de ESTADO (br-rj): o código que o relatório antigo imprimia como TEXTO
 jq -c '.team={name:"Time Alice",univ_short:"UFRJ",univ_full:"Univ Federal do RJ",flag:"br-rj",region:"Rio"}' "$C/users/alice/account.json" > "$C/u.tmp" && mv "$C/u.tmp" "$C/users/alice/account.json"
-jq -c '.team={name:"Time Bob",univ_short:"UFSC",univ_full:"Univ Federal de SC",flag:"br-sc",region:"Floripa"}'  "$C/users/bob/account.json"   > "$C/u.tmp" && mv "$C/u.tmp" "$C/users/bob/account.json"
+jq -c '.team={name:"<script>alert(1)</script> Bob",univ_short:"UFSC",univ_full:"Univ Federal de SC",flag:"br-sc",region:"Floripa </script>"}'  "$C/users/bob/account.json"   > "$C/u.tmp" && mv "$C/u.tmp" "$C/users/bob/account.json"
 # foto de time (R5): entra como MINIATURA em fotos/<login>.webp — só no placar ABERTO
 convert -size 40x40 xc:red "$C/users/alice/photo.png" 2>/dev/null || printf 'x' > /dev/null
 # árvore de sedes: o select de Sede da ESTATÍSTICA espelha o do placar (RTREE embutido)
-jq -n '[{name:"Brasil", regex:"^(alice|bob)$", subregions:[{name:"Rio", regex:"^alice$"}]}]' > "$C/regions.json"
+jq -n '[{name:"Brasil", regex:"^(alice|bob)$", subregions:[{name:"Rio", regex:"^alice$"}, {name:"Floripa </script>", regex:"^bob$"}]}]' > "$C/regions.json"   # sede com "</script>" no nome
 # cache do nutellaboot (mínimo): a página mlinux.html do relatório nasce dele — SEM MACs
 # shape do relatório 2.0 (pop/ram_bands/ed_*/profiles/pressure/rank_ed); `teams`, `machines`,
 # `_rows` na sede são ISCA: nenhum pode vazar p/ o mlinux.html
@@ -87,6 +87,9 @@ jq -cn --argjson t "$(m 22)" '{id:"p1", seq:1, login:"alice", fullname:"Time Ali
 printf 'SEGREDO_PRINT_XYZ\n' > "$C/print-requests/p1.src"
 printf '<!DOCTYPE html><html><body><h1>Alfa</h1></body></html>\n' > "$C/enunciados/col#pa.html"
 touch "$C/var/.score-dirty"
+# classificação PUBLICADA (aba 🏅 Classificados + chip ↑BR): alice pela regra 1
+jq -cn '{version:1, stages:[{id:"final-br", status:"published", name:"Final Brasileira", venue:"Uberlândia", when:"novembro/2026", region:"Brasil",
+  teams:{alice:{via:"regra1", sede:"Rio", place:1, total:2, detail:"#1 geral"}}}]}' > "$C/classification.json"
 printf 'CONTEST=rp\nLOGIN=rp.admin\nLOGINAT=1\n' > "$SESS/adm"
 printf 'CONTEST=rp\nLOGIN=alice\nLOGINAT=1\n' > "$SESS/usr"
 
@@ -141,6 +144,20 @@ ck "estatísticas: mesmas seções do painel" 'grep -q "statsSections" "$R/stati
 ck "estatísticas: fallback sem JS"         'grep -q "<noscript>" "$R/statistics.html"'
 ck "estatísticas: nome do 1º a resolver"   'grep -q "first_solver_name" "$R/statistics.html"'
 ck "bundle inlinado sem import/export"     '! grep -qE "^(import|export) " "$R/statistics.html"'
+# --- nomes hostis dentro de <script>: o parser de HTML fecha o script no 1º "</script>" ---
+ck "nome hostil: escapado no HTML do placar (não executa)" 'grep -q "&lt;script&gt;alert(1)&lt;/script&gt;" "$R/index.html" && ! grep -q "<script>alert(1)" "$R/index.html"'
+ck "sede hostil: no RTREE vai como \\u003c (não fecha o script)" 'grep -qF "Floripa \\u003c/script>" "$R/statistics.html" && ! grep -qF "Floripa </script>" "$R/statistics.html"'
+# "</script>" em QUALQUER lugar (até num comentário JS ou numa string) fecha o script no parser de
+# HTML: o total de "</script>" tem de ser igual ao de tags <script reais (o gerador as põe no
+# início da linha; "<script" no meio de comentário dos .js inlinados não abre nada).
+_bad=(); for _p in "$R"/*.html; do [[ "$(grep -c "^<script" "$_p")" == "$(grep -o "</script>" "$_p" | wc -l)" ]] || _bad+=("${_p##*/}"); done
+ck "toda página: cada </script> fecha uma tag <script real (${_bad[*]:-ok})" '[[ ${#_bad[@]} -eq 0 ]]'
+# --- nav CONSISTENTE: toda página mostra as mesmas abas (Máquinas sumia em Classificados/Congelado) ---
+_nav0=""; _navbad=(); for _p in "$R"/*.html; do _n="$(grep -o '<nav class="repnav">.*</nav>' "$_p" | sed 's/ class="on"//g')"; [[ -n "$_nav0" ]] || _nav0="$_n"; [[ "$_n" == "$_nav0" ]] || _navbad+=("${_p##*/}"); done
+ck "nav: mesmas abas em TODAS as páginas (${_navbad[*]:-ok})" '[[ -n "$_nav0" && ${#_navbad[@]} -eq 0 ]]'
+ck "nav: Máquinas e Congelado presentes em classificados.html" 'grep -q "mlinux.html" "$R/classificados.html" && grep -q "score-frozen.html" "$R/classificados.html"'
+ck "nav: Máquinas presente em score-frozen.html"            'grep -q "mlinux.html" "$R/score-frozen.html"'
+ck "nav: toda aba tem emoji (Classificados incluído)"        '[[ "$(printf "%s" "$_nav0" | grep -o ">[^<]*</a>" | sed "s/^>//; s|</a>$||" | grep -c "^[A-Za-z]")" == 0 ]] && grep -q "🏅 Classificados" "$R/classificados.html"'
 ck "documentos: aba com o PUBLICADO"       '[[ -s "$R/documentos.html" ]] && [[ -s "$R/documentos/contest.pt.pdf" ]]'
 # a aba só entra na nav se documentos.html já existir quando as outras páginas são escritas
 # --- placar não rola para o lado (colgroup + fixed) ---
@@ -187,7 +204,7 @@ ck "placar: CSS sem nowrap/min-width"     '! grep -qE "table.score td.cell\{[^}]
 ck "placar: penalidade sobrevive no celular" 'grep -q "td.cell:not(.tot):not(.pen) .pv { display:none" "$R/index.html" && ! grep -q "table.score td.cell .pv { display:none" "$R/index.html"'
 ck "placar: login do time no title"       'grep -q "class=\"team\" title=\"[^\"]*·[^\"]*\"" "$R/index.html" && ! grep -q "<span class=\"u\">" "$R/index.html"'
 # --- filtros do placar (bandeira, universidade, sede, busca) ---
-ck "filtro: dado na própria linha"        'grep -q "data-flag=\"br-sc\"" "$R/index.html" && grep -q "data-fname=\"Santa Catarina\"" "$R/index.html" && grep -q "data-univ=\"UFSC\"" "$R/index.html" && grep -q "data-region=\"Floripa\"" "$R/index.html" && grep -q "data-search=\"time bob ufsc" "$R/index.html"'
+ck "filtro: dado na própria linha"        'grep -q "data-flag=\"br-sc\"" "$R/index.html" && grep -q "data-fname=\"Santa Catarina\"" "$R/index.html" && grep -q "data-univ=\"UFSC\"" "$R/index.html" && grep -q "data-region=\"Floripa &lt;/script&gt;\"" "$R/index.html" && grep -q "data-search=\"&lt;script&gt;alert(1)&lt;/script&gt; bob ufsc" "$R/index.html"'
 ck "filtro: os 4 controles + contador"    'grep -q "id=\"fFlag\"" "$R/index.html" && grep -q "id=\"fUniv\"" "$R/index.html" && grep -q "id=\"fRegion\"" "$R/index.html" && grep -q "id=\"fQ\"" "$R/index.html" && grep -q "id=\"fCount\"" "$R/index.html"'
 ck "filtro: fallback sem JS"              'grep -q "<noscript><style>.fbar{display:none}" "$R/index.html"'
 # script inline roda no parse: antes das <section> o querySelectorAll voltava vazio
@@ -250,5 +267,45 @@ jq -cn --argjson f "$FZ" '{freeze:$f, cleared_at:0, by:"smoke"}' > "$C/var/freez
 FR="$FIX/rfz"; CONTESTSDIR="$FIX" MOJ_PROBLEMS_DIR="$PKG" bash "$ROOT/score/report-gen.sh" rp "$FR" >/dev/null 2>&1
 ck "freeze-final: score-frozen.html volta com o conf zerado" '[[ -s "$FR/score-frozen.html" ]]'
 ck "freeze-final: index anota o congelamento"  'grep -q "score-frozen.html" "$FR/index.html"'
+
+echo "== publicar relatório (histórico em /relatorio/<c>/) =="
+# RUNDIR no fixture (cache do /index/contests) e MOJ_JOBS_SYNC=1 (o job roda inline, sem setsid)
+callj(){ PATH_INFO="$1" REQUEST_METHOD="$2" QUERY_STRING="$4" HTTP_AUTHORIZATION="Bearer $3" \
+  CONTESTSDIR="$FIX" SESSIONDIR="$SESS" MOJ_PROBLEMS_DIR="$PKG" RUNDIR="$FIX/run" MOJ_JOBS_SYNC=1 \
+  bash "$ROUTER" <<<"${5:-}" 2>/dev/null | awk 'f{print} /^\r?$/{f=1}'; }
+J="$(callj /contest/admin/report-publish GET adm 'contest=rp')"
+ck "GET: ainda não publicado, url pronta"        '[[ "$(jq -r .published <<<"$J")" == false && "$(jq -r .url <<<"$J")" == "/relatorio/rp/" ]]'
+J="$(callj /contest/admin/report-publish POST usr 'contest=rp' '{"action":"publish"}')"
+ck "competidor não publica (403)"                 '[[ "$(jq -r .error.code <<<"$J")" == admin_required ]]'
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
+ck "publish: publicado, job done, ≥7 páginas"     '[[ "$(jq -r .published <<<"$J")" == true && "$(jq -r .job.state <<<"$J")" == done && "$(jq -r .pages <<<"$J")" -ge 7 && "$(jq -r .by <<<"$J")" == rp.admin ]]'
+ck "site em contests/rp/relatorio/ (index, statistics)" '[[ -s "$C/relatorio/index.html" && -s "$C/relatorio/statistics.html" && ! -e "$C/relatorio.tmp" ]]'
+ck "conf: REPORT_PUBLISHED gravado (invalida o cache da home)" 'grep -q "^REPORT_PUBLISHED=" "$C/conf"'
+ck "carimbo em var/, fora do site servido"        '[[ -s "$C/var/report-published.json" ]] && ! ls "$C/relatorio"/.*.json >/dev/null 2>&1'
+ck "site publicado: nav consistente também"       '[[ "$(grep -o "<nav class=\"repnav\">.*</nav>" "$C/relatorio/classificados.html" | sed "s/ class=\"on\"//g")" == "$_nav0" ]]'
+J="$(callj /index/contests GET '' 'all=1')"
+ck "/index/contests: report_url do rp"            '[[ "$(jq -r "[.open[], .upcoming[], .closed.items[]] | .[] | select(.id==\"rp\") | .report_url" <<<"$J")" == "/relatorio/rp/" ]]'
+ck "audit: report-publish"                        'grep -q "report-publish" "$C/var/admin-audit.log"'
+# rodada ARQUIVADA com relatório (fixture mínimo): publicar/despublicar o relatório dela (symlink)
+mkdir -p "$C/rounds/aq/relatorio"; printf '<!DOCTYPE html><html><body>aq</body></html>\n' > "$C/rounds/aq/relatorio/index.html"
+jq -cn '{active:"oficial", rounds:[{slug:"aq", name:"Aquecimento", kind:"warmup", start:1, end:2, state:"archived", published:false},
+                                    {slug:"oficial", name:"Prova", kind:"official", start:3, end:4, state:"active", published:false}]}' > "$C/rounds.json"
+J="$(callj /contest/admin/report-publish GET adm 'contest=rp')"
+ck "GET lista a rodada arquivada com relatório (public=false)" '[[ "$(jq -c ".rounds | map({slug, public})" <<<"$J")" == "[{\"slug\":\"aq\",\"public\":false}]" ]]'
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish-round","round":"oficial"}')"
+ck "rodada ativa não é publicável (409)"           '[[ "$(jq -r .error.code <<<"$J")" == not_archived ]]'
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish-round","round":"aq"}')"
+ck "publish-round: symlink relatorio-rodadas/aq → rounds/aq/relatorio" '[[ "$(jq -r ".rounds[0].public" <<<"$J")" == true && -L "$C/relatorio-rodadas/aq" && "$(cat "$C/relatorio-rodadas/aq/index.html")" == *aq* ]]'
+ck "audit: report-publish-round"                    'grep -q "report-publish-round	slug=aq" "$C/var/admin-audit.log"'
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
+ck "republicar: troca atômica, continua publicado" '[[ "$(jq -r .published <<<"$J")" == true && -s "$C/relatorio/index.html" && ! -e "$C/relatorio.old" ]]'
+ck "index publicada linka a rodada pública (rodada/aq/)" 'grep -q "href=\"rodada/aq/\">Aquecimento</a>" "$C/relatorio/index.html"'
+ck "tar.gz offline NÃO linka rodada (sem destino)"   '! grep -q "rodada/aq/" "$R/index.html"'
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"unpublish-round","round":"aq"}')"
+ck "unpublish-round: symlink some, arquivo da rodada fica" '[[ "$(jq -r ".rounds[0].public" <<<"$J")" == false && ! -e "$C/relatorio-rodadas/aq" && -s "$C/rounds/aq/relatorio/index.html" ]]'
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"unpublish"}')"
+ck "unpublish: site, carimbo e conf somem"        '[[ "$(jq -r .published <<<"$J")" == false && ! -e "$C/relatorio" && ! -e "$C/var/report-published.json" ]] && ! grep -q "^REPORT_PUBLISHED=" "$C/conf"'
+J="$(callj /index/contests GET '' 'all=1')"
+ck "/index/contests: sem report_url depois"       '[[ "$(jq -r "[.open[], .upcoming[], .closed.items[]] | .[] | select(.id==\"rp\") | .report_url // \"none\"" <<<"$J")" == none ]]'
 
 echo ""; echo "RESULT: $pass passed, $fail failed"; exit $(( fail>0?1:0 ))

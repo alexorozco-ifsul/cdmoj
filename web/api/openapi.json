@@ -3,7 +3,7 @@
   "info": {
     "title": "MOJ API",
     "version": "v1",
-    "description": "API REST do MOJ (Melhor Online Judge). Backend bash atrás de nginx+fcgiwrap. Auth via `Authorization: Bearer <token>`. Histórico e placar são TXT; o resto é JSON com envelope `{success:true,…}` ou `{success:false,error:{message,code}}`. Horários em EPOCH."
+    "description": "API REST do MOJ (Melhor Online Judge). Backend bash atrás de nginx+fcgiwrap. Auth via `Authorization: Bearer <token>`. Histórico e placar são TXT; o resto é JSON com envelope `{success:true,…}` ou `{success:false,error:{message,code}}`. Horários em EPOCH. Aviso de CLI desatualizada: resposta a uma CLI (UA `moj[-tool]/<build>`) leva `X-Moj-Cli-Status: current|outdated|dev|legacy` e `X-Moj-Cli-Latest: <build servida>`; CLI antiga sem marcador (curl/* + Bearer) recebe a dica \"rode moj update\" anexada à error.message."
   },
   "servers": [
     {
@@ -32,6 +32,10 @@
     },
     {
       "name": "ops"
+    },
+    {
+      "name": "judge",
+      "description": "Rotas do AGENTE de juiz (modelo pull; Bearer mojw_<token> de worker). Protocolo e ciclo de vida em server/judge-gw/PULL.md; campos de LARGURA (CPUNEEDED) são opcionais — ausência = agente/servidor legado."
     },
     {
       "name": "treino-admin"
@@ -375,7 +379,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{open,upcoming,closed:{items,page,pages}}"
+            "description": "{open,upcoming,closed:{items,page,pages}} — item ganha report_url (/relatorio/<id>/) quando o relatório estático foi publicado"
           }
         }
       }
@@ -398,7 +402,7 @@
         "tags": [
           "treino"
         ],
-        "summary": "Lista de problemas",
+        "summary": "Lista de problemas (com user_rate, difficulty = veasy|easy|med|hard|new pela taxa por usuário, e dirt — fonte única lib/difficulty.sh, issue #30)",
         "responses": {
           "200": {
             "description": "[{id,title,tags,collections,solved_count,attempted_count,public_at?}] (collections = .moj-meta.json do pacote; um problema pode estar em várias; public_at = epoch da 1ª publicação, ausente quando desconhecido)"
@@ -424,7 +428,7 @@
         "tags": [
           "treino"
         ],
-        "summary": "Problema (enunciado b64, autor, time limits, tags, coleções)",
+        "summary": "Problema (enunciado b64, autor, time limits, tags, coleções, samples[{name,input,output}], statement_langs + statements{<lang>:{title,html_b64}} das traduções)",
         "parameters": [
           {
             "name": "id",
@@ -704,7 +708,7 @@
         "tags": [
           "treino"
         ],
-        "summary": "Estatísticas de um problema (cacheado)",
+        "summary": "Estatísticas de um problema (cacheado; difficulty/user_rate/dirt canônicos = a mesma conta da lista; acceptance_rate é a taxa por submissão, só número)",
         "parameters": [
           {
             "name": "id",
@@ -851,7 +855,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{count,sessions:[{login,name,ip,user_agent,login_at}]}"
+            "description": "{count,sessions:[{login,name,ip,user_agent,login_at,has_photo}]} — has_photo: a conta tem foto (o painel só pede a foto de quem tem)"
           },
           "403": {
             "description": "não-admin"
@@ -974,7 +978,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{online,busy,machines:[{host,online,busy,status,langs,cage_root,cache,tl,current,current_jobs,queued_calibrate,slots,partition,topology,config,report}]} — current_jobs = TODOS os jobs em execução (um por slot ocupado, {kind:submission|calibrate|index|draining|disabled|unknown_busy, problem_id, since:epoch-do-claim, ...}); current = o 1º (compat); status = auto-relato do agente (ok|draining|disabled, null=agente antigo); slots:{free,total}; cache = pacotes EM DISCO (não RAM); queued_calibrate = calibrações direcionadas na fila do host"
+            "description": "{online,busy,policy:{parallel,cushion,share_max},machines:[{host,online,busy,status,langs,cage_root,cache,tl,current,current_jobs,queued_calibrate,slots:{free,total,cpus,by_node,smt,max_free_group},hold,partition,topology,config,report}]} — current_jobs = TODOS os jobs em execução (um por slot ocupado, {kind:submission|calibrate|index|draining|disabled|unknown_busy, problem_id, since:epoch-do-claim, slots, test_cpus, par_max, ...}); current = o 1º (compat); status = auto-relato do agente (ok|draining|disabled, null=agente antigo); slots.cpus = cpus do MENOR slot (null = agente antigo), by_node = slots por nó NUMA, smt = hyperthreading, max_free_group = maior nº de slots livres num nó; hold = {job,k_slots,numa,since} quando o juiz está SEGURADO p/ um job largo (CPUNEEDED), senão null; policy = política global de testes em paralelo (chave \"*\" do judges-config); cache = pacotes EM DISCO (não RAM); queued_calibrate = calibrações direcionadas na fila do host"
           }
         }
       }
@@ -1198,6 +1202,315 @@
         }
       }
     },
+    "/treino/virtual/info": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Participação virtual (docs/VIRTUAL.md): dados da prova encerrada e o estado da run deste login. Portão único por requisição: módulo virtual, não-secreto, ICPC, encerrado p/ todas as sedes, placar descongelado e TODOS os problemas públicos no treino",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{contest,title,start_time,duration,penalty_minutes,problems_count,rules:{grace_s,max_discards,schedule_max_s},me}"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/treino/virtual/run": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Estado da participação virtual + runs derivadas do history do treino (submissões etiquetadas ∩ janela). Aplica as transições preguiçosas: fim do tempo finaliza (snapshot) ou descarta (0 AC)",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{contest,duration,penalty_minutes,me:{state,start,end,final,discards,discards_left,can_discard,official,result,runs,solved,penalty,pending,now}}"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Ações da participação virtual: start {accept:true,at?} (uma vez por conta; agenda até 7 dias), cancel (só agendada), discard (≤15 min OU 0 AC; máx. 2 — a 3ª largada é definitiva), finish (0 AC e não-definitiva vira discard)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "contest",
+                  "action"
+                ],
+                "properties": {
+                  "contest": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "cancel",
+                      "discard",
+                      "finish"
+                    ]
+                  },
+                  "accept": {
+                    "type": "boolean"
+                  },
+                  "at": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "mesmo corpo do GET"
+          },
+          "403": {
+            "description": "role_forbidden"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "409": {
+            "description": "virtual_already | virtual_not_scheduled | virtual_locked | virtual_not_running"
+          },
+          "422": {
+            "description": "terms_required | virtual_at_invalid"
+          }
+        }
+      }
+    },
+    "/treino/virtual/problems": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Problemas da prova p/ a participação virtual (letra, id, nome, linguagens do CONTEST, idiomas). O enunciado vem da rota pública /treino/problem",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{contest,problems:[{letter,id,name,languages,statement_langs}]}"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "403": {
+            "description": "virtual_not_started"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/treino/virtual/friends": {
+      "get": {
+        "tags": ["treino"],
+        "summary": "Meus escolhidos: virtuais que este login quer ver sempre no placar da participação virtual (amigos). Uma lista por conta, p/ todos os contests; só o próprio login lê e escreve",
+        "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "{logins:[…], max:100}"}}
+      },
+      "post": {
+        "tags": ["treino"],
+        "summary": "Altera a lista de escolhidos: {add?,remove?} alterna (o 📌 da linha) ou {logins} substitui. Tira o próprio login e duplicatas; não confere existência da conta",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"add": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "array", "items": {"type": "string"}}, "logins": {"type": "array", "items": {"type": "string"}}}}}}},
+        "responses": {"200": {"description": "{logins:[…], max:100}"}, "422": {"description": "friends_invalid | friends_limit"}}
+      }
+    },
+    "/treino/virtual/feed": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Feed dos fantasmas: times do placar público FINAL e todas as runs (segundo, time, problema, Y|N|X|?) p/ o cliente reconstruir o placar em qualquer instante. Anônimo; pré-gzipado; o portão roda antes do cache",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{version:2,contest,title,duration,penalty_minutes,problems,views:[{id,name,unranked}],teams:[[login,flag,univ_short,nome,univ_full,guest,cohort]],runs} — views/cohort só de coortes PÚBLICAS com time no placar público"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "503": {
+            "description": "virtual_feed_unavailable"
+          }
+        }
+      }
+    },
+    "/treino/virtual/board": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Participações virtuais FINALIZADAS do contest (snapshots). Anônimo; com Bearer do treino marca `you`",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{contest,virtuals:[{login,name,univ,flag,start,used,solved,penalty,official,runs,you}]}"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          }
+        }
+      }
+    },
+    "/contest/admin/virtual": {
+      "get": {
+        "tags": [
+          "contest-admin"
+        ],
+        "summary": "Painel da participação virtual: portão aberto em partes, link e participações gravadas",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{enabled,eligible,reason,checks:[{id,ok,detail}],url,virtuals}"
+          },
+          "403": {
+            "description": "admin_required"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "contest-admin"
+        ],
+        "summary": "Moderação: remove|restore uma linha do placar virtual; reset DEVOLVE a tentativa (apaga a linha e o estado da conta neste contest — ela pode largar de novo). Tudo auditado",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "remove",
+                      "restore",
+                      "reset"
+                    ]
+                  },
+                  "login": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "mesmo corpo do GET"
+          },
+          "404": {
+            "description": "virtual_run_notfound"
+          }
+        }
+      }
+    },
     "/treino/contest-registration": {
       "get": {
         "tags": [
@@ -1329,7 +1642,7 @@
         "tags": [
           "submission"
         ],
-        "summary": "Submeter solução (assíncrono). Gate por fase+papel: admin/judge sempre; staff nunca (403 submit_forbidden); normal e mon só durante a janela (403 contest_not_started / contest_ended; mon fica fora do placar). Whitelist de linguagens FORÇADA (400 lang_not_allowed): extensão canonicalizada tem de estar na lista efetiva do problema (override do contest -> LANGUAGES -> pacote -> todas) Teto SUBMIT_MAX_KB (1024) -> 413 source_too_large; whitelist vazia = as linguagens da PLATAFORMA (.exe -> 400); fail-closed: spool validado antes do OK (500 spool_write_failed, sem pendente fantasma)",
+        "summary": "Submeter solução (assíncrono). Gate por fase+papel: admin/judge sempre; staff nunca (403 submit_forbidden); normal e mon só durante a janela (403 contest_not_started / contest_ended; mon fica fora do placar). Whitelist de linguagens FORÇADA (400 lang_not_allowed): extensão canonicalizada tem de estar na lista efetiva do problema (override do contest -> LANGUAGES -> pacote -> todas); a linguagem gravada é a CANÔNICA (C++ = .cpp/.cc/.cxx/.c++ -> CPP; .h -> C; .py3 -> PY) Teto SUBMIT_MAX_KB (1024) -> 413 source_too_large; whitelist vazia = as linguagens da PLATAFORMA (.exe -> 400); fail-closed: spool validado antes do OK (500 spool_write_failed, sem pendente fantasma). Campo opcional virtual:<cid> (só no treino; docs/VIRTUAL.md): etiqueta a submissão na participação virtual do login — 404 virtual_unavailable, 400 virtual_problem, 403 virtual_not_running; a whitelist de linguagem passa a ser a do contest. No TREINO o problema tem de ser visível ao login (público, ou privado de dono/colaborador/membro da org): senão 404 problem_notfound, idêntico a id inexistente.",
         "security": [
           {
             "bearerAuth": []
@@ -1493,7 +1806,7 @@
           "contest"
         ],
         "summary": "Info pública (nome, horários, login_start_time)",
-        "description": "Traz também balloon_style (icon|fill, default icon): como o placar pinta a célula de quem resolveu. icon = fundo neutro igual para todos + um ponto com a cor do balão, de modo que \"resolvido\" não dependa de enxergar a cor — a paleta ICPC dá o problema A BRANCO, e branco sobre o fundo branco do placar é o mesmo pixel (1,00:1), então o acerto sumia. fill = o clássico, cor do balão no fundo, mais um contorno derivado da própria cor para as claras não sumirem. Vale para o placar ao vivo, a cerimônia de revelação e o relatório offline. Ver docs/SCOREBOARD.md.",
+        "description": "Traz também balloon_style (icon|fill, default icon): como o placar pinta a célula de quem resolveu. icon = fundo neutro igual para todos + um ponto com a cor do balão, de modo que \"resolvido\" não dependa de enxergar a cor — a paleta ICPC dá o problema A BRANCO, e branco sobre o fundo branco do placar é o mesmo pixel (1,00:1), então o acerto sumia. fill = o clássico, cor do balão no fundo, mais um contorno derivado da própria cor para as claras não sumirem. Vale para o placar ao vivo, a cerimônia de revelação e o relatório offline. Ver docs/SCOREBOARD.md. Traz modules[] (ids dos módulos ligados — CONTEST_MODULES; UX da nav do admin/chefe).",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -1552,6 +1865,23 @@
         }
       }
     },
+    "/contest/samples": {
+      "get": {
+        "tags": ["contest"],
+        "summary": "Os exemplos do enunciado como dado: {problem, problem_id, samples:[{name,input,output}]}",
+        "description": "Anti-vazamento de teste secreto: a UNICA fonte e o json servivel do banco (.samples, gerado pela MESMA selecao do HTML — stmt_sample_names); a rota nunca abre o pacote; enunciado enviado a mao => samples:[] (200). Gate = o do enunciado (can_see_problems => 404; chave do PROBS, nunca do parametro). Alimenta o link Exemplos da sanfona e o moj-comp samples/fetch (2026-09-16).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "problem", "in": "query", "required": true, "description": "letra (short_name) ou problem_id canonico", "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "{success, problem, problem_id, samples:[{name,input,output}]} — samples vazio quando o banco nao tem o json do problema"},
+          "400": {"description": "problem ausente"},
+          "404": {"description": "sem permissao de ver (staff, pre-inicio…) ou problema fora do conf"}
+        }
+      }
+    },
     "/contest/statement": {
       "get": {
         "tags": ["contest"],
@@ -1561,13 +1891,14 @@
         "parameters": [
           {"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}},
           {"name": "problem", "in": "query", "required": true, "description": "letra (short_name) ou problem_id canonico", "schema": {"type": "string"}},
-          {"name": "format", "in": "query", "description": "html (default) ou pdf", "schema": {"type": "string", "enum": ["html", "pdf"]}}
+          {"name": "format", "in": "query", "description": "html (default) ou pdf", "schema": {"type": "string", "enum": ["html", "pdf"]}},
+          {"name": "lang", "in": "query", "description": "idioma do enunciado (default = default_statement_lang do contest). Fora da allowlist = 400 lang_invalid; idioma que a prova nao OFERECE (STATEMENT_LANGS) = 404; oferecido sem arquivo = serve o PT. Arquivo enunciados/<skey>.<lang>.<fmt> > <skey>.<fmt>; header X-MOJ-Statement-Lang = idioma servido", "schema": {"type": "string", "enum": ["pt", "en", "es"]}}
         ],
         "responses": {
-          "200": {"description": "o enunciado (text/html; charset=utf-8 ou application/pdf)"},
+          "200": {"description": "o enunciado (text/html; charset=utf-8 ou application/pdf); X-MOJ-Statement-Lang = idioma do arquivo servido"},
           "304": {"description": "If-None-Match casou o ETag — corpo vazio"},
-          "400": {"description": "problem ausente ou format invalido"},
-          "404": {"description": "sem permissao de ver, problema inexistente ou sem esse formato"}
+          "400": {"description": "problem ausente, format invalido ou lang fora de pt|en|es"},
+          "404": {"description": "sem permissao de ver, problema inexistente, sem esse formato ou idioma nao oferecido pela prova"}
         }
       }
     },
@@ -1590,7 +1921,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{problems:[{short_name,full_name,problem_id,statement_html_b64,statement_pdf_b64,time_limits,languages}]} (time_limits = MAX entre juízes; com pool de juízes definido — problem-judges.json -> CONTEST_JUDGES — só entre os hosts do pool efetivo. languages = ids permitidos: override por-problema-no-contest -> whitelist do contest -> default do próprio pacote (.moj-meta.json) -> [] (todas))"
+            "description": "{problems:[{short_name,full_name,problem_id,has_statement_html,has_statement_pdf,statement_langs,has_samples?,time_limits,languages}], statement_langs, default_statement_lang} (has_samples = ha exemplo para baixar: false com SAMPLE=no no conf do pacote ou sem tests/input/sample*, e a pagina esconde o link Exemplos; ausente quando o problema nao vem do banco; statement_langs do envelope = idiomas que a prova OFERECE, conf STATEMENT_LANGS via /contest/admin/statement-langs, ausente = [pt]; default_statement_lang = LOCALE se oferecido, senao o 1o; statement_langs por problema = oferecidos com arquivo ou traducao no banco; time_limits = MAX entre juízes; com pool de juízes definido — problem-judges.json -> CONTEST_JUDGES — só entre os hosts do pool efetivo. languages = ids permitidos: override por-problema-no-contest -> whitelist do contest -> default do próprio pacote (.moj-meta.json) -> [] (todas))"
           }
         }
       }
@@ -1939,7 +2270,36 @@
         ],
         "responses": {
           "200": {
-            "description": "{checks:[{id,level:ok|warn|fail,label,detail}], summary:{ok,warn,fail}} — ids: window, show_log, show_code, freeze, judges, pool, langs, problems, pool_problems, print, staff_filters, balloons, users, daemon, mode, manual, tov, cohorts, ua_gate, next_round, docs"
+            "description": "{checks:[{id,level:ok|warn|fail,label,detail[,label_en,detail_en][,action]}], summary:{ok,warn,fail}} — ids: window, show_log, freeze, judges, pool, langs, problems, pool_problems, judges_warm (juiz a juiz: calibrou a versão atual de cada problema? action warm_judges quando há frio), print, staff_filters, balloons, users, daemon, mode, manual, tov, cohorts, ua_gate, next_round, docs. label_en/detail_en = item bilíngue; action = botão da Central"
+          }
+        }
+      }
+    },
+    "/contest/admin/warm-judges": {
+      "post": {
+        "tags": [
+          "contest-admin"
+        ],
+        "summary": "🔥 Aquecer juízes: calibrate DIRIGIDO a cada par juiz×problema FRIO do item judges_warm do preflight (quente não recebe nada; aquecendo não repete; sob flock). Cada calibração ocupa um slot do juiz — use antes do início",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{sent:[{host,id,letter,cmdid}], before:{warm,warming,cold}}"
+          },
+          "403": {
+            "description": "admin_required (só admin ou juiz-chefe do contest)"
+          },
+          "409": {
+            "description": "warm_busy (outro pedido de aquecimento do contest em andamento)"
           }
         }
       }
@@ -2034,15 +2394,61 @@
         }
       }
     },
+    "/hooks/nutella": {
+      "post": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "Webhook do NutellaBoot 3 (alertas das máquinas mlinux) — sem Bearer, autenticado por HMAC do corpo cru",
+        "description": "Cabeçalho `X-NB-Signature: sha256=<HMAC-SHA256 do corpo cru com o segredo do contest>` (segredo gerado por `POST /contest/nutella {action:\"webhooks-install\"}`). Corpo `{event, image, at, data:{mac, id, kind, detail?, vendor?, other_mac?}}`. Só `alert.raised`/`alert.dismissed` viram registro (`var/nutella-events.log`) e entram em `/contest/admin/anomalies` como `machine_alert`; durante a prova o dono do contest é avisado por Telegram, com teto.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-NB-Signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ok, logged, notified} · {ok, duplicate:true} (repetição) · {ok, ignored:true} (evento que não é alerta)"
+          },
+          "401": {
+            "description": "unauthorized — opaco: contest inexistente, sem segredo, assinatura errada, corpo adulterado ou `at` fora de −1 h…+5 min"
+          },
+          "404": {
+            "description": "image_unknown — a imagem não é sede deste contest"
+          },
+          "413": {
+            "description": "too_large — corpo > 64 KiB"
+          },
+          "422": {
+            "description": "mac_invalid"
+          }
+        }
+      }
+    },
     "/contest/nutella": {
       "get": {
         "tags": [
           "contest"
         ],
         "summary": "Panorama das máquinas mlinux (nutellaboot) — admin/chefe tudo; .cstaff/.staff a própria sede; ?catalog=<image> = catálogo de comandos",
+        "description": "`data` = cache da coleta (`var/nutella.cache.json`): `global`, `by_node`, `sedes[]` (cortado ao escopo do staff), `link`, `window`, `contest`, `skipped[]` (sedes que o serviço não devolveu). Com o agente novo do mlinux (NutellaBoot 3) cada agregado pode trazer, tudo opcional: `health{agent_new, psi_mem_sum, psi_cpu_sum, psi_io_sum, psi_n, oom_machines, oom_kills, idle_pts, idle_hi, skew_n, skew_bad, reboots}`, `psi_mem_max`, `model_tm{modelo: n}`, `alert_kinds{kind: n}` e `psi_sum/psi_n[/psi_max]` em `pressure` e `series`. `bind{enabled, published, queued, last_at, log{ok, noroster, image_unknown, retry, error}}` = estado da publicação do vínculo máquina↔time no login (só contagens). `webhook{installed, events}` = webhook de alertas instalado e nº de eventos recebidos.",
         "responses": {
           "200": {
-            "description": "{configured, url, status, can_admin, scoped, data:{version:2, contest, link, global, by_node, sedes[]}} — agregados por recorte (pop, ram_bands, ed_adopt/ed_groups/ed_count/profiles, pressure, rank_ed, series); ver docs/NUTELLABOOT.md"
+            "description": "{configured, url, key_kind:admin|service (a CLASSE da chave, nunca a chave), images:[ids de NUTELLABOOT_IMAGES], status, can_admin, scoped, data:{version:2, contest, link, global, by_node, sedes[]}} — agregados por recorte (pop, ram_bands, ed_adopt/ed_groups/ed_count/profiles, pressure, rank_ed, series); ver docs/NUTELLABOOT.md"
           },
           "403": {
             "description": "role_required"
@@ -2053,10 +2459,10 @@
         "tags": [
           "contest"
         ],
-        "summary": "Ações da integração nutellaboot: config (chave write-only)/collect/push-roster (admin) e command (admin ou c/staff na própria sede, fail-closed)",
+        "summary": "Ações da integração nutellaboot: config (chave write-only)/collect/push-roster/push-bindings (admin) e command (admin ou c/staff na própria sede, fail-closed)",
         "responses": {
           "200": {
-            "description": "config:{saved,configured} · collect:{started} · push-roster:{pushed,kept,failed} · command:{sent,op,image,mac,upstream}"
+            "description": "config {url?, key? (nb3s_ de serviço ou nb3a_ de administração), images? (ids das site-images do evento; obrigatório com chave de serviço), bind? (false desliga a publicação do vínculo máquina↔time no login)}:{saved,configured,key_kind} · collect:{started} · push-roster:{pushed,kept,failed} · push-bindings:{queued,bind} (replay do access.log: o último login de cada MAC volta p/ a fila e o drenador faz o PUT do binding no serviço) · webhooks-install {base_url?, remove?}:{installed,url,ok,failed,sedes:{<id>:{status,id?,error?}}} (webhook POR ENTRADA: POST cria/atualiza pela url, DELETE por id — chave de serviço com webhooks:write basta) · command-status {image, command_id}:{status:{command,machines,summary:{acked,pending,expired},targets[]}} · push-bindings:{queued,batch:{sent,bound,failed,noroster}|null,bind} (lote PUT …/bindings; null = serviço antigo ⇒ fila) · command {op, image, mac?}:{sent,op,image,mac,ok,failed,sedes:{<id>:{status,command_id,machines,detail?}},upstream} — image:\"all\" = uma ordem por sede DO CONTEST (nunca a frota do serviço); com mac, vai à rota da sede com target:[mac]"
           },
           "403": {
             "description": "admin_required/site_forbidden/command_scope_required"
@@ -2065,7 +2471,7 @@
             "description": "not_configured/no_cache"
           },
           "422": {
-            "description": "key_invalid/op_invalid/op_not_allowed/image_invalid"
+            "description": "key_invalid/images_invalid/op_invalid/op_not_allowed/image_invalid"
           },
           "502": {
             "description": "upstream_error — nutellaboot indisponível"
@@ -2078,7 +2484,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Checklist pós-prova (o que ainda está fechado) — admin ou juiz-chefe",
+        "summary": "Checklist pós-prova (o que ainda está fechado) — admin ou juiz-chefe; freeze_release_at = fim geral + 1 min (POST antes disso com freeze = 409 freeze_locked)",
         "responses": {
           "200": {
             "description": "{checks:[{id,level,label,detail}], summary:{ok,warn,fail}, can_finish, can_act (true só p/ o admin — o POST é dele), pending_docs:[{type,lang}]}"
@@ -2131,6 +2537,13 @@
           }
         }
       }
+    },
+    "/contest/admin/report-publish": {
+      "get": {"tags": ["contest-admin"], "summary": "Estado do relatório estático PUBLICADO (histórico em /relatorio/<c>/)", "security": [{"bearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/contest"}],
+        "responses": {"200": {"description": "{published, url, at, by, pages, bytes, job:{state:running|done|error, by, started, updated, error?}|null, rounds:[{slug,name,kind,public,url}]}"}}},
+      "post": {"tags": ["contest-admin"], "summary": "Publica (job destacado; gera + troca atômica + REPORT_PUBLISHED no conf) ou despublica o relatório estático", "security": [{"bearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/contest"}],
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["publish", "unpublish", "publish-round", "unpublish-round"]}, "round": {"type": "string", "description": "slug da rodada ARQUIVADA (publish-round/unpublish-round): liga o symlink relatorio-rodadas/<slug> servido em /relatorio/<c>/rodada/<slug>/"}}, "required": ["action"]}}}},
+        "responses": {"200": {"description": "mesmo corpo do GET (com job.state=running logo após publish)"}, "409": {"description": "busy — geração em andamento"}}}
     },
     "/contest/admin/report": {
       "get": {
@@ -2187,7 +2600,7 @@
           "contest"
         ],
         "summary": "Documentos da prova em pt/en/es: lista (sem type) ou download (com type; o PDF enviado pelo admin vence o gerado)",
-        "description": "Sem `type`: lista os documentos que o login pode baixar. Com `type`: serve o arquivo (PDF/HTML). Idiomas pt/en/es. Em fmt=pdf o documento ENVIADO pelo admin (docs/<tipo>.<lang>.uploaded.pdf) vence o gerado; fmt=html e sempre o gerado. Admin e juiz-chefe sempre; qualquer outro login so o que estiver PUBLICADO (404 not_published).",
+        "description": "Sem `type`: lista os documentos que o login pode baixar. Com `type`: serve o arquivo (PDF/HTML). Idiomas pt/en/es. Em fmt=pdf o documento ENVIADO pelo admin (docs/<tipo>.<lang>.uploaded.pdf) vence o gerado; fmt=html e sempre o gerado. fmt=odt = o intermediário EDITÁVEL do PDF gerado (attachment) — só admin/juiz-chefe (403 odt_org_only p/ os demais). Admin e juiz-chefe sempre; qualquer outro login so o que estiver PUBLICADO (404 not_published).",
         "security": [
           {
             "bearerAuth": []
@@ -2230,7 +2643,8 @@
               "default": "pdf",
               "enum": [
                 "pdf",
-                "html"
+                "html",
+                "odt"
               ]
             }
           }
@@ -2482,7 +2896,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Opções de veredicto manual (judge): {verdicts:[labels], options:[{label,verdict}]}",
+        "summary": "Opções de veredicto manual (judge): {verdicts:[classes], classes:[as 6], options:[{label (juiz vê), verdict (classe canônica: pontua/penaliza), team (texto que o time vê)}]}; POST admin/chief valida a classe (422 verdict_invalid) — o history recebe classe¦team",
         "security": [
           {
             "bearerAuth": []
@@ -2526,7 +2940,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Matriz de veredicto automático problema×lang×veredicto (judge)",
+        "summary": "O que vai para revisão no veredicto manual (judge). Regra v2 OPT-OUT: tudo automático menos a grade problema×classe marcada e as exceções por linguagem; v1 (opt-in, formato anterior) chega convertido",
         "security": [
           {
             "bearerAuth": []
@@ -2539,7 +2953,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{matrix,problems,verdicts}"
+            "description": "{version:2, state:missing|invalid|v1|v2, rules:{review:{cid:[classe]}, langs:[{lang,problem,verdicts,to}]}, items:[{id,letter,title}], verdicts, langs, manual_verdict, releasable, problems (legado), matrix (legado: o v1 cru)}"
           }
         }
       },
@@ -2547,7 +2961,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Grava a matriz auto (admin/chief): {matrix:{cid:{lang|*:[verdict]}}}",
+        "summary": "admin/chief: {rules:{review,langs}} grava v2 saneado; {action:\"release\"} libera os retidos sem voto/conflito que as regras soltam; {matrix} (cliente antigo) grava v1",
         "security": [
           {
             "bearerAuth": []
@@ -2560,7 +2974,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{saved,matrix}; 403 config_forbidden"
+            "description": "{saved,rules,releasable} | {released,left} | {saved,matrix}; 403 config_forbidden; 422 rules_invalid/lang_invalid; 409 rules_invalid (release com arquivo ilegível)/review_busy"
           }
         }
       }
@@ -3047,7 +3461,7 @@
             "description": "{queue,judge:{online,total,busy,healthy,cpus_online,gpus_online},alert,daemons} — cache 20s; gpus_online = só GPU de compute comprovada (nvidia-smi/rocm-smi); daemons.judged = processo local ou heartbeat run/judged.alive (deploy em container) + bot:{alive,last_poll_age_s}|null (mojinho; null = sem bot)"
           }
         },
-        "description": "judge.slots = capacidade total em SLOTS (multi-slot); judge.busy = slots ocupados."
+        "description": "judge.slots = capacidade total em SLOTS (multi-slot); judge.busy = slots ocupados; judge.cpus_online = Σ total_slots×slot_cpus dos juízes online (as CPUs a serviço; agente antigo: ncpu)."
       }
     },
     "/treino/contest-create/permission": {
@@ -3058,7 +3472,7 @@
         "summary": "O usuário pode criar contest?",
         "responses": {
           "200": {
-            "description": "{can_create,is_admin,reason,solved_count,threshold,in_allow,in_deny,allowed_modes}"
+            "description": "{can_create,is_admin,is_superadmin,reserved_id_prefixes:[icpc],reason,solved_count,threshold,in_allow,in_deny,allowed_modes,login,name}. is_superadmin = login em SUPERADMINS (conf do treino); so ele cria id icpc* (create/duplicate: 403 id_prefix_reserved)"
           }
         }
       }
@@ -3097,7 +3511,7 @@
         "tags": [
           "contest-create"
         ],
-        "summary": "Cria e publica o contest (no ar na hora)",
+        "summary": "Cria e publica o contest (no ar na hora) SPEC UNIFICADO (2026-09-05): modules:{<id>: true | {on?, …seção…}} leva os DADOS de cada módulo — sedes{regions,teams_meta,time_overrides}, baloes{colors,during_freeze}, coortes{cohorts}, maquinas{ua_gate,site_lock{enabled,grace},nutella_url}, rodadas{active,rounds}, documentos{config}, inscricoes{enabled,window}, telao{views} (chaves NOVAS de webcast), classificacao{algorithm,config}. Seção presente = módulo ligado (salvo on:false); tipo errado = 422 modules_spec_invalid; segredo nunca entra. colors/regions/teams_meta no topo continuam aceitos (compat).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3157,9 +3571,6 @@
                       "type": "string"
                     },
                     "description": "pool de juízes do contest (hostnames do registro; vazio = qualquer juiz online) — vira CONTEST_JUDGES; escalonador ESTRITO"
-                  },
-                  "showcode": {
-                    "type": "boolean"
                   },
                   "show_log": {
                     "type": "boolean"
@@ -3391,10 +3802,10 @@
         "tags": [
           "admin"
         ],
-        "summary": "Lê permissões de criação de contest",
+        "summary": "Lê permissões de criação de contest (com trilha: quem liberou, quando)",
         "responses": {
           "200": {
-            "description": "{perms:{threshold,allow[],deny[]}}"
+            "description": "{perms:{threshold,allow[],deny[],allow_meta{},deny_meta{}}, allow_info:[{login,name,has_photo,by,by_name,at,note}], deny_info:[...], me}"
           }
         }
       },
@@ -3402,7 +3813,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Define permissões de criação de contest",
+        "summary": "Define permissões de criação de contest: por acao {action:add|remove|threshold, list:allow|deny, login, note?} (add: 404 unknown_login, 422 already_admin; carimba by/at) ou legado {threshold,allow[],deny[]} (substituicao total)",
         "requestBody": {
           "required": true,
           "content": {
@@ -3410,6 +3821,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "action": {"type": "string", "enum": ["add", "remove", "threshold"]},
+                  "list": {"type": "string", "enum": ["allow", "deny"]},
+                  "login": {"type": "string"},
+                  "note": {"type": "string", "maxLength": 200},
                   "threshold": {
                     "type": "integer"
                   },
@@ -3442,10 +3857,10 @@
         "tags": [
           "admin"
         ],
-        "summary": "Lista contests criados pela interface",
+        "summary": "Lista contests criados pela interface que ESTE admin pode ver (super-admin = todos; .admin comum = os seus + os de criadores sem papel de admin)",
         "responses": {
           "200": {
-            "description": "{contests:[{id,name,owner,created_at,mode}],count}"
+            "description": "{contests:[{id,name,mode,owner,owner_name,owner_has_photo,owner_is_admin,created_at,start,end,problems_count}],count,scope:all|admin,me,is_superadmin}"
           }
         }
       }
@@ -3455,7 +3870,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Move um contest criado pela interface p/ lixeira",
+        "summary": "Move um contest criado pela interface p/ lixeira (contest fora do escopo do admin = 404)",
         "requestBody": {
           "required": true,
           "content": {
@@ -3582,7 +3997,7 @@
         "tags": [
           "contest-create"
         ],
-        "summary": "Exporta o spec JSON de um contest (round-trip com o create; nunca exporta passwd/users/senhas)",
+        "summary": "Exporta o spec JSON de um contest (round-trip com o create; nunca exporta passwd/users/senhas) Traz modules{} dos módulos ligados com os dados reeditáveis (sem segredo); nada de regions/colors/teams_meta no topo.",
         "parameters": [
           {
             "name": "id",
@@ -4216,6 +4631,117 @@
         }
       }
     },
+    "/contest/animeitor/api": {
+      "get": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "API do Animeitor (telão): estado da integração, proposta de placares/sedes (?proposal=1) e links (?links=1) — só .animeitor/admin",
+        "description": "O MOJ EMPURRA o contest para a API do Animeitor 2.1.0 (docs/ANIMEITOR.md). `{configured, has_cred, cred_source (contest|moj|none), moj_cred, default_url, user, url, event, moj_base_url, enabled, feed{clock_s, runs_s, verify_s}, secret_contest, contests, managed, status, clock, verify (a última conferência, sem ids), feeder_alive_at, now}`; o token nunca volta. A CHAVE DO MOJ (run/secrets/animeitor.cred) vale p/ todo contest sem chave própria, só no servidor padrão (`default_url`), e nem o usuário dela volta (`user` = o da chave própria). `proposal=1` acrescenta `proposal{teams_total, contests:[{name, source, n, codes, kind, sites}]}`; `links=1` acrescenta `links{public, revelation}` buscados ao vivo (os de revelação são credencial).",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proposal",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "links",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "estado"
+          },
+          "403": {
+            "description": "animeitor_required"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "API do Animeitor: config (token write-only) / test / save / publish / push-runs / verify / start / stop / reset",
+        "description": "`config {url?, user?, token?, event?, moj_base_url?}` (user+token = chave PRÓPRIA, vence a do MOJ; `user:\"\", token:\"\"` volta p/ a do MOJ) · `test` → {ok, events, event_exists, managed, cred_source} · `save {contests|null}` · `publish {adopt?}` → {result:{ok, event, contests, deleted}} (POST e, no 409, PATCH — nunca PUT; 409 event_exists / event_taken — o nome é de OUTRO contest do MOJ, pelo registro run/animeitor/events.json / adopt_forbidden — a chave do MOJ não assume evento de fora) · `push-runs {full?}` → {runs:{total, sent, added, updated, ignored, removed}} · `verify` → {verify:{at, event, state: ok|diverge|not_started|no_sites|error, ok, over, pending, final, final_at, runs, checked, uncovered, missing, wrong, extra, repair, sites[]}, sample{missing, wrong, extra}, before?, runs?} — CONFERE sede a sede (rota pública runs_secret com a chave de cada sede, do link de revelação, nunca gravada) se o Animeitor tem todas as runs; reenvia o que falta/diverge e confere de novo; `final` = tudo bate, prova encerrada p/ todas as sedes e nada pendente · `reveal-release`/`reveal-recall` (libera/recolhe os links de revelação p/ as sedes) · `start`/`stop` (alimentador: relógio 1 s + runs 2 s) · `reset {confirm}` apaga o evento no Animeitor.",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "resultado da ação"
+          },
+          "403": {
+            "description": "animeitor_required"
+          },
+          "409": {
+            "description": "not_configured / not_published / feeding / event_exists / event_taken / adopt_forbidden / not_managed"
+          },
+          "422": {
+            "description": "url_invalid / token_invalid / user_invalid / event_invalid / base_url_invalid / contests_invalid / name_duplicate / codes_missing / confirm_required"
+          },
+          "502": {
+            "description": "upstream_unauthorized / upstream_error"
+          }
+        }
+      }
+    },
+    "/contest/animeitor/reveal": {
+      "get": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "Reveleitor da sede: os links de revelação do Animeitor que cabem a esta conta (.cstaff/.staff; .animeitor/admin veem todos)",
+        "description": "`{released, scoped, sites[], links:[{contest, site, url}], verify}` — `verify` = a última CONFERÊNCIA (o Animeitor tem todas as runs?): p/ .animeitor/admin o resumo do evento; p/ .cstaff/.staff só o das sedes dele, `{at, state, final, final_at, ok, sites:[{contest, site, ok}]}` (o \"validado\"). Só depois que o .animeitor libera (`POST /contest/animeitor/api {action:\"reveal-release\"}`). Cada conta recebe só os links da sede dela (staff-filters), em todos os placares em que a sede aparece; sem sede definida = `scoped:false` e zero links (fail-closed). O link é credencial: buscado ao vivo, nunca gravado, leitura auditada.",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "links da sede"
+          },
+          "403": {
+            "description": "role_required"
+          },
+          "502": {
+            "description": "upstream_error"
+          }
+        }
+      }
+    },
     "/contest/animeitor/webcast": {
       "get": {
         "tags": [
@@ -4694,7 +5220,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Configurações do contest (inclui mode read-only, tz = fuso IANA da prova (CONTEST_TZ; vazio = MOJ_TZ da instalação), judges[] = pool de juízes do contest, e a penalidade ICPC: penalty_minutes, penalty_verdicts; show_log é o valor EFETIVO — em modo icpc, SHOWLOG ausente = false)",
+        "summary": "Configurações do contest (inclui statement_langs/statement_langs_mode/default_statement_lang só leitura — muda-se em /contest/admin/statement-langs; mode read-only, tz = fuso IANA da prova (CONTEST_TZ; vazio = MOJ_TZ da instalação), judges[] = pool de juízes do contest, e a penalidade ICPC: penalty_minutes, penalty_verdicts; show_log é o valor EFETIVO — em modo icpc, SHOWLOG ausente = false; freeze_release_at = quando pode descongelar; POST freeze:0 antes disso = 409 freeze_locked; guest_numbering = convidados numerados na sequência própria, flag g no TXT)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4874,7 +5400,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Lista problemas (inclui languages e judges por problema)",
+        "summary": "Lista problemas (inclui languages e judges por problema). POST action=statement aceita lang (pt|en|es, default pt): html_b64/pdf_b64/remove_* em enunciados/<skey>[.<lang>].html|pdf; refresh apaga o PT e todas as traducoes cacheadas",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4911,7 +5437,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Estatísticas agregadas (admin/judge/mon)",
+        "summary": "Estatísticas agregadas (admin/judge/mon); problems[] traz dirt e difficulty (mesmo vocabulário do treino)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4929,7 +5455,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Clarifications (role-aware)",
+        "summary": "Clarifications (role-aware). Quem perguntou (login + asker_name) só o juiz-chefe/admin recebe; judge/mon sem login",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4937,7 +5463,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{clarifications,can_answer}"
+            "description": "{clarifications, can_answer, can_edit, is_chief, me} — can_edit = juiz-chefe ou admin (edita resposta dada; libera reserva alheia com force)"
           }
         }
       }
@@ -4973,7 +5499,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{claimed_by,expires_at} — body {id,action:claim|release}; 409 clar_claimed/already_answered"
+            "description": "{claimed,claimed_by,expires_at} | {released,forced_from} — body {id,action:claim|release,force?}. Ninguém reserva por cima de outro (409 clar_claimed, chefe incluso); release de reserva alheia só com force:true e juiz-chefe/admin (auditado forced_from); 409 already_answered"
           }
         }
       }
@@ -4983,7 +5509,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Aviso oficial: Q+A público com autor oculto (admin/judge/mon)",
+        "summary": "Aviso oficial: texto público com autor oculto e assunto opcional (admin/judge/mon)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4991,7 +5517,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{broadcast,id} — body {problem?,question,answer}"
+            "description": "{broadcast,id} — body {problem?,question?,answer}: answer = texto do aviso (obrigatório, 422 answer_missing); question = assunto opcional (título)"
           }
         }
       }
@@ -5019,7 +5545,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Rodadas + checklist de promocao (admin ou juiz-chefe)",
+        "summary": "Rodadas + checklist de promocao (admin ou juiz-chefe). POST: problems segue a permissão do DONO do contest (público/dono/colaborador/org, 403 problem_denied); set aceita colors (cores de balão da rodada; null = herdar); promote recusa freeze_locked mesmo com force",
         "security": [
           {
             "bearerAuth": []
@@ -5523,7 +6049,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Documentos da prova: estado, textos, capa e PDF PRONTO enviado (admin ou juiz-chefe); pt/en/es",
+        "summary": "Documentos da prova: estado, textos, capa e PDF PRONTO enviado (admin ou juiz-chefe); pt/en/es. upload {type,lang,pdf_b64|remove_upload} = PDF pronto que vence o gerado e publica sem gerar (listado mesmo sem index.json). info-sheet = Ambiente de julgamento e submissão (padrão SBC); editorial = capa + um problema por página",
         "security": [
           {
             "bearerAuth": []
@@ -5536,7 +6062,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{docs, config, templates:{info_sheet_pt,info_sheet_en,cover_pt,cover_en}, cover_uploaded:{pt,en}, problems:[{letter,name,has_pdf,has_html}]}"
+            "description": "{docs (com odt_bytes), config, templates:{info_sheet:{lang:md}, cover:{lang:md}} (o texto do contest, senão o PADRÃO embarcado — a capa também), custom:{info_sheet:{lang:bool}, cover:{lang:bool}}, cover_uploaded:{lang:bool}, problems:[{letter,name,has_pdf,has_html}]}"
           },
           "403": {
             "description": "admin_required"
@@ -5574,6 +6100,7 @@
                       "config",
                       "cover",
                       "generate",
+                      "upload",
                       "publish",
                       "unpublish"
                     ]
@@ -5679,12 +6206,31 @@
         }
       }
     },
+    "/contest/admin/statement-langs": {
+      "get": {
+        "tags": ["contest-admin"],
+        "summary": "Idiomas do enunciado que a sanfona OFERECE (conf STATEMENT_LANGS) — admin ou juiz-chefe",
+        "description": "GET -> {mode:auto|list, langs:[oferecidos], default, all:[pt,en,es], locale, available:{<letra>:{<lang>:true}}} (available = idioma com arquivo no contest ou traducao no banco). mode auto (conf ausente, o DEFAULT) = todo idioma que cada problema tem entra na sanfona. default = LOCALE se oferecido, senao o 1o.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/contest"}],
+        "responses": {"200": {"description": "{langs, default, all, locale, available}"}, "403": {"description": "nem admin nem .cjudge"}}
+      },
+      "post": {
+        "tags": ["contest-admin"],
+        "summary": "Define os idiomas oferecidos: {mode:\"auto\"} (automatico, default) ou {langs:[pt,en,…]} (lista fixa) — admin ou juiz-chefe",
+        "description": "{mode:\"auto\"} apaga a var (ausente = automatico: todo idioma que cada problema tem). {langs:[…]}: allowlist pt/en/es (422 lang_invalid); lista vazia ou so pt = prova so em PT (grava STATEMENT_LANGS=pt). Sem mode nem langs = 400. Os dois materializam do banco as traducoes que faltam (enunciados/<skey>.<lang>.html), tocam var/.problems-dirty e auditam statement-langs.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/contest"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["auto"], "description": "automatico (default): ignora langs"}, "langs": {"type": "array", "items": {"type": "string", "enum": ["pt", "en", "es"]}, "description": "lista fixa (sem mode)"}}}}}},
+        "responses": {"200": {"description": "{saved, mode, langs, default}"}, "400": {"description": "sem mode:auto nem langs (lista)"}, "403": {"description": "nem admin nem .cjudge"}, "422": {"description": "idioma fora de pt/en/es"}}
+      }
+    },
     "/contest/admin/jplag-run": {
       "post": {
         "tags": [
           "contest-admin"
         ],
-        "summary": "Dispara jplag (background)",
+        "summary": "Dispara jplag (background) — admin ou juiz-chefe; 429 busy se já está rodando (lock do runner)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -5702,7 +6248,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Status + pares de similaridade",
+        "summary": "Status + pares de similaridade — juiz, juiz-chefe ou admin; juiz comum recebe os pares só com o login (sem nome do time); full/can_run dizem o nível",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -5720,7 +6266,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "HTML lado-a-lado",
+        "summary": "HTML lado-a-lado — juiz, juiz-chefe ou admin",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -5837,13 +6383,31 @@
         "responses": {"200": {"description": "{stages:[{id,name,venue,when,teams:{login:{via,sede}}}]} — só stages published; vazio sem publicação. Gate de contest secreto igual ao do placar."}}
       }
     },
+    "/contest/admin/modules": {
+      "get": {
+        "tags": ["contest-admin"],
+        "summary": "Módulos do contest (grupos de recursos ligáveis): catálogo, ligado/desligado, dados presentes",
+        "description": "Catálogo ÚNICO em lib/modules.sh (espelho em web/contest/admin/modules.js): sedes, maquinas, rodadas, documentos, baloes, coortes, inscricoes, telao, classificacao. detected = há artefato do módulo no contest (regions.json, ua-gate.json/SITE_LOCK/chave nutellaboot, rounds.json, docs/config.json, balloons.json, cohorts.json, registrations.json, webcast.json/fotos, classification.json) e reason diz qual. É UX: decide o que o painel do admin/chefe mostra; o acesso continua cortado em cada rota. Contests anteriores a 2026-09-05: server/bin/contest-modules-detect.sh [--apply].",
+        "parameters": [{"$ref": "#/components/parameters/contest"}],
+        "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "{modules:[{id,on,detected,reason}], enabled:[…]}"}}
+      },
+      "post": {
+        "tags": ["contest-admin"],
+        "summary": "Liga/desliga módulos (CONTEST_MODULES no conf). Desligar NUNCA apaga dado. Gravar o dado de um módulo por qualquer rota da API (rounds, cohorts, ua-gate, docs, registrations, classify, config, time-overrides, webcast, team-assets) LIGA o módulo sozinho (auditado modules-auto)",
+        "parameters": [{"$ref": "#/components/parameters/contest"}],
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"on": {"type": "array", "items": {"type": "string"}}, "off": {"type": "array", "items": {"type": "string"}}}}}}},
+        "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "{modules:[…], enabled:[…]}. Auditado modules-set"}, "422": {"description": "module_invalid — id fora do catálogo"}}
+      }
+    },
     "/contest/admin/classify": {
       "post": {
         "tags": ["contest-admin"],
-        "summary": "Motor de classificação da próxima fase (preview/apply/publish/add/remove)",
+        "summary": "Motor de classificação da próxima fase (preview/apply/publish/add/remove) — motor escolhido por config.algorithm (catálogo; fora da allowlist = 422 algorithm_invalid)",
         "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
         "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["action"], "properties": {"action": {"type": "string", "enum": ["preview","apply","publish","unpublish","add","remove"]}, "stage": {"type": "string"}, "config": {"type": "object"}, "name": {"type": "string"}, "venue": {"type": "string"}, "when": {"type": "string"}, "login": {"type": "string"}, "note": {"type": "string"}}}}}},
-        "responses": {"200": {"description": "preview roda o motor sem gravar; apply grava rascunho (promoções comite preservadas); publish/unpublish trocam a visibilidade; add/remove mexem nos times. Auditado. Ver docs/CLASSIFICACAO.md"}},
+        "responses": {"200": {"description": "preview roda o motor sem gravar; apply grava rascunho (promoções comite preservadas); publish/unpublish trocam a visibilidade; add/remove mexem nos times. Auditado. Ver docs/CLASSIFICACAO.md GET devolve {stages[], algorithms:[{id,name,desc}]} — o catálogo de motores (select do painel Evento › Classificação); config.algorithm default sbc-fase1 → score/classify-br.sh."}},
         "security": [{"bearer": []}]
       },
       "get": {
@@ -6061,7 +6625,7 @@
         ],
         "responses": {
           "200": {
-            "description": "índice + validation (relatório do portão) + statement_html_b64/tags/time_limits. Inclui `languages` (whitelist de submissão; vazio = todas as padrão)"
+            "description": "índice + validation (relatório do portão) + statement_html_b64/tags/time_limits. Inclui `languages` (whitelist de submissão; vazio = todas as padrão) e `rev` (revisão do conteúdo — a base da trava de edição concorrente; o `moj pull` a compara antes de baixar o pacote)"
           },
           "404": {
             "description": "não encontrado"
@@ -6105,8 +6669,8 @@
         "tags": [
           "problems"
         ],
-        "summary": "Painel de status dos problemas do login (dono + colaborador + membro da org)",
-        "description": "Agrega validação, calibração, time_limits e 'precisa recalibrar' dos problemas de que o login é dono OU colaborador. FRONTEIRA de acesso: problema privado de terceiro NÃO aparece (owners_visible). Sem hash de pacote por request — stale vem do checksum carimbado no índice (≤30 min de atraso); use /problems/tl p/ o valor exato ao vivo. time_limits é o EFETIVO (o TLOVERRIDE vem carimbado no índice de donos, então o Painel não abre pacote); time_limits_calibrated e tl_override vêm ao lado.",
+        "summary": "Painel de status dos problemas do login (dono + colaborador + membro da org): pacote, calibração, soluções, entradas, pronto",
+        "description": "validated é o estado do PACOTE (conferência estática do validate-problem.sh — não roda solução). sols = as soluções × o que a categoria delas pede (sumário run/calib-summary.json, regra em lib/calib-expect.sh): state none|stale|bad|partial|note|ok. inputs = o validador de entrada: state unknown|none|ok|invalid|error. pending = o que falta p/ o problema estar PRONTO (package_failed, package_unchecked, uncalibrated, needs_recalibration, good_no_tl:<langs>, sols_divergent:<n>, sols_unchecked, inputs_invalid:<n>, inputs_error, issues_open:<n>); ready = pending vazio. open_issues = issues abertas (/problems/issues). review_reasons ganha sols_divergent:<n>, inputs_invalid:<n>, inputs_error e issues_open:<n>. ?id= estreita a um problema (vazio se o login não o opera). Agrega validação, calibração, time_limits e 'precisa recalibrar' dos problemas de que o login é dono OU colaborador. FRONTEIRA de acesso: problema privado de terceiro NÃO aparece (owners_visible). Sem hash de pacote por request — stale vem do checksum carimbado no índice (≤30 min de atraso); use /problems/tl p/ o valor exato ao vivo. time_limits é o EFETIVO (o TLOVERRIDE vem carimbado no índice de donos, então o Painel não abre pacote); time_limits_calibrated e tl_override vêm ao lado. untitled = o problema não tem título em lugar nenhum (nem display_title no pacote, nem linha de título no enunciado) e o title devolvido é o identificador — o Painel marca 'sem título'.",
         "security": [
           {
             "bearerAuth": []
@@ -6115,11 +6679,20 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "estreita a resposta a UM problema (a confirmação de publicar usa)"
           }
         ],
         "responses": {
           "200": {
-            "description": "{total,counts:{validated,validation_error,unvalidated,calibrated,uncalibrated,being_calibrated,needs_recalibration,good_sol_no_tl,public_unvalidated,needs_review,errors},calibrating_ids,attention_ids,problems:[{id,title,owner,author,public,collaborators,validated,calibrated,being_calibrated,stale,needs_recalibration,good_sol_no_tl,good_sol_missing_langs,public_unvalidated,error,needs_review,review_reasons,time_limits,updated_at,validated_at}]} — good_sol_no_tl = solução good sem TL (linguagem que falhou em todos os juízes); needs_review = precisa revisão"
+            "description": "{total,counts:{validated,validation_error,unvalidated,calibrated,uncalibrated,being_calibrated,needs_recalibration,good_sol_no_tl,public_unvalidated,needs_review,ready,sols_divergent,sols_unchecked,inputs_invalid,issues_open,errors},calibrating_ids,attention_ids,problems:[{id,title,owner,author,public,collaborators,validated,calibrated,sols:{state,bad,note,missing,total,at},inputs:{state,invalid,total},open_issues,ready,pending,being_calibrated,stale,needs_recalibration,good_sol_no_tl,good_sol_missing_langs,public_unvalidated,error,needs_review,review_reasons,time_limits,updated_at,validated_at}]} — good_sol_no_tl = solução good sem TL (linguagem que falhou em todos os juízes); needs_review = precisa revisão"
           }
         }
       }
@@ -6252,7 +6825,76 @@
         ],
         "responses": {
           "200": {
-            "description": "{id,checksum,good_langs,missing_langs,tl_override,time_limits,time_limits_calibrated,hosts:[{host,tl,missing,at,log,reports,sols}]} — missing_langs = linguagem good sem TL em NENHUM host (solução good falhou em todas as máquinas); hosts[].missing = faltantes naquele juiz; sols = calibração POR EXTENSO estruturada [{file,lang,category:good|pass|slow|wrong,verdict,tests:[{name,code,time,tl}]}] (mesmo formato do vetor tests da submissão normal; [] = juiz antigo); tl_override = TLOVERRIDE do conf do pacote ({} sem override); hosts[].tl e sols[].tests[].tl são a MEDIÇÃO da calibração (que roda com MOJ_CALIBRATING=1 e ignora o override de propósito) — time_limits é o efetivo, para a tela poder avisar que o julgamento usa outro número"
+            "description": "{id,checksum,version,being_calibrated,calibrating:[{host,since,state}],good_langs,missing_langs,tl_override,time_limits,time_limits_calibrated,allow_tle,drift,summary:{hosts,total,bad,note,bad_files,note_files,missing,validator},hosts:[{host,tl,missing,at,version,stale,log,reports,sols,validator}]} — sols[].expect = o juízo do SERVIDOR (lib/calib-expect.sh, pelos códigos de CADA teste contra o TL efetivo): {state:ok|note|bad|norun|skip, why, counts:{AC,WA,TLE,MLE,RE,UE}, tmax, tl, drift}; why ∈ all_ac, over_tl (acima do TL efetivo + drift), failed, tle_allowed, tle, tle_and_wrong, wrong_no_tle, no_tle, wa, failed_other, accepted, ce, lang, ue, noverdict. hosts[].validator = o validador de entrada daquele juiz {state:none|ok|invalid|error,total,invalid,failed,file,tests:[{name,code:OK|INVALID|FAIL,msg}]} (null = não rodou; a entrada category=validator sai de sols). summary = o sumário das soluções somado entre os hosts da versão atual (o mesmo do Painel). allow_tle = o conf tem ALLOWTLEDURINGCALIBRATION=y. drift = a tolerância do conf ({<lang>|default: s} de TLMOD[<lang>.drift]/TLMOD[default.drift]; a específica vence). — being_calibrated/calibrating dizem o que está EM VOO agora para este problema (fila + em execução, inclusive a dirigida; state queued|running, host vazio = pendente não reivindicada): é o sinal que a tela do autor usa para esperar a calibração terminar, que leva minutos; hosts[].at é o maior entre o carimbo do store de TL e o do log; version = versão ATUAL do pacote (pkg_judge_version: inclui sols/ inteiro) e hosts[].version = a que aquele juiz calibrou; diferentes => stale:true e o host vem SEM sols nem reports (tl e log ficam), para a tela nunca mostrar solução de uma versão que não existe mais; report sem versão (juiz antigo) nunca é marcado stale; missing_langs = linguagem good sem TL em NENHUM host (solução good falhou em todas as máquinas); hosts[].missing = faltantes naquele juiz; sols = calibração POR EXTENSO estruturada [{file,lang,category:good|pass|slow|wrong,verdict,tests:[{name,code,time,tl}]}] (mesmo formato do vetor tests da submissão normal; [] = juiz antigo); tl_override = TLOVERRIDE do conf do pacote ({} sem override); hosts[].tl e sols[].tests[].tl são a MEDIÇÃO da calibração (que roda com MOJ_CALIBRATING=1 e ignora o override de propósito) — time_limits é o efetivo, para a tela poder avisar que o julgamento usa outro número"
+          }
+        }
+      }
+    },
+    "/problems/issues": {
+      "get": {
+        "tags": [
+          "problems"
+        ],
+        "summary": "Issues do problema (a revisão da banca); só quem edita",
+        "description": "Loja FORA do pacote (contests/treino/var/problem-issues/<org>/<prob>.json): não muda o rev, não some no upload, não vai ao juiz. Quem não edita recebe o MESMO 404 de problema inexistente. Abertas primeiro. Issue aberta = pendência issues_open:<n> no /problems/status.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{id, open, issues:[{n,title,body,state:open|closed,by,at,updated_at,closed_by,closed_at,comments:[{by,at,body}]}]}"
+          },
+          "404": {
+            "description": "problema inexistente ou o login não o edita"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "problems"
+        ],
+        "summary": "Abre, comenta, fecha ou reabre uma issue",
+        "description": "{id, action:open|comment|close|reopen, n?, title?, body?}. open: title 1..200, body opcional; comment: n + body; close/reopen: n (body, se vier, entra como comentário). Corpo ≤ 20000 caracteres, ≤ 200 comentários por issue, ≤ 500 issues por problema.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{id, open, issue}"
+          },
+          "400": {
+            "description": "issue_invalid (a mensagem diz o quê)"
+          },
+          "404": {
+            "description": "problema inexistente/sem acesso, ou issue_notfound"
+          },
+          "409": {
+            "description": "issue_state: fechar fechada ou reabrir aberta"
+          },
+          "422": {
+            "description": "issue_limit: teto de issues ou de comentários"
           }
         }
       }
@@ -6663,7 +7305,7 @@
           "problems"
         ],
         "summary": "Source do pacote inteiro (só dono/colaborador)",
-        "description": "Source completo: enunciado + testes OCULTOS + SOLUÇÕES + editorial. Acesso garantido NA API: só dono/colaborador; não-autorizado recebe 404 (sem read-only, sem atalho de .admin). Inclui title, collections, languages (ids de submissão permitidos, [] = todas), examples[].explanation, sols por categoria, score, score_text (tests/score cru), editorial_md, scripts (caminhos, árvore do editor) e scripts_files (round-trip da correção especial: [{path,content_b64,exec}|{path,symlink}]). docs_files = round-trip das imagens de docs/ ([{name,content_b64}]); examples[].explanation vive em docs/notes/<sample>.md (legado sample-notes.json só leitura).",
+        "description": "Source completo: enunciado + testes OCULTOS + SOLUÇÕES + editorial + TRADUÇÕES. Acesso garantido NA API: só dono/colaborador; não-autorizado recebe 404 (sem read-only, sem atalho de .admin). Inclui translations {<lang>:{title,enunciado_md,editorial_md?,notes?}} (docs/enunciado.<lang>.md, solucao.<lang>.md, notes/<sample>.<lang>.md), titles {<lang>:título} e statement_langs [pt,…]; title, collections, languages (ids de submissão permitidos, [] = todas), examples[].explanation, sols por categoria, score, score_text (tests/score cru), editorial_md, scripts (caminhos, árvore do editor) e scripts_files (round-trip da correção especial: [{path,content_b64,exec}|{path,symlink}]). docs_files = round-trip das imagens de docs/ ([{name,content_b64}]); examples[].explanation vive em docs/notes/<sample>.md (legado sample-notes.json só leitura).",
         "security": [
           {
             "bearerAuth": []
@@ -6698,6 +7340,18 @@
                         "editable": {
                           "type": "boolean"
                         },
+                        "rev": {
+                          "type": "string",
+                          "description": "Trava de edição concorrente: rev = revisão do CONTEÚDO do pacote (git ls-tree sem o .moj-meta.json + display_title/titles/languages/collections do meta; set-public/move/owner-rename NÃO mudam o rev). Devolva-o como base_rev no /problems/edit e no /problems/upload."
+                        },
+                        "rev_by": {
+                          "type": "string",
+                          "description": "Autor do último commit de conteúdo (quem gerou este rev)."
+                        },
+                        "rev_at": {
+                          "type": "integer",
+                          "description": "EPOCH do último commit de conteúdo."
+                        },
                         "scripts": {
                           "type": "array",
                           "items": {
@@ -6721,8 +7375,8 @@
         "tags": [
           "problems"
         ],
-        "summary": "Pré-visualização HTML do enunciado",
-        "description": "Usa o renderizador único (render-statement.sh) — idêntico ao HTML servido ao aluno. Injeta o título (h1) e os exemplos (cada um com explanation opcional). Aceita id (semeia as imagens de docs/ do pacote no render; exige permissão de edição) e images:[{name,content_b64}] p/ figuras ainda não enviadas.",
+        "summary": "Pré-visualização HTML do enunciado (por idioma) ou do editorial",
+        "description": "Usa o renderizador único (render-statement.sh) — idêntico ao HTML servido ao aluno. Injeta o título (h1) e os exemplos (cada um com explanation opcional; o HTML deles sai do stmt_samples_html do mojtools, o MESMO do índice, com rótulos no idioma `lang`). Aceita id (semeia as imagens de docs/ do pacote no render; exige permissão de edição) e images:[{name,content_b64}] p/ figuras ainda não enviadas. kind=editorial renderiza só o markdown. Resposta {html_b64, lang, kind}.",
         "security": [
           {
             "bearerAuth": []
@@ -6759,11 +7413,22 @@
                     "items": {
                       "$ref": "#/components/schemas/ProblemExample"
                     }
+                  },
+                  "lang": {
+                    "type": "string",
+                    "enum": ["pt", "en", "es"],
+                    "description": "idioma dos rótulos dos exemplos e do <html lang> (default pt; 400 lang_invalid). O cliente manda texto e explicações já no idioma."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["statement", "editorial"],
+                    "description": "editorial = renderiza só `markdown`, sem exemplos e sem h1 (botão Pré-visualizar da aba Resolução)"
+                  },
+                  "markdown": {
+                    "type": "string",
+                    "description": "o texto do editorial quando kind=editorial"
                   }
-                },
-                "required": [
-                  "enunciado_md"
-                ]
+                }
               }
             }
           }
@@ -6856,6 +7521,14 @@
                   },
                   "tar_b64": {
                     "type": "string"
+                  },
+                  "base_rev": {
+                    "type": "string",
+                    "description": "O rev que o cliente tinha (source/get). Diferente do atual e sem force => 409 stale_rev, nada gravado. Ausente = grava por cima (compatível)."
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "description": "Grava por cima mesmo com o rev mudado (moj upload --overwrite)."
                   }
                 },
                 "required": [
@@ -6867,7 +7540,10 @@
         },
         "responses": {
           "200": {
-            "description": "{id,sha}"
+            "description": "{id,sha,rev}"
+          },
+          "409": {
+            "description": "stale_rev: o problema mudou depois do base_rev — {error:{code:\"stale_rev\",message,current_rev,changed_by,changed_at}}; nada gravado"
           }
         }
       }
@@ -7006,7 +7682,7 @@
         },
         "responses": {
           "200": {
-            "description": "{id,sha}"
+            "description": "{id,sha,rev}"
           }
         },
         "description": "docs_files = round-trip das imagens de docs/ ([{name,content_b64}]); examples[].explanation vive em docs/notes/<sample>.md (legado sample-notes.json só leitura)."
@@ -7017,7 +7693,7 @@
         "tags": [
           "problems"
         ],
-        "summary": "Edita problema (só os campos presentes; commit+push autorado). Aceita languages (ids de submissão permitidos; ausente = não toca, [] = todas), scripts_files (SUBSTITUI scripts/ inteiro: paths validados sem '..', exec vira +x, symlink confinado a scripts/; ausente = não toca) e score_text (tests/score verbatim; '' remove)",
+        "summary": "Edita problema (só os campos presentes; commit+push autorado). Aceita translations ({<lang>:{title?,enunciado_md?,editorial_md?,notes?}|null} — ausente = intocado, null = apaga o idioma; só en/es) e titles ({<lang>:título}); languages (ids de submissão permitidos; ausente = não toca, [] = todas), scripts_files (SUBSTITUI scripts/ inteiro: paths validados sem '..', exec vira +x, symlink confinado a scripts/; ausente = não toca) e score_text (tests/score verbatim; '' remove)",
         "security": [
           {
             "bearerAuth": []
@@ -7042,6 +7718,14 @@
                     "properties": {
                       "id": {
                         "type": "string"
+                      },
+                      "base_rev": {
+                        "type": "string",
+                        "description": "Trava de edição concorrente: rev = revisão do CONTEÚDO do pacote (git ls-tree sem o .moj-meta.json + display_title/titles/languages/collections do meta; set-public/move/owner-rename NÃO mudam o rev). O rev que o cliente tinha; diferente do atual e sem force => 409 stale_rev e nada é gravado. Ausente = grava por cima (compatível)."
+                      },
+                      "force": {
+                        "type": "boolean",
+                        "description": "Grava por cima mesmo com o rev mudado (editor: Salvar por cima; moj push --overwrite)."
                       }
                     },
                     "required": [
@@ -7055,7 +7739,13 @@
         },
         "responses": {
           "200": {
-            "description": "{id,sha}"
+            "description": "{action,id,sha,rev}"
+          },
+          "400": {
+            "description": "bad_rev: base_rev não é hex"
+          },
+          "409": {
+            "description": "stale_rev: o problema mudou depois do base_rev — {error:{code:\"stale_rev\",message,current_rev,changed_by,changed_at}}; nada gravado"
           }
         },
         "description": "docs_files = round-trip das imagens de docs/ ([{name,content_b64}]); examples[].explanation vive em docs/notes/<sample>.md (legado sample-notes.json só leitura)."
@@ -8094,7 +8784,7 @@
           "ops"
         ],
         "summary": "Config fina por juiz (multi-slot): particionamento/reserve/disabled",
-        "description": "Admin. Config DESEJADA por host (contests/treino/var/judges-config.json); o heartbeat entrega ao agente quando muda e ele aplica após drenar os jobs. ?host= filtra.",
+        "description": "Admin. Config DESEJADA por host (contests/treino/var/judges-config.json); o heartbeat entrega ao agente quando muda (cfg_hash = hash SÓ de {partition,reserve,disabled} normalizados — updated_at/by e campos do servidor não drenam o juiz) e ele aplica após drenar os jobs. ?host= filtra.",
         "security": [
           {
             "bearerAuth": []
@@ -8111,7 +8801,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{success, configs:{<host>:{partition,reserve,disabled,updated_at,by}}}"
+            "description": "{success, configs:{<host>:{partition,reserve,disabled,parallel_max?,updated_at,by}, \"*\"?:{parallel,cushion,share_max}}} — a chave \"*\" é a política GLOBAL de testes em paralelo"
           }
         }
       },
@@ -8120,7 +8810,7 @@
           "ops"
         ],
         "summary": "Define a config de um juiz",
-        "description": "Body {host, partition?: off|numa|cpus:<X>, reserve?: int, disabled?: bool}. partition particiona a máquina em SLOTS de cpus disjuntas (o agente corrige N problemas ao mesmo tempo, cada job pinado no seu cpuset); reserve tira as N primeiras cpus dos slots; disabled drena e para de receber trabalho.",
+        "description": "Body {host, partition?: off|numa|cpus:<X>, reserve?: int, disabled?: bool, parallel_max?: int 1..64} — FUNDE na entrada do host (campos não enviados são preservados). partition particiona a máquina em SLOTS de cpus disjuntas (o agente corrige N problemas ao mesmo tempo, cada job pinado no seu cpuset; cpus:<X> fatia dentro de cada nó NUMA); reserve tira as N primeiras cpus dos slots; disabled drena e para de receber trabalho; parallel_max = teto de testes ao mesmo tempo por job NESTE juiz (só o servidor lê; fora do cfg_hash). OU {host:\"*\", parallel?: off|auto, cushion?: 0..1, share_max?: 0..1} = POLÍTICA GLOBAL de testes em paralelo: off = todo job com par_max 1 (recomendado em prova); auto = a sobra de slots além do colchão ceil(total×cushion) vira testes em paralelo, até share_max×total slots por job.",
         "security": [
           {
             "bearerAuth": []
@@ -8129,6 +8819,48 @@
         "responses": {
           "200": {
             "description": "{success, action, host, config}"
+          }
+        }
+      }
+    },
+    "/judge/register": {
+      "post": {
+        "tags": [
+          "judge"
+        ],
+        "summary": "O agente anuncia capacidade + inventário (worker)",
+        "description": "Bearer mojw_<token>. Body {host, capability, arch, cpu, ncpu, mem_kb, gpu, problems:{id:checksum}, langs[], toolchain, os, cage_root, cache_bytes, inv_hash, total_slots, partition, topology[], boot?, slot_cpus?, slots_by_node?:{<nó>:n}, smt?}. boot:true (só no boot do agente) re-enfileira o que estava atribuído ao host. slot_cpus = cpus do MENOR slot (1 em produção), slots_by_node e smt alimentam o claim por LARGURA (CPUNEEDED); agente antigo não os manda = legado (só jobs k=1). Resposta: {registered, ttl, config:{partition,reserve,disabled,cfg_hash}}.",
+        "responses": {
+          "200": {
+            "description": "{success, host, registered, ttl, config}"
+          }
+        }
+      }
+    },
+    "/judge/heartbeat": {
+      "post": {
+        "tags": [
+          "judge"
+        ],
+        "summary": "Pulso do agente = o ESCALONADOR (worker)",
+        "description": "Bearer mojw_<token>. Body {host, state:free|busy, inv_hash, free_slots?, total_slots?, cfg_hash?, status?:ok|draining|disabled, slot_cpus?, max_free_group?}. Reivindica 1 comando OU 1 update OU um LOTE de até free_slots SLOTS de jobs (capacidade + pool + linguagem + cache + LARGURA: job de CPUNEEDED=k ocupa k_slots=ceil(k/slot_cpus) do mesmo juiz; SAMENUMA ⇒ k_slots ≤ max_free_group; memória por slot). Cada job leva test_cpus, same_numa, slots (grupos×k_slots), par_max (testes ao mesmo tempo concedidos — só com política auto, fila vazia e nada pulado por porta de tempo) e par_cap; update/command de calibração levam test_cpus/same_numa/slots. Sem slot_cpus o juiz é LEGADO (só k=1, sem os campos). config só vem quando o cfg_hash difere; comando URGENTE kill|restart é entregue MESMO ocupado; holding:true = juiz segurado p/ um job largo (run/hold/<host>.json): não recebe jobs/updates até ter k_slots livres (comandos do admin passam).",
+        "responses": {
+          "200": {
+            "description": "{success, assigned:[job…]|job|null, update, command, reregister, config?, holding?}"
+          }
+        }
+      }
+    },
+    "/judge/decline": {
+      "post": {
+        "tags": [
+          "judge"
+        ],
+        "summary": "O agente devolve trabalho que não conseguiu alocar (worker)",
+        "description": "Bearer mojw_<token>. Body {host, reason, id} (job) | {host, reason, reqid} (calibração) | {host, reason, command} (comando). Corrida entre o claim do heartbeat e a alocação de slots/CPUs no juiz: o job volta à banda de origem com epoch novo e declined.<host> (o host o pula por DECLINE_BACKOFF=60 s); na DECLINE_MAX=3ª recusa vira Judge Error pelo spool (host scheduler); calibração volta a updates/pending; comando é reenfileirado com cmdid novo.",
+        "responses": {
+          "200": {
+            "description": "{success, host, result:requeued|judge_error|notfound}"
           }
         }
       }

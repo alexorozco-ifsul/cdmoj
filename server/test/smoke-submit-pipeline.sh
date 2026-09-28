@@ -66,6 +66,23 @@ ck "sem traversal no nome"         '[[ "$(spname "$(subid)")" == "passwd.c" ]]'
 call /submit POST "{\"problem_id\":\"col#pa\",\"filename\":\"Solução.c\",\"code_b64\":\"$B64C\"}"
 ck "acento sobrevive"              '[[ "$(spname "$(subid)")" == "Solução.c" ]]'
 
+echo "== C++ = .cpp, .cc, .cxx, .c++ (linguagem CANÔNICA no spool; nome do aluno intacto) =="
+splang(){ SPN="$(ls -t "$SPOOLDIR" | grep ":$1:" | head -1)"; jq -r '.lang' "$SPOOLDIR/$SPN" 2>/dev/null; }
+printf '%s' '{"col#pa":["cpp"]}' > "$C/problem-langs.json"
+for e in cpp cc cxx c++ CPP; do
+  call /submit POST "{\"problem_id\":\"col#pa\",\"filename\":\"sol.$e\",\"code_b64\":\"$B64C\"}"
+  ck ".$e aceito com lista [cpp]"   'grep -q "\"success\":true" <<<"$BODY"'
+  ck ".$e -> lang CPP no spool"      '[[ "$(splang "$(subid)")" == CPP ]]'
+  ck ".$e mantém o nome sol.$e"      '[[ "$(spname "$(subid)")" == "sol.$e" ]]'
+done
+ck "spool name leva CPP (roteia p/ juiz cpp)" '[[ "$(ls -t "$SPOOLDIR" | grep ":$(subid):" | head -1)" == *:CPP ]]'
+printf '%s' '{"col#pa":["c"]}' > "$C/problem-langs.json"
+call /submit POST "{\"problem_id\":\"col#pa\",\"filename\":\"sol.cc\",\"code_b64\":\"$B64C\"}"
+ck "lista [c] recusa .cc"          'grep -q "lang_not_allowed" <<<"$BODY" && grep -q "\.cc" <<<"$BODY"'
+call /submit POST "{\"problem_id\":\"col#pa\",\"filename\":\"sol.h\",\"code_b64\":\"$B64C\"}"
+ck ".h entra como C"               '[[ "$(splang "$(subid)")" == C ]]'
+rm -f "$C/problem-langs.json"
+
 echo "== ARG_MAX: fonte de 200 KiB tem de virar spool VÁLIDO (a regressão do incidente) =="
 { printf '// fonte grande\nint main(){return 0;}\n'; head -c 204800 /dev/zero | tr '\0' 'x'; } > "$FIX/big.c"
 B64BIG="$(base64 -w0 "$FIX/big.c")"
@@ -156,7 +173,7 @@ ID4="feedfeedfeedfeedfeedfeedfeedfeed"
 printf '%s:col#pa:C:Not Answered Yet:%s:%s\n' "$((NOW-1200))" "$((NOW-1200))" "$ID4" >> "$T/users/joana/history"
 mkdir -p "$T/users/joana/submissions" "$T/users/joana/mojlog"
 printf 'int main(){}' > "$T/users/joana/submissions/$ID4.c"
-printf '<html>log da joana</html>' > "$T/users/joana/mojlog/$ID4.html"
+printf '<html>log da joana</html>' | gzip -6 > "$T/users/joana/mojlog/$ID4.html.gz"   # formato atual
 
 qcall(){ OUT="$(PATH_INFO=/treino/admin/queue REQUEST_METHOD="${1:-GET}" QUERY_STRING="${2:-}" \
     HTTP_AUTHORIZATION="Bearer ${4:-tadm}" bash "$ROUTER" <<<"${3:-}" 2>/dev/null)"
@@ -166,7 +183,7 @@ ck "details lista a pendente"     '[[ "$(jq -r "[.pending_details[]|select(.id==
 ck "com idade e estado"           '[[ "$(jq -r ".pending_details[]|select(.id==\"$ID4\")|.age_s" <<<"$BODY")" -ge 1200 ]] && grep -q "sem-rastro" <<<"$BODY"'
 ck "e has_source"                 '[[ "$(jq -r ".pending_details[]|select(.id==\"$ID4\")|.has_source" <<<"$BODY")" == true ]]'
 qcall GET "sub=treino:joana:$ID4"
-ck "dossiê traz history+mojlog"   'grep -q "Not Answered Yet" <<<"$BODY" && grep -q "log da joana" <<<"$BODY"'
+ck "dossiê traz history+mojlog (lido do .gz, bytes descomprimidos)" 'grep -q "Not Answered Yet" <<<"$BODY" && grep -q "log da joana" <<<"$BODY" && [[ "$(jq -r .mojlog_bytes <<<"$BODY")" == 25 ]]'
 qcall POST '' "{\"action\":\"requeue\",\"contest\":\"treino\",\"login\":\"joana\",\"id\":\"$ID4\"}"
 ck "requeue cria o marcador"      '[[ "$(jq -r .requeued <<<"$BODY")" == true ]] && ls "$SPOOLDIR" | grep -q ":$ID4:joana:rejulgar:"'
 ID5="f00df00df00df00df00df00df00df00d"

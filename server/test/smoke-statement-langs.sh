@@ -1,0 +1,264 @@
+#!/bin/bash
+# ENUNCIADO EM VÁRIOS IDIOMAS (2026-09-15) — a cadeia inteira, do pacote ao competidor.
+#
+#   pacote  docs/enunciado.md (PT) + docs/enunciado.en.md + docs/notes/sample1.{md,en.md} + titles.en
+#     -> gen-problem-json.sh   statement_langs + statements.en{title,html_b64}, rótulos por idioma,
+#                              nota do sample2 CAI NO PT (fallback), <html lang>
+#     -> /problems/source      translations.en; /problems/edit translations.es grava, translations.en:null
+#                              apaga SEM tocar no PT; /problems/preview lang=es + kind:editorial
+#     -> contest               STATEMENT_LANGS (admin E .cjudge definem, .judge não), /contest/problems
+#                              statement_langs + default_statement_lang (LOCALE), /contest/statement?lang=
+#                              (EN materializado do banco, ES cai no PT, xx=400, fora da lista=404),
+#                              upload de HTML por idioma pelo admin, cache invalidado
+#     -> validador             html_builds_en, secao_saida aceita Salida, aviso nota-sem-traducao
+# Roda o renderizador REAL (pandoc): sem ele, SKIP.
+set -u
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/router.sh"
+command -v pandoc >/dev/null 2>&1 || { echo "SKIP: sem pandoc (render do enunciado)"; exit 0; }
+FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; RUN="$(mktemp -d)"; PROBS="$(mktemp -d)"
+trap 'rm -rf "$FIX" "$SESS" "$RUN" "$PROBS"' EXIT
+source "$(dirname "$(readlink -f "$0")")/fixture.sh"
+export CONTESTSDIR="$FIX" SESSIONDIR="$SESS" RUNDIR="$RUN" MOJ_PROBLEMS_DIR="$PROBS" TL_STORE_DIR="$RUN/tl"
+: "${MOJTOOLS_DIR:=$(cd "$ROOT/../../mojtools" && pwd)}"; export MOJTOOLS_DIR
+mkdir -p "$RUN/tl" "$FIX/treino/var/jsons" "$FIX/treino/var/jsons-private"
+NOW="$EPOCHSECONDS"
+
+pass=0; fail=0
+ck(){ if eval "$2"; then echo "  ok: $1"; ((pass++)); else echo "  FAIL: $1 :: ${BODY:0:220}"; ((fail++)); fi; }
+call(){ # <path> <method> <sess> [query] [body] [extra-env]
+  OUT="$(env PATH_INFO="$1" REQUEST_METHOD="$2" QUERY_STRING="${4:-}" HTTP_AUTHORIZATION="Bearer $3" \
+    ${6:-} bash "$ROUTER" <<<"${5:-}" 2>/dev/null)"
+  BODY="$(printf '%s' "$OUT" | awk 'f{print} /^\r?$/{f=1}')"; }
+code(){ printf '%s' "$OUT" | head -1 | tr -d '\r' | sed 's/^Status: //'; }
+hdr(){ printf '%s' "$OUT" | awk -F': ' -v k="$1" 'tolower($1)==tolower(k){print $2}' | tr -d '\r'; }
+
+# ---------- pacote PT+EN ----------
+echo '{"col":{"members":["autor"],"admins":["autor"],"public_allowed":true,"title":"Col"}}' > "$FIX/treino/var/orgs.json"
+fx_user "$FIX/treino" autor s "Autor"
+printf 'CONTEST=%q\nLOGIN=%q\nUSERFULLNAME=%q\nLOGINAT=%q\n' treino autor Autor "$NOW" > "$SESS/aut"
+P="$PROBS/col/pa"; mkdir -p "$P/docs/notes" "$P/tests/input" "$P/tests/output" "$P/sols/good"
+printf 'Leia N e imprima N.\n\n## Entrada\n\nUm inteiro.\n\n## Saída\n\nO mesmo inteiro.\n' > "$P/docs/enunciado.md"
+printf 'Read N and print N.\n\n## Input\n\nOne integer.\n\n## Output\n\nThe same integer.\n' > "$P/docs/enunciado.en.md"
+printf '3\n' > "$P/tests/input/sample1"; printf '3\n' > "$P/tests/output/sample1"
+printf '7\n' > "$P/tests/input/sample2"; printf '7\n' > "$P/tests/output/sample2"
+# sample3: 300 KB (> STMT_SAMPLE_MAX_BYTES 256 KB) — HTML mostra só o começo + aviso; json completo
+head -c 300000 /dev/zero | tr '\0' 'a' > "$P/tests/input/sample3"; printf '\n' >> "$P/tests/input/sample3"; printf 'A\n' > "$P/tests/output/sample3"
+# sample4: 5 MB (> STMT_SAMPLE_JSON_MAX_BYTES 4 MB) — json leva {name,size,too_big} SEM os bytes
+head -c 5000000 /dev/zero | tr '\0' 'b' > "$P/tests/input/sample4"; printf '\n' >> "$P/tests/input/sample4"; printf 'B\n' > "$P/tests/output/sample4"
+# teste OCULTO: jamais pode aparecer no campo `samples` nem no HTML (anti-vazamento)
+printf 'SEGREDO 99\n' > "$P/tests/input/hidden1"; printf 'SEGREDO 99\n' > "$P/tests/output/hidden1"
+printf 'Nota PT do um.\n' > "$P/docs/notes/sample1.md"; printf 'EN note of one.\n' > "$P/docs/notes/sample1.en.md"
+printf 'Nota PT do dois.\n' > "$P/docs/notes/sample2.md"
+printf '# Ideia\n\nImprima.\n' > "$P/docs/solucao.md"; printf '# Idea\n\nPrint it.\n' > "$P/docs/solucao.en.md"
+printf 'Autor\n' > "$P/author"; printf 'int main(){return 0;}\n' > "$P/sols/good/a.c"
+printf '{"owner":"autor","public":true,"display_title":"Eco","titles":{"en":"Echo"}}' > "$P/.moj-meta.json"
+
+echo "== gen-problem-json: um render por idioma =="
+TREINO_JSONS="$FIX/treino/var/jsons" MOJ_TL_STORE="$RUN/tl" bash "$MOJTOOLS_DIR/gen-problem-json.sh" "$P" "col#pa" >/dev/null 2>&1
+J="$FIX/treino/var/jsons/col#pa.json"; BODY="$(cat "$J" 2>/dev/null | head -c 300)"
+ck "json publicado"                      '[[ -s "$J" ]]'
+ck "statement_langs = [pt,en]"           '[[ "$(jq -c .statement_langs "$J")" == "[\"pt\",\"en\"]" ]]'
+ck "statements.en.title = Echo"          '[[ "$(jq -r .statements.en.title "$J")" == Echo ]]'
+EN="$(jq -r .statements.en.html_b64 "$J" | base64 -d)"; PT="$(jq -r .statement_html_b64 "$J" | base64 -d)"
+ck "EN: texto e rótulos em inglês"       'grep -q "Read N and print N" <<<"$EN" && grep -q "<h2>Examples</h2>" <<<"$EN" && grep -q "<h3>Input</h3>" <<<"$EN" && grep -q "<h3>Output</h3>" <<<"$EN"'
+ck "EN: nota do sample1 em EN"           'grep -q "EN note of one" <<<"$EN" && grep -q "<h3>Explanation</h3>" <<<"$EN"'
+ck "EN: nota do sample2 cai no PT"       'grep -q "Nota PT do dois" <<<"$EN"'
+ck "EN: <html lang=en> e h1 Echo"        'grep -q "<html lang=\"en\"" <<<"$EN" && grep -q "moj-title\">Echo" <<<"$EN"'
+ck "PT: intacto (Exemplos/Entrada/Saída, lang pt-BR)" 'grep -q "<h2>Exemplos</h2>" <<<"$PT" && grep -q "<h3>Saída</h3>" <<<"$PT" && grep -q "<html lang=\"pt-BR\"" <<<"$PT" && ! grep -q "EN note" <<<"$PT"'
+ck "editorial NÃO vai ao aluno"          '! grep -q "Print it" <<<"$EN" && ! grep -q "Imprima" <<<"$PT"'
+echo "== samples como DADO no json servível (a MESMA seleção do HTML; oculto nunca entra) =="
+ck "samples = [sample1..4] e bytes exatos" '[[ "$(jq -c "[.samples[].name]" "$J")" == "[\"sample1\",\"sample2\",\"sample3\",\"sample4\"]" && "$(jq -r ".samples[1].input" "$J")" == "7" && "$(jq -j ".samples[1].input" "$J" | od -c | head -1)" == *"7  \\n"* ]]'
+ck "sample3 (300 KB): json completo, HTML com 256 KB + aviso DEPOIS do </pre>" '[[ "$(jq -r ".samples[2].input|length" "$J")" == 300001 ]] && grep -q "</pre><p class=\"moj-exemplo-trunc\">Exemplo grande: mostrando 256 KB de 292 KB" <<<"$PT" && grep -q "Large sample: showing 256 KB of 292 KB" <<<"$EN"'
+ck "sample4 (5 MB): too_big sem bytes; HTML truncado" '[[ "$(jq -c ".samples[3]|{name,too_big,has_in:has(\"input\")}" "$J")" == "{\"name\":\"sample4\",\"too_big\":true,\"has_in\":false}" ]] && [[ $(stat -c%s "$J") -lt 3000000 ]]'
+ck "o aviso não entra no <pre> (Copiar copia só o bloco)" '! grep -q "Exemplo grande[^<]*</pre>" <<<"$PT"'
+ck "hidden1 NÃO está no json nem no HTML"  '! grep -q SEGREDO "$J" && ! grep -q SEGREDO <<<"$PT" && ! grep -q SEGREDO <<<"$EN"'
+ck "data-sample/data-kind nos <pre> do HTML" 'grep -q "<pre data-sample=\"sample1\" data-kind=\"input\">" <<<"$PT" && grep -q "data-sample=\"sample2\" data-kind=\"output\"" <<<"$EN"'
+ck "nomes do json == data-sample do HTML"   '[[ "$(grep -o "data-sample=\"[^\"]*\" data-kind=\"input\"" <<<"$PT" | sed "s/.*=\"\([^\"]*\)\" data.*/\1/" | paste -sd,)" == "$(jq -r "[.samples[].name]|join(\",\")" "$J")" ]]'
+ck "jsons/ e jsons-private/ são o MESMO inode (hardlink)" '[[ "$(stat -c%i "$J")" == "$(stat -c%i "$FIX/treino/var/jsons-private/col#pa.json")" ]]'
+
+echo "== validador: traduções são checks duros, nota sem tradução é aviso =="
+VALIDATE_RUN_SOLS=0 TREINO_JSONS="$FIX/treino/var/jsons" bash "$MOJTOOLS_DIR/validate-problem.sh" "$P" "col#pa" >/dev/null 2>&1
+V="$RUN/validation/col#pa.json"; BODY="$(cat "$V" 2>/dev/null | head -c 300)"
+ck "validação ok"                        '[[ "$(jq -r .ok "$V")" == true ]]'
+ck "checks html_builds_en/secao_*_en"    '[[ "$(jq -r "[.checks[]|select(.name|test(\"_en$\"))|.name]|length" "$V")" == 3 ]]'
+ck "aviso nota-sem-traducao(sample2,en)" 'grep -q "nota-sem-traducao(sample2,en)" <<<"$(jq -r .render_warnings "$V")"'
+printf 'Salida test.\n\n## Entrada\n\nx\n\n## Salida\n\ny\n' > "$P/docs/enunciado.es.md"
+VALIDATE_RUN_SOLS=0 TREINO_JSONS="$FIX/treino/var/jsons" bash "$MOJTOOLS_DIR/validate-problem.sh" "$P" "col#pa" >/dev/null 2>&1
+ck "## Salida passa na seção de saída ES" '[[ "$(jq -r ".checks[]|select(.name==\"secao_saida_es\")|.ok" "$V")" == true ]]'
+rm -f "$P/docs/enunciado.es.md"
+TREINO_JSONS="$FIX/treino/var/jsons" MOJ_TL_STORE="$RUN/tl" bash "$MOJTOOLS_DIR/gen-problem-json.sh" "$P" "col#pa" >/dev/null 2>&1
+
+echo "== /problems/source: translations + titles =="
+call /problems/source GET aut "id=col%23pa"
+ck "200"                                 '[[ "$(code)" == "200 OK" ]]'
+ck "translations.en com título/enunciado/editorial/nota" '[[ "$(jq -r ".translations.en | .title, (.enunciado_md|length>0), (.editorial_md|length>0), .notes.sample1" <<<"$BODY" | paste -sd,)" == "Echo,true,true,EN note of one." ]]'
+ck "titles.en e statement_langs"         '[[ "$(jq -r ".titles.en, (.statement_langs|join(\",\"))" <<<"$BODY" | paste -sd,)" == "Echo,pt,en" ]]'
+ck "PT segue nos campos de sempre"       'grep -q "Leia N" <<<"$(jq -r .enunciado_md <<<"$BODY")" && [[ "$(jq -r ".examples[0].explanation" <<<"$BODY")" == "Nota PT do um." ]]'
+
+echo "== /problems/edit: translations.es grava; translations.en:null apaga só o EN =="
+call /problems/edit POST aut "" '{"id":"col#pa","translations":{"es":{"title":"Eco ES","enunciado_md":"Lea N.\n\n## Entrada\n\nx\n\n## Salida\n\ny\n","notes":{"sample1":"Nota ES uno"}}}}'
+ck "edit 200"                            '[[ "$(code)" == "200 OK" ]]'
+ck "enunciado.es.md + nota ES + titles.es" '[[ -f "$P/docs/enunciado.es.md" && -f "$P/docs/notes/sample1.es.md" && "$(jq -r .titles.es "$P/.moj-meta.json")" == "Eco ES" ]]'
+ck "PT e EN intactos"                    '[[ -f "$P/docs/enunciado.md" && -f "$P/docs/enunciado.en.md" && -f "$P/docs/notes/sample1.md" && -f "$P/docs/notes/sample1.en.md" && -f "$P/docs/notes/sample2.md" ]]'
+call /problems/edit POST aut "" '{"id":"col#pa","translations":{"en":null},"examples":[{"input":"3\n","output":"3\n","explanation":"Nota PT do um v2"},{"input":"7\n","output":"7\n","explanation":"Nota PT do dois"}]}'
+ck "en apagado (enunciado, editorial, nota, título)" '[[ ! -f "$P/docs/enunciado.en.md" && ! -f "$P/docs/solucao.en.md" && ! -f "$P/docs/notes/sample1.en.md" && "$(jq -r ".titles.en // \"-\"" "$P/.moj-meta.json")" == "-" ]]'
+ck "ES ficou e PT foi regravado"         '[[ -f "$P/docs/enunciado.es.md" && -f "$P/docs/notes/sample1.es.md" && "$(cat "$P/docs/notes/sample1.md")" == "Nota PT do um v2" ]]'
+# devolve o EN p/ o resto do teste
+call /problems/edit POST aut "" '{"id":"col#pa","translations":{"en":{"title":"Echo","enunciado_md":"Read N and print N.\n\n## Input\n\nOne integer.\n\n## Output\n\nThe same integer.\n","editorial_md":"# Idea\n\nPrint it.","notes":{"sample1":"EN note of one."}}}}'
+ck "EN de volta"                         '[[ -f "$P/docs/enunciado.en.md" && "$(jq -r .titles.en "$P/.moj-meta.json")" == Echo ]]'
+# `titles` no TOPO do body (é o que o `moj push` manda, junto do translations) — regressão de
+# produção 15/09: o filtro do jq indexava a lista com `.key` dentro do pipe e o patch inteiro sumia
+call /problems/edit POST aut "" '{"id":"col#pa","titles":{"en":"Echo!","es":"Eco ES!","fr":"x","pt":"y"},"translations":{"en":{"title":"Echo!"},"es":{"title":"Eco ES!"}}}'
+BODY="$(jq -c . "$P/.moj-meta.json")"; ck "titles no topo: en/es gravados, fr/pt ignorados" '[[ "$(jq -cS .titles "$P/.moj-meta.json")" == "{\"en\":\"Echo!\",\"es\":\"Eco ES!\"}" ]]'
+call /problems/edit POST aut "" '{"id":"col#pa","translations":{"en":{"title":"Echo"},"es":{"title":"Eco ES"}}}'
+
+echo "== /problems/preview: lang=es (rótulos) e kind:editorial (sem exemplos, sem h1) =="
+call /problems/preview POST aut "" '{"enunciado_md":"Hola.\n\n## Entrada\n\nx\n\n## Salida\n\ny","title":"Hola Mundo","lang":"es","examples":[{"input":"1\n","output":"1\n","explanation":"nota"}]}'
+H="$(jq -r .html_b64 <<<"$BODY" | base64 -d 2>/dev/null)"
+ck "preview es: Ejemplos/Entrada/Salida/Explicación + <html lang=es>" 'grep -q "<h2>Ejemplos</h2>" <<<"$H" && grep -q "<h3>Salida</h3>" <<<"$H" && grep -q "<h3>Explicación</h3>" <<<"$H" && grep -q "<html lang=\"es\"" <<<"$H"'
+ck "preview es: h3 (não h4) — gerador único" '! grep -q "<h4>" <<<"$H"'
+call /problems/preview POST aut "" '{"kind":"editorial","markdown":"# Ideia\n\nSome tudo.","examples":[{"input":"1","output":"1"}],"title":"X"}'
+H="$(jq -r .html_b64 <<<"$BODY" | base64 -d 2>/dev/null)"
+ck "editorial: markdown renderizado, sem exemplos e sem h1 do título" 'grep -q "Some tudo" <<<"$H" && ! grep -q "<section class=\"moj-exemplos" <<<"$H" && ! grep -q "<h1 class=\"moj-title" <<<"$H" && [[ "$(jq -r .kind <<<"$BODY")" == editorial ]]'
+call /problems/preview POST aut "" '{"enunciado_md":"x","lang":"fr"}'
+ck "lang fora da lista = 400"            '[[ "$(code)" == "400 Bad Request" ]]'
+
+# ---------- contest ----------
+echo "== contest: STATEMENT_LANGS (admin e .cjudge definem; .judge não) =="
+C="$FIX/sl"; mkdir -p "$C/var"
+conf(){ { printf 'CONTEST_ID=sl\nCONTEST_TYPE=icpc\nCONTEST_NAME=Prova\nLOCALE=en\n'
+  printf 'CONTEST_START=%s\nCONTEST_END=%s\n' "$((NOW-3600))" "$((NOW+18000))"
+  printf 'PROBS=( x col#pa Eco A col#pa )\n'; [[ -n "${1:-}" ]] && printf 'STATEMENT_LANGS=%s\n' "$1"; } > "$C/conf"; }
+conf
+for u in sl.admin sl.cjudge sl.judge time01; do
+  fx_user "$C" "$u" p "Nome $u"
+  printf 'CONTEST=sl\nLOGIN=%s\nUSERFULLNAME=X\nLOGINAT=1\n' "$u" > "$SESS/$u"
+done
+call /contest/problems GET time01 "contest=sl"
+ck "sem conf = AUTOMÁTICO: envelope [pt,en] (o que existe), default en (LOCALE), A tem [pt,en]" '[[ "$(jq -c ".statement_langs, .default_statement_lang, .problems[0].statement_langs" <<<"$BODY" | paste -sd" ")" == "[\"pt\",\"en\"] \"en\" [\"pt\",\"en\"]" ]]'
+ck "PT materializado do banco"           '[[ -s "$C/enunciados/col#pa.html" ]]'
+ck "…e a tradução EN também (automático)" '[[ -s "$C/enunciados/col#pa.en.html" ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=en"
+ck "automático: lang=en serve o EN"      '[[ "$(code)" == "200 OK" ]] && grep -q "Read N" <<<"$BODY"'
+call /contest/admin/statement-langs GET sl.admin "contest=sl"
+ck "GET sem conf: mode auto, langs = allowlist inteira" '[[ "$(jq -c ".mode, .langs" <<<"$BODY" | paste -sd" ")" == "\"auto\" [\"pt\",\"en\",\"es\"]" ]]'
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"langs":["pt"]}'
+ck "lista só pt: conf STATEMENT_LANGS=pt (explícito)" '[[ "$(code)" == "200 OK" ]] && grep -q "^STATEMENT_LANGS=pt$" "$C/conf" && [[ "$(jq -r .mode <<<"$BODY")" == list ]]'
+call /contest/problems GET time01 "contest=sl"
+ck "só pt: envelope [pt], A só [pt]"     '[[ "$(jq -c ".statement_langs, .problems[0].statement_langs" <<<"$BODY" | paste -sd" ")" == "[\"pt\"] [\"pt\"]" ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=en"
+ck "en fora da lista oferecida = 404"    '[[ "$(code)" == "404 Not Found" ]]'
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"mode":"auto"}'
+ck "mode auto: apaga a var do conf"      '[[ "$(code)" == "200 OK" ]] && ! grep -q STATEMENT_LANGS "$C/conf" && [[ "$(jq -c ".mode, .langs" <<<"$BODY" | paste -sd" ")" == "\"auto\" [\"pt\",\"en\",\"es\"]" ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=en"
+ck "auto de novo: en volta a ser servido" '[[ "$(code)" == "200 OK" ]]'
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"langs":[]}'
+ck "lista vazia = só pt"                 '[[ "$(code)" == "200 OK" ]] && grep -q "^STATEMENT_LANGS=pt$" "$C/conf"'
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"nada":1}'
+ck "sem mode nem langs = 400"            '[[ "$(code)" == "400 Bad Request" ]]'
+call /contest/admin/statement-langs POST sl.judge "contest=sl" '{"langs":["pt","en"]}'
+ck ".judge não define (403)"             '[[ "$(code)" == "403 Forbidden" ]]'
+call /contest/admin/statement-langs POST sl.cjudge "contest=sl" '{"langs":["pt","en","es"]}'
+ck ".cjudge define (200)"                '[[ "$(code)" == "200 OK" ]] && grep -q "STATEMENT_LANGS=pt\\\\ en\\\\ es" "$C/conf"'
+ck "e a tradução EN foi materializada"   '[[ -s "$C/enunciados/col#pa.en.html" ]] && grep -q "Read N" "$C/enunciados/col#pa.en.html"'
+call /contest/admin/statement-langs GET sl.admin "contest=sl"
+ck "GET: langs, default=en (LOCALE), available A.en, sem A.es" '[[ "$(jq -c ".langs, .default, .available.A.en, (.available.A.es // false)" <<<"$BODY" | paste -sd" ")" == "[\"pt\",\"en\",\"es\"] \"en\" true false" ]]'
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"langs":["pt","fr"]}'
+ck "idioma fora da allowlist = 422"      '[[ "$(code)" == "422 Unprocessable Entity" ]]'
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"langs":"pt"}'
+ck "langs não-lista = 400"               '[[ "$(code)" == "400 Bad Request" ]]'
+
+echo "== /contest/problems e /contest/statement por idioma =="
+call /contest/problems GET time01 "contest=sl"
+ck "lista: oferecidos [pt,en,es], default en, A tem [pt,en] (es sem arquivo)" '[[ "$(jq -c ".statement_langs, .default_statement_lang, .problems[0].statement_langs" <<<"$BODY" | paste -sd" ")" == "[\"pt\",\"en\",\"es\"] \"en\" [\"pt\",\"en\"]" ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=en"
+ck "lang=en: 200 com o texto EN e X-MOJ-Statement-Lang en" '[[ "$(code)" == "200 OK" ]] && grep -q "Read N and print N" <<<"$BODY" && [[ "$(hdr X-MOJ-Statement-Lang)" == en ]]'
+call /contest/statement GET time01 "contest=sl&problem=A"
+ck "sem lang: usa o default do contest (en)" 'grep -q "Read N and print N" <<<"$BODY"'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=pt"
+ck "lang=pt: texto PT"                   'grep -q "Leia N e imprima N" <<<"$BODY" && [[ "$(hdr X-MOJ-Statement-Lang)" == pt ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=es"
+ck "lang=es (oferecido, sem arquivo): cai no PT, header pt" '[[ "$(code)" == "200 OK" ]] && grep -q "Leia N" <<<"$BODY" && [[ "$(hdr X-MOJ-Statement-Lang)" == pt ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=xx"
+ck "lang=xx: 400 lang_invalid"           '[[ "$(code)" == "400 Bad Request" ]] && grep -q lang_invalid <<<"$BODY"'
+call /contest/statement GET sl.judge "contest=sl&problem=A&lang=en"
+ck "juiz também pega o EN"               'grep -q "Read N and print N" <<<"$BODY"'
+
+echo "== /contest/samples: o mesmo conjunto do enunciado, pelo gate do enunciado =="
+call /contest/samples GET time01 "contest=sl&problem=A"
+ck "time: 200 com 4 samples e bytes exatos" '[[ "$(code)" == "200 OK" && "$(jq -c "[.problem, .problem_id, (.samples|length), .samples[0].input]" <<<"$BODY")" == "[\"A\",\"col#pa\",4,\"3\\n\"]" ]]'
+ck "só name/input/output (nada a mais)"    '[[ "$(jq -c ".samples[0]|keys" <<<"$BODY")" == "[\"input\",\"name\",\"output\"]" ]]'
+ck "too_big repassado sem bytes"           '[[ "$(jq -c ".samples[3]|keys" <<<"$BODY")" == "[\"name\",\"size\",\"too_big\"]" ]]'
+ck "nada de oculto"                        '! grep -q SEGREDO <<<"$BODY"'
+call /contest/samples GET time01 "contest=sl&problem=col%23pa"
+ck "aceita o problem_id"                   '[[ "$(jq -r ".samples|length" <<<"$BODY")" == 4 ]]'
+call /contest/samples GET time01 "contest=sl&problem=Z"
+ck "letra inexistente: 404"                '[[ "$(code)" == "404 Not Found" ]]'
+call /contest/samples GET time01 "contest=sl&problem=../../etc/passwd"
+ck "traversal: 404"                        '[[ "$(code)" == "404 Not Found" ]]'
+call /contest/samples GET sl.judge "contest=sl&problem=A"
+ck "juiz também pega"                      '[[ "$(code)" == "200 OK" ]]'
+
+echo "== SAMPLE=no: sem exemplo para baixar (has_samples:false, samples vazio) =="
+call /contest/problems GET time01 "contest=sl"
+ck "com sample*: has_samples true"         '[[ "$(jq -r ".problems[0].has_samples" <<<"$BODY")" == true ]]'
+cp -p "$J" "$J.bak"; printf 'SAMPLE=no\n' >> "$P/conf"
+TREINO_JSONS="$FIX/treino/var/jsons" MOJ_TL_STORE="$RUN/tl" bash "$MOJTOOLS_DIR/gen-problem-json.sh" "$P" "col#pa" >/dev/null 2>&1
+rm -f "$C"/var/problems-cache.*; touch "$C/var/.problems-dirty"
+call /contest/problems GET time01 "contest=sl"
+ck "SAMPLE=no: has_samples false"          '[[ "$(jq -r ".problems[0].has_samples" <<<"$BODY")" == false ]]'
+call /contest/samples GET time01 "contest=sl&problem=A"
+ck "SAMPLE=no: /contest/samples 200 e vazio (nem os sample* que existem)" '[[ "$(code)" == "200 OK" && "$(jq -c ".samples" <<<"$BODY")" == "[]" ]]'
+PT2="$(jq -r .statement_html_b64 "$J" | base64 -d)"
+ck "SAMPLE=no: enunciado servido sem a seção de exemplos" '! grep -q "<section class=\"moj-exemplos" <<<"$PT2" && ! grep -q "<h2>Exemplos</h2>" <<<"$PT2" && grep -q "Leia N e imprima N" <<<"$PT2"'
+sed -i '/^SAMPLE=/d' "$P/conf"; mv -f "$J.bak" "$J"; ln -f "$J" "$FIX/treino/var/jsons-private/col#pa.json"; rm -f "$C"/var/problems-cache.*; touch "$C/var/.problems-dirty"
+
+echo "== admin envia HTML PRÓPRIO em ES; refresh limpa todos os idiomas =="
+call /contest/admin/problems POST sl.admin "contest=sl" "{\"action\":\"statement\",\"letter\":\"A\",\"lang\":\"es\",\"html_b64\":\"$(printf '<html><body><p>Lea N. PROPIO</p></body></html>' | base64 -w0)\"}"
+ck "upload es: 200 e arquivo <skey>.es.html" '[[ "$(code)" == "200 OK" && -s "$C/enunciados/col#pa.es.html" && "$(jq -r .lang <<<"$BODY")" == es ]]'
+call /contest/problems GET time01 "contest=sl"
+ck "lista atualizada: A agora tem [pt,en,es]" '[[ "$(jq -c ".problems[0].statement_langs" <<<"$BODY")" == "[\"pt\",\"en\",\"es\"]" ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=es"
+ck "lang=es serve o próprio"             'grep -q "PROPIO" <<<"$BODY" && [[ "$(hdr X-MOJ-Statement-Lang)" == es ]]'
+call /contest/admin/problems POST sl.admin "contest=sl" '{"action":"statement","letter":"A","lang":"zz","html_b64":"eA=="}'
+ck "upload com lang inválido = 400"      '[[ "$(code)" == "400 Bad Request" ]]'
+call /contest/admin/problems POST sl.admin "contest=sl" '{"action":"statement","letter":"A","lang":"es","remove_html":true}'
+ck "remove_html es apaga só o ES"        '[[ ! -f "$C/enunciados/col#pa.es.html" && -f "$C/enunciados/col#pa.en.html" && -f "$C/enunciados/col#pa.html" ]]'
+call /contest/admin/problems POST sl.admin "contest=sl" '{"action":"statement","letter":"A","refresh":true}'
+ck "refresh apaga PT e traduções (volta a buscar do banco)" '[[ ! -f "$C/enunciados/col#pa.html" && ! -f "$C/enunciados/col#pa.en.html" ]]'
+call /contest/problems GET time01 "contest=sl"
+ck "…e a lista re-materializa PT e EN do banco" '[[ -s "$C/enunciados/col#pa.html" && -s "$C/enunciados/col#pa.en.html" && "$(jq -c ".problems[0].statement_langs" <<<"$BODY")" == "[\"pt\",\"en\"]" ]]'
+
+echo "== tirar o idioma da lista fecha a porta na hora (cache invalidado) =="
+call /contest/admin/statement-langs POST sl.admin "contest=sl" '{"langs":["pt"]}'
+ck "só pt: conf STATEMENT_LANGS=pt"      'grep -q "^STATEMENT_LANGS=pt$" "$C/conf"'
+call /contest/problems GET time01 "contest=sl"
+ck "lista: default pt, A só [pt]"        '[[ "$(jq -c ".default_statement_lang, .problems[0].statement_langs" <<<"$BODY" | paste -sd" ")" == "\"pt\" [\"pt\"]" ]]'
+call /contest/statement GET time01 "contest=sl&problem=A&lang=en"
+ck "lang=en agora 404 (arquivo existe, mas não é oferecido)" '[[ "$(code)" == "404 Not Found" ]]'
+
+echo "== settings GET expõe statement_langs =="
+conf "pt\\ en"
+call /contest/admin/settings GET sl.admin "contest=sl"
+ck "settings: statement_langs [pt,en], mode list, default en" '[[ "$(jq -c ".statement_langs, .statement_langs_mode, .default_statement_lang" <<<"$BODY" | paste -sd" ")" == "[\"pt\",\"en\"] \"list\" \"en\"" ]]'
+
+# O ES sai do pacote e o json é regerado SÍNCRONO: o reindex em background das edições acima
+# podia (ou não) ter chegado até aqui — era o que fazia "caderno ES cai no PT" oscilar (16/09).
+call /problems/edit POST aut "" '{"id":"col#pa","translations":{"es":null}}'
+rm -f "$C/enunciados/col#pa.es.html"
+TREINO_JSONS="$FIX/treino/var/jsons" MOJ_TL_STORE="$RUN/tl" bash "$MOJTOOLS_DIR/gen-problem-json.sh" "$P" "col#pa" >/dev/null 2>&1
+echo "== documentos: caderno/editorial no idioma (HTML, sem soffice) =="
+export _DIR="$ROOT/api/v1" SESSION_LOGIN=sl.admin
+source "$ROOT/api/v1/lib/common.sh" 2>/dev/null || true
+source "$ROOT/api/v1/lib/contest-create.sh" 2>/dev/null || true
+source "$ROOT/api/v1/lib/tl-store.sh" 2>/dev/null || true
+source "$ROOT/api/v1/lib/contest-docs.sh"
+HEN="$(_doc_html_contest sl en 2>/dev/null)"; HES="$(_doc_html_contest sl es 2>/dev/null)"; HPT="$(_doc_html_contest sl pt 2>/dev/null)"
+ck "caderno EN: texto EN + título Echo"  'grep -q "Read N and print N" <<<"$HEN" && grep -q "Echo" <<<"$HEN"'
+ck "caderno ES (sem tradução): cai no PT e título PT" 'grep -q "Leia N e imprima N" <<<"$HES" && ! grep -q "Read N" <<<"$HES"'
+ck "caderno PT: PT"                      'grep -q "Leia N e imprima N" <<<"$HPT" && ! grep -q "Read N" <<<"$HPT"'
+EEN="$(_doc_html_editorial sl en 2>/dev/null)"; EES="$(_doc_html_editorial sl es 2>/dev/null)"
+ck "editorial EN usa solucao.en.md"      'grep -q "Print it" <<<"$EEN" && ! grep -q "Imprima" <<<"$EEN"'
+ck "editorial ES cai no PT"              'grep -q "Imprima" <<<"$EES"'
+
+echo ""; echo "RESULT: $pass passed, $fail failed"; exit $(( fail>0?1:0 ))

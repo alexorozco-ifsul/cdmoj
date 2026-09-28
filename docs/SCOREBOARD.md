@@ -93,6 +93,13 @@ podem aparecer no placar público** e os times regulares não podem nem saber qu
 próprios convidados **veem todos**. Depois que a organização **libera os resultados**, todos
 aparecem juntos. Isso é uma **coorte com política**, não um caso especial no código.
 
+**Numeração dos convidados** (issue #25, 2026-09-15): por padrão o convidado sai com `–` no
+lugar da posição. Com `GUEST_NUMBERING=1` no `conf` (Pessoas › Coortes › "Numerar os
+convidados numa sequência própria") a 1ª linha do TXT da visão com convidados vira `icpc s g`, e
+o placar, a revelação e o relatório numeram os convidados na sequência DELES (mesma regra de
+empate), em itálico e com o tooltip "posição entre os convidados". A numeração oficial não
+muda. A cerimônia numerava convidado como oficial (bug): agora segue a mesma regra.
+
 `contests/<c>/cohorts.json` (ausente = comportamento clássico, custo zero):
 
 ```json
@@ -259,6 +266,16 @@ Geradores existentes (testados contra dados reais, batem com os placares legados
 `updatescore-icpc.sh`, `updatescore-obi.sh`, `updatescore-treino.sh`, `updatescore-heuristic.sh`,
 `updatescore-outro.sh`.
 
+## Módulos da web e o TXT: sem cache velho depois do deploy
+
+O TXT do placar mudou de formato em 30/08 (células em segundos, 1ª linha `icpc s`). O JS que
+lê o TXT mudou junto — mas o navegador de quem já estava no placar guardou o `score-icpc.js`
+antigo e mostrou os segundos como minutos ("1/17029", issue #22). Regra: o nginx serve TODO o
+estático de `web/` com `Cache-Control: no-cache, must-revalidate` (`server/etc/nginx/
+moj-app.conf.in`, `location /`): o navegador revalida a cada uso (304 quando nada mudou) e um
+deploy nunca deixa módulo velho falando com TXT novo. Depois de mudar o `.conf.in`, reinstale
+o nginx (`server/bin/install-nginx.sh` ou `~/nginx-proxy/proxy.sh reload`).
+
 ## Layout: o placar NUNCA rola para o lado
 
 Regra de produto: todas as colunas têm de ser visíveis em qualquer tela — pode quebrar linha,
@@ -291,6 +308,13 @@ revelação** e o placar do **relatório offline**, que inlina o mesmo CSS):
   células vazias, gastando largura sem informar a 1ª desempatadora.
 - O embrulho do placar é **`.board-wrap`** (sem `overflow-x`), nunca `.chart-wrap`/`.tblwrap` —
   esses rolam e são para as outras tabelas.
+
+### A estrela ★ não ocupa largura
+
+A ★ de first-to-solve é `position:absolute` no canto da célula (`ui.css`, `td.cell .fts`).
+Antes era um `span` inline antes do ponto do balão e do número: em coluna fixa de ~3,6% os três
+não cabiam e o número vazava para a coluna vizinha (issue #24). O número (`.pv`) continua
+inteiro e sem quebra; no celular a ★ some e a informação fica no `title`.
 
 ## Recursos do placar (web/contest/score/)
 

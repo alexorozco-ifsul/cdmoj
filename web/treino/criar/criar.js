@@ -5,6 +5,7 @@
 // (opções/visual) são cacheados em ctx.editors e sobrevivem à navegação; aplicar
 // template/duplicar reseta o cache (ctx.resetEditors) p/ recriá-los do draft novo.
 import { apiGet, apiPost, getToken } from '/shared/api.js';
+import { contestLoginHref } from '/shared/contest-guard.js';
 import { el, renderAuthArea } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { downloadCsv } from '/shared/users-batch.js';
@@ -15,6 +16,7 @@ import { makeStepUsuarios } from './steps/usuarios.js';
 import { makeStepAdmin } from './steps/admin.js';
 import { makeStepOpcoes } from './steps/opcoes.js';
 import { makeStepVisual } from './steps/visual.js';
+import { makeStepModulos } from './steps/modulos.js';
 import { makeStepRevisao } from './steps/revisao.js';
 
 const app = document.getElementById('app');
@@ -37,7 +39,8 @@ const STEPS = [
   { id: 'admin', label: T('4 · Admin', '4 · Admin'), make: makeStepAdmin },
   { id: 'opcoes', label: T('5 · Opções', '5 · Options'), make: makeStepOpcoes },
   { id: 'visual', label: T('6 · Visual', '6 · Appearance'), make: makeStepVisual },
-  { id: 'revisao', label: T('7 · Revisão', '7 · Review'), make: makeStepRevisao },
+  { id: 'modulos', label: T('7 · Módulos', '7 · Modules'), make: makeStepModulos },
+  { id: 'revisao', label: T('8 · Revisão', '8 · Review'), make: makeStepRevisao },
 ];
 
 function newDraft(perm) {
@@ -54,6 +57,9 @@ function newDraft(perm) {
     // opts alimenta o settings-editor (shape do GET /contest/admin/settings + priority do create)
     opts: { locale: 'pt', login_enabled: true, priority: 'lista-publica' },
     visual: { colors: {}, regions: [], teams_meta: [] },
+    // módulos ligados (ids do catálogo) + seções cruas herdadas de template/export (ua_gate,
+    // cohorts, rounds…): o wizard não tem editor p/ elas, mas não pode PERDÊ-LAS no create
+    modules: [], moduleSections: {},
   };
 }
 
@@ -85,6 +91,8 @@ function showResult(res) {
         : [T(' · senha: ', ' · password: '), el('span', { class: 'cred' }, res.admin_password)]));
   if (res._secret) card.append(el('div', { class: 'warn-box', style: 'margin:.4rem 0' },
     T('🕵️ SUPER SECRETO: o contest NÃO aparece na home/arquivo/status e o placar exige login — distribua o link ', '🕵️ SUPER SECRET: the contest does NOT appear on home/archive/status and the scoreboard requires login — share the link '), el('b', {}, res.url), T(' aos participantes.', ' with participants.')));
+  card.append(el('p', { class: 'small muted' }, T('É com essa conta que se entra no PAINEL do contest (o seu login comum entra como competidor).',
+    'That is the account that opens the contest ADMIN panel (your ordinary login enters as a competitor).')));
   if (res.users_from) card.append(el('p', { class: 'small muted' }, T('Usuários: compartilhados do "', 'Users: shared from "') + res.users_from + T('" (login com a conta do Treino Livre).', '" (log in with your Free Training account).')));
   if (res.users && res.users.length > 1) {
     card.append(el('p', {}, res.users.length + T(' contas criadas. ', ' accounts created. '),
@@ -92,7 +100,7 @@ function showResult(res) {
   }
   card.append(el('div', { class: 'row', style: 'margin-top:.7rem' },
     el('a', { class: 'btn', href: res.url }, T('Abrir contest →', 'Open contest →')),
-    el('a', { class: 'btn ghost', href: '/contest/admin/?c=' + encodeURIComponent(res.contest_id) }, T('⚙️ Admin do contest', '⚙️ Contest admin')),
+    el('a', { class: 'btn ghost', href: contestLoginHref(res.contest_id, '/contest/admin/?c=' + encodeURIComponent(res.contest_id)) }, T('⚙️ Admin do contest', '⚙️ Contest admin')),
     el('a', { class: 'btn ghost', href: res.scoreboard_url }, T('Placar', 'Scoreboard')),
     el('a', { class: 'btn ghost', href: '/treino/criar/' }, T('Criar outro', 'Create another'))));
   app.append(card);
@@ -164,13 +172,10 @@ async function boot() {
         ...((p.languages || []).length ? { languages: p.languages } : {}),
         ...((p.judges || []).length ? { judges: p.judges } : {}),
       })),
-      ...(Object.keys(colors).length ? { colors } : {}),
-      ...(regionsV.length ? { regions: regionsV } : {}),
-      ...(teamsV.length ? { teams_meta: teamsV } : {}),
+      ...buildModules(d, colors, regionsV, teamsV),
       locale: o.locale, login_enabled: o.login_enabled,
       ...(o.login_start ? { login_start: o.login_start } : {}),
       ...(o.freeze ? { freeze: o.freeze } : {}),
-      showcode: !!o.show_code,
       show_log: o.show_log !== false, show_editor: o.show_editor !== false, show_tl: o.show_tl !== false,
       allow_backup: o.allow_backup !== false, allow_print: o.allow_print !== false,
       score_anon: !!o.score_anon, manual_verdict: !!o.manual_verdict,
@@ -184,6 +189,37 @@ async function boot() {
     };
   }
 
+  // spec UNIFICADO: `modules` = { id: true | {on, …seção…} }. As seções cruas vindas de
+  // template/export são preservadas; o passo Visual sobrepõe cores/sedes/escolas nas seções
+  // `baloes`/`sedes`; a caixa do passo Módulos decide o `on`. Nada mais vai no topo.
+  function buildModules(d, colors, regionsV, teamsV) {
+    const on = new Set(d.modules || []);
+    const m = {};
+    Object.entries(d.moduleSections || {}).forEach(([id, sec]) => { m[id] = (sec && typeof sec === 'object') ? { ...sec } : {}; });
+    on.forEach((id) => { if (!m[id]) m[id] = {}; });
+    if (Object.keys(colors).length) { m.baloes = { ...(m.baloes || {}), colors }; } else if (m.baloes) delete m.baloes.colors;
+    if (regionsV.length) { m.sedes = { ...(m.sedes || {}), regions: regionsV }; } else if (m.sedes) delete m.sedes.regions;
+    if (teamsV.length) { m.sedes = { ...(m.sedes || {}), teams_meta: teamsV }; } else if (m.sedes) delete m.sedes.teams_meta;
+    Object.keys(m).forEach((id) => { m[id].on = on.has(id); });
+    return Object.keys(m).length ? { modules: m } : {};
+  }
+  // do spec (template/export) p/ o draft: ids ligados + seções cruas + o visual (sedes/baloes
+  // ou, compat, colors/regions/teams_meta no topo)
+  function modulesFromSpec(spec) {
+    const ms = (spec && spec.modules && typeof spec.modules === 'object') ? spec.modules : {};
+    const on = Object.entries(ms).filter(([, v]) => v === true || (v && typeof v === 'object' && v.on !== false)).map(([k]) => k);
+    const sections = {};
+    Object.entries(ms).forEach(([k, v]) => { if (v && typeof v === 'object') { const { on: _on, colors, regions, teams_meta, ...rest } = v; sections[k] = rest; } });
+    if ((spec.regions || []).length || (spec.teams_meta || []).length) on.push('sedes');
+    if (Object.keys(spec.colors || {}).length) on.push('baloes');
+    const visual = {
+      colors: (ms.baloes && ms.baloes.colors) || spec.colors || {},
+      regions: (ms.sedes && ms.sedes.regions) || spec.regions || [],
+      teams_meta: (ms.sedes && ms.sedes.teams_meta) || spec.teams_meta || [],
+    };
+    return { on: [...new Set(on)], sections, visual };
+  }
+
   // aplica um TEMPLATE salvo (spec RELATIVO: duration/login_lead/freeze_before_end)
   function applyTemplate(spec, label) {
     const d = ctx.draft;
@@ -195,12 +231,10 @@ async function boot() {
     ['priority', 'locale', 'login_enabled', 'show_log', 'show_editor', 'show_tl', 'allow_backup',
       'allow_print', 'score_anon', 'manual_verdict', 'allow_late', 'login_ua_substring',
       'score_full_users', 'languages', 'judges', 'penalty_minutes', 'penalty_verdicts'].forEach((k) => { if (spec[k] !== undefined) o[k] = spec[k]; });
-    if (spec.showcode !== undefined) o.show_code = spec.showcode;
-    if (spec.show_code !== undefined) o.show_code = spec.show_code;
     if (spec.login_lead) o.login_start = st - spec.login_lead;
     if (spec.freeze_before_end) o.freeze = d.end - spec.freeze_before_end;
     d.opts = o;
-    d.visual = { colors: spec.colors || {}, regions: spec.regions || [], teams_meta: spec.teams_meta || [] };
+    { const mm = modulesFromSpec(spec); d.visual = mm.visual; d.modules = mm.on; d.moduleSections = mm.sections; }
     if (spec.problems && spec.problems.length) d.problems = spec.problems.map(fromSpecProblem);
     ctx.resetEditors();
   }
@@ -218,11 +252,10 @@ async function boot() {
     ['priority', 'locale', 'login_enabled', 'show_log', 'show_editor', 'show_tl', 'allow_backup',
       'allow_print', 'score_anon', 'manual_verdict', 'allow_late', 'login_ua_substring',
       'score_full_users', 'languages', 'judges', 'penalty_minutes', 'penalty_verdicts'].forEach((k) => { if (spec[k] !== undefined) o[k] = spec[k]; });
-    if (spec.showcode !== undefined) o.show_code = spec.showcode;
     if (spec.login_start && spec.start && spec.start > spec.login_start) o.login_start = st - (spec.start - spec.login_start);
     if (spec.freeze && spec.end && spec.end > spec.freeze) o.freeze = d.end - (spec.end - spec.freeze);
     d.opts = o;
-    d.visual = { colors: spec.colors || {}, regions: spec.regions || [], teams_meta: spec.teams_meta || [] };
+    { const mm = modulesFromSpec(spec); d.visual = mm.visual; d.modules = mm.on; d.moduleSections = mm.sections; }
     d.problems = (spec.problems || []).map(fromSpecProblem);
     if (spec.users_from) { d.userMode = 'shared'; d.usersFrom = spec.users_from; }
     ctx.resetEditors();

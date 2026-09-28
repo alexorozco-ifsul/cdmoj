@@ -7,12 +7,14 @@ require_contest "$contest"
 require_auth_contest "$contest"
 is_admin || fail 403 "Apenas o admin do contest" "admin_required"
 source "$_LIBDIR/contest-create.sh"
+source "$_LIBDIR/contest-gate.sh"
 
 if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
   CONTEST_NAME=""; CONTEST_START=0; CONTEST_END=0; LOGIN_START_TIME=""; LOGIN_ENABLED=""; CONTEST_TZ=""
-  FREEZE_TIME=""; LOCALE=""; SHOWCODE=""; SHOWLOG=""; SHOWEDITOR=""; ALLOWLATEUSER=""; LOGIN_UA_SUBSTRING=""; SCORE_ANON=""; SHOWTL=""; LANGUAGES=""; SCORE_FULL_USERS=""; BACKUP=""; PRINT=""; MANUAL_VERDICT=""; SECRET=""; CONTEST_JUDGES=""; BALLOONS_DURING_FREEZE=""; SCORE_BALLOON_STYLE=""
-  PENALTY_MINUTES=""; PENALTY_VERDICTS="__unset"
+  FREEZE_TIME=""; LOCALE=""; SHOWLOG=""; SHOWEDITOR=""; ALLOWLATEUSER=""; LOGIN_UA_SUBSTRING=""; SCORE_ANON=""; SHOWTL=""; LANGUAGES=""; SCORE_FULL_USERS=""; BACKUP=""; PRINT=""; MANUAL_VERDICT=""; SECRET=""; CONTEST_JUDGES=""; BALLOONS_DURING_FREEZE=""; SCORE_BALLOON_STYLE=""
+  PENALTY_MINUTES=""; PENALTY_VERDICTS="__unset"; GUEST_NUMBERING=""; STATEMENT_LANGS=""
   load_contest_conf "$contest"
+  source "$_LIBDIR/contest-statement.sh"
   langs_json='[]'; [[ -n "$LANGUAGES" ]] && langs_json="$(printf '%s\n' $LANGUAGES | grep -v '^$' | jq -R . | jq -cs .)"
   jdg_json='[]'; [[ -n "$CONTEST_JUDGES" ]] && jdg_json="$(printf '%s\n' $CONTEST_JUDGES | grep -v '^$' | jq -R . | jq -cs .)"
   sfu_json='[]'; [[ -n "$SCORE_FULL_USERS" ]] && sfu_json="$(printf '%s\n' $SCORE_FULL_USERS | grep -v '^$' | jq -R . | jq -cs .)"
@@ -24,10 +26,17 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
   source "$_LIBDIR/print.sh"; BLN_FROZEN="$(pr_balloons_frozen_count "$contest")"
   BLN_FROZEN="${BLN_FROZEN//[^0-9]/}"; BLN_FROZEN="${BLN_FROZEN:-0}"
   ok_json '{name:$nm, start:$st, end:$en, login_start:$ls, login_enabled:$le, freeze:$fz, locale:$loc, tz:$tz,
-            show_code:$sc, show_log:$sl, show_editor:$se, allow_late:$al, login_ua_substring:$ua, score_anon:$sa,
+            show_log:$sl, show_editor:$se, allow_late:$al, login_ua_substring:$ua, score_anon:$sa,
             show_tl:$stl, languages:$langs, judges:$jdg, score_full_users:$sfu, allow_backup:$ab, allow_print:$ap, manual_verdict:$mv,
             secret:$sec, mode:$mode, penalty_minutes:$pm, penalty_verdicts:$pvd, review_judges:$rj,
-            balloons_during_freeze:$bdf, balloons_frozen:$bfz, balloon_style:$bsty}' \
+            balloons_during_freeze:$bdf, balloons_frozen:$bfz, balloon_style:$bsty, modules:$mods,
+            freeze_release_at:$fra, guest_numbering:$gnum, statement_langs:$slangs, statement_langs_mode:$smode, default_statement_lang:$sdef}' \
+    --arg smode "$(cs_mode "$contest")" \
+    --argjson slangs "$(jq -cn --arg s "$(cs_norm "$STATEMENT_LANGS")" '$s|split(" ")')" \
+    --arg sdef "$(cs_default "$contest" "$(cs_norm "$STATEMENT_LANGS")")" \
+    --argjson gnum "$([[ "$GUEST_NUMBERING" == 1 ]] && echo true || echo false)" \
+    --argjson fra "$(freeze_release_at "$contest")" \
+    --argjson mods "$(mod_list_json "$contest")" \
     --arg bsty "$([[ "$SCORE_BALLOON_STYLE" == fill ]] && echo fill || echo icon)" \
     --argjson bdf "$([[ "$BALLOONS_DURING_FREEZE" == 1 ]] && echo true || echo false)" \
     --argjson bfz "$BLN_FROZEN" \
@@ -38,7 +47,6 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
     --argjson ls "${LOGIN_START_TIME:-0}" --argjson fz "${FREEZE_TIME:-0}" --arg loc "${LOCALE:-pt}" \
     --arg tz "$(contest_tz "$contest")" \
     --argjson le "$([[ "$LOGIN_ENABLED" == n ]] && echo false || echo true)" \
-    --argjson sc "$([[ "$SHOWCODE" == 1 ]] && echo true || echo false)" \
     --argjson sl "$([[ "$(showlog_effective "$contest")" == 0 ]] && echo false || echo true)" \
     --argjson se "$([[ "$SHOWEDITOR" == 0 ]] && echo false || echo true)" \
     --argjson al "$([[ "$ALLOWLATEUSER" == y ]] && echo true || echo false)" \
@@ -72,7 +80,11 @@ SCORE_WAS="$(score_snap)"
 if has name; then v="$(jq -r '.name' <<<"$body")"; { [[ -n "$v" ]] && (( ${#v} <= 160 )); } || fail 422 "nome inválido" "name_invalid"; setvar CONTEST_NAME "$v"; fi
 for pair in start:CONTEST_START end:CONTEST_END login_start:LOGIN_START_TIME freeze:FREEZE_TIME; do
   k="${pair%%:*}"; var="${pair#*:}"
-  has "$k" && { v="$(jq -r ".$k" <<<"$body")"; [[ "$v" =~ ^[0-9]+$ ]] || fail 422 "$k inválido" "int_invalid"; setvar "$var" "$v"; }
+  has "$k" && { v="$(jq -r ".$k" <<<"$body")"; [[ "$v" =~ ^[0-9]+$ ]] || fail 422 "$k inválido" "int_invalid"
+    # freeze -> 0 = DESCONGELAR (cerimônia, Central), ou freeze em vigor empurrado p/ o futuro:
+    # só a partir do fim geral + 1 min (lib/contest-gate.sh, comparação numérica)
+    [[ "$k" == freeze ]] && freeze_change_guard "$contest" "$v"
+    setvar "$var" "$v"; }
 done
 has locale && { v="$(jq -r '.locale' <<<"$body")"; [[ "$v" =~ ^(pt|en)$ ]] || fail 422 "locale inválido" "locale_invalid"; setvar LOCALE "$v"; }
 # FUSO da prova: governa TODA hora que o servidor escreve p/ gente sobre este contest (DM do
@@ -105,7 +117,10 @@ bset(){ # <jsonkey> <VAR> <on-value-p/-positivos>
     case "$2" in LOGIN_ENABLED) setvar LOGIN_ENABLED n;; SHOWLOG) setvar SHOWLOG 0;; SHOWEDITOR) setvar SHOWEDITOR 0;; SHOWTL) setvar SHOWTL 0;; BACKUP) setvar BACKUP 0;; PRINT) setvar PRINT 0;; *) delvar "$2";; esac
   fi
 }
-bset show_code   SHOWCODE 1
+# `show_code` (SHOWCODE) foi REMOVIDO em 2026-09-18: fonte/report/resumo alheios = só juiz/admin. A chave
+# é ACEITA E IGNORADA (cliente/CLI antigos mandam o formulário inteiro — 422 quebraria o Salvar) e a
+# linha morta sai do conf no primeiro save.
+grep -q '^SHOWCODE=' "$CONTESTSDIR/$contest/conf" 2>/dev/null && delvar SHOWCODE
 bset allow_late  ALLOWLATEUSER y
 bset score_anon  SCORE_ANON 1
 bset login_enabled LOGIN_ENABLED _
@@ -117,6 +132,12 @@ bset allow_print PRINT _
 bset manual_verdict MANUAL_VERDICT 1
 bset secret      SECRET 1
 bset balloons_during_freeze BALLOONS_DURING_FREEZE 1
+# convidados (coorte unranked) com NUMERAÇÃO PRÓPRIA no placar (issue #25): a 1ª linha do TXT
+# ganha a flag `g` e o JS/relatório numeram os convidados na sequência deles (C1, C2…), sem
+# tocar na oficial. Muda o TXT ⇒ rebuild forçado.
+GN_WAS="$(conf_value "$contest" GUEST_NUMBERING)"
+bset guest_numbering GUEST_NUMBERING 1
+if has guest_numbering && [[ "$(conf_value "$contest" GUEST_NUMBERING)" != "$GN_WAS" ]]; then score_kick_rebuild "$contest"; fi
 # como o placar pinta a célula resolvida: 'icon' (default, neutro + ponto da cor) | 'fill'
 # (cor do balão no fundo + contorno). Ver docs/SCOREBOARD.md.
 if has balloon_style; then

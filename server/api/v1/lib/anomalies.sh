@@ -68,6 +68,12 @@ an_build(){
       gsub(/["\\]/,"",$2); gsub(/["\\]/,"",$4)
       printf "{\"t\":%d,\"who\":\"%s\",\"action\":\"%s\",\"detail\":\"%s\"}\n", $1, $2, $3, $4 }' \
     "$cdir/var/admin-audit.log" > "$W/sl.json"
+  # --- alertas das MÁQUINAS (webhook do nutellaboot → var/nutella-events.log, JSONL) ---------
+  # pendrive/celular espetado, identidade repetida… já vem em JSON; só o recorte da janela. `mkey` =
+  # "m:" + md5(MAC) = o machine_id do agente novo ⇒ a MESMA chave de máquina do resto do painel.
+  : > "$W/nbev.json"
+  [[ -s "$cdir/var/nutella-events.log" ]] && jq -c --argjson a "$ws" --argjson b "$ce" \
+      'select(type == "object" and (.t // 0) >= $a and (.t // 0) <= $b)' "$cdir/var/nutella-events.log" > "$W/nbev.json" 2>/dev/null
   # --- sessões VIVAS do contest -------------------------------------------------------------
   # Pelo índice (barato: só os tokens deste contest). Sem índice semeado: varredura completa,
   # que semeia (só apêndice, flock -n) — a mesma doutrina do sessions.sh.
@@ -93,15 +99,14 @@ an_build(){
   else
     local sd sfd seed=0; sd="$(_sidx_dir "$c")"; mkdir -p "$sd" 2>/dev/null; chmod 700 "$sd" 2>/dev/null
     if exec {sfd}>"$sd/.seed.lock" 2>/dev/null && flock -n "$sfd" 2>/dev/null; then seed=1; fi
-    ( set +o noglob; shopt -s nullglob
-      for f in "$SESSIONDIR"/*; do
+    ( while IFS= read -r -d '' f; do
         [[ -f "$f" ]] || continue
         CONTEST=""; LOGIN=""; IP=""; UA_B64=""; LOGINAT=""; MKEY=""; source "$f" 2>/dev/null
         [[ "$CONTEST" == "$c" && -n "$LOGIN" ]] || continue
         (( seed )) && valid_id "$LOGIN" && printf '%s\n' "${f##*/}" >> "$sd/$LOGIN" 2>/dev/null
         t="${f##*/}"
         printf '%s\x01%s\x01%s\x01%s\x01%s\x01%s\n' "$LOGIN" "${t:0:8}" "$IP" "$UA_B64" "${LOGINAT:-0}" "$MKEY"
-      done ) > "$W/sess.txt"
+      done < <(sess_files_of "$c") ) > "$W/sess.txt"
     (( seed )) && : > "$sd/.seeded"
     [[ -n "${sfd:-}" ]] && eval "exec ${sfd}>&-"
   fi
@@ -155,7 +160,7 @@ an_build(){
   # --- o jq único ----------------------------------------------------------------------------
   jq -n --slurpfile acc "$W/acc.json" --slurpfile sess "$W/sess.json" --slurpfile sub "$W/sub.json" \
         --slurpfile ev "$W/ev.json" --slurpfile users "$W/users.json" --slurpfile exp "$W/exp.json" \
-        --slurpfile nut "$W/nut.json" --slurpfile sl "$W/sl.json" \
+        --slurpfile nut "$W/nut.json" --slurpfile sl "$W/sl.json" --slurpfile nbev "$W/nbev.json" \
         --arg mode "$mode" --arg single "$single" --arg round "$s" \
         --argjson cs "$cs" --argjson ce "$ce" --argjson ws "$ws" --argjson now "$EPOCHSECONDS" '
     # sem regex nos caminhos quentes: jq recompila a regex a CADA chamada (test ≈ 6 µs, capture
@@ -179,11 +184,23 @@ an_build(){
     | ([ $acc[].ua64, $sess[].ua64, $sub[].ua64, $sub[].sua64 ] | map(select(. != null and . != "")) | unique
        | map({key:., value:(try (. | @base64d) catch "?")}) | from_entries) as $DEC
     | ($DEC | with_entries(.value |= (if contains("MLinux/") then mkey(.) else null end))) as $MKM
-    | def mk($ip; $u64): ($MKM[$u64 // ""] // ("ip:" + $ip));   # (após um def vem um termo, sem "|")
+    # IDENTIDADE ESTÁVEL (NutellaBoot 3, 21/09/2026): o agente novo do mlinux deriva o machine_id do MAC
+    # (md5) e põe o MAC no FIM do UA — `MLinux/<img>/<mid>/<boot>/<mac>`. Um mid visto com MAC é ÚNICO por
+    # placa, então p/ ele a máquina é o `mid` e o boot_id deixa de separar: reboot não vira "trocou de
+    # máquina" nem "2 sessões em 2 máquinas", e dois times na MESMA máquina com um reboot no meio passam a
+    # aparecer em machine_shared (antes eram duas chaves). Sem o MAC (agente antigo, /etc/machine-id
+    # CLONADO em sedes inteiras) nada muda: só o par mid/boot separa. ⚠ A chave GRAVADA (MKEY da sessão,
+    # submit-origin.log, sess_machine_key) segue `m:<mid>/<boot>`: trocar o formato no meio de uma prova
+    # faria a sessão antiga e a requisição nova divergirem — a normalização é só AQUI, na apuração.
+    | ([ $DEC[] | select(contains("MLinux/"))
+         | (capture("MLinux/[^/]+/(?<mid>[0-9a-f]{32})/[0-9]+/[0-9a-f]{2}([-:][0-9a-f]{2}){5}") // null)
+         | select(. != null) | .mid ] | unique | map({key: ., value: true}) | from_entries) as $STB
+    | def idk($k): (if ism($k) then (mid($k) as $m | if ($STB[$m] // false) then ("m:" + $m) else $k end) else $k end);
+      def mk($ip; $u64): ($MKM[$u64 // ""] // ("ip:" + $ip));   # (após um def vem um termo, sem "|")
       ([ $acc[] | select(role(.login) | not)
-         | . + {ua:($DEC[.ua64] // ""), key:(mk(.ip; .ua64)), in:(.t >= $cs)} ]) as $A
+         | . + {ua:($DEC[.ua64] // ""), key:(idk(mk(.ip; .ua64))), in:(.t >= $cs)} ]) as $A
     | ([ $sess[] | select(role(.login) | not)
-         | . + {ua:($DEC[.ua64] // ""), key:(if (.mkey // "") != "" then .mkey else (mk(.ip; .ua64)) end)} ]) as $S
+         | . + {ua:($DEC[.ua64] // ""), key:(idk(if (.mkey // "") != "" then .mkey else (mk(.ip; .ua64)) end))} ]) as $S
     | ([ $sub[] | . + {ua:($DEC[.ua64] // ""), key:(mk(.ip; .ua64))}
          | . + {skey:(if (.smkey // "") != "" then .smkey
                       elif (.sua64 // "") != "" then (mk(.sip; .sua64)) else "" end)} ]) as $B
@@ -240,7 +257,18 @@ an_build(){
            | {kind:"site_lock", severity:(if .action == "site-lock-block" then "bad" else "info" end), at:.t,
               login:(($d.login // "-") | if . == "-" then "" else . end), name:(nm(($d.login // "") | if . == "-" then "" else . end)), region:"",
               machine:("ip:" + ($d.ip // "")),
-              detail:{event:.action, ip:($d.ip // ""), target:($d.target // ""), route:($d.route // ""), until:($d.until // "")}} ]) as $EV
+              detail:{event:.action, ip:($d.ip // ""), target:($d.target // ""), route:($d.route // ""), until:($d.until // "")}} ]
+       + [ $nbev[] | select((.event // "") | startswith("alert.")) | (.event == "alert.raised") as $up
+           | {kind:"machine_alert",
+              severity:(if ($up | not) then "info" elif ((.kind // "") | startswith("usb.")) then "bad" else "warn" end),
+              at:.t, login:(.team // ""), name:(nm(.team // "")), region:(rg(.team // "")), machine:(.mkey // ""),
+              detail:{event:.event, alert:(.kind // ""), text:(.detail // ""), vendor:(.vendor // ""), image:(.image // ""),
+                      mac:(.mac // ""), other_mac:(.other_mac // ""), notified:(.notified // false)}} ]
+       # eventos de MÁQUINA do webhook (≥ 21/09): reiniciou / sumiu / voltou — info, ao lado do time que estava nela
+       + [ $nbev[] | select((.event // "") | startswith("machine."))
+           | {kind:"machine_event", severity:(if .event == "machine.offline" then "warn" else "info" end),
+              at:.t, login:(.team // ""), name:(nm(.team // "")), region:(rg(.team // "")), machine:(.mkey // ""),
+              detail:({event:.event, image:(.image // ""), mac:(.mac // ""), boot_id:(.boot_id // "")} + (.extra // {}))} ]) as $EV
     | (if $active then ($MS + $SH + $SO + $UM + $SW + $SS) else [] end) as $AN
     | (($AN | map(.login) | map(split(", ")[]) | unique) + ($SESS | keys)) as $TL
     # --- última submissão por login ----------------------------------------------------------
@@ -264,7 +292,9 @@ an_build(){
                   switched: ([ $AN[] | select(.kind == "switched") ] | length),
                   revoked: ([ $ev[] | select(.event == "revoke") ] | length), events: ($ev | length),
                   site_lock_blocks: ([ $sl[] | select(.action == "site-lock-block") ] | length),
-                  site_lock_claims: ([ $sl[] | select(.action == "site-lock-claim") ] | length) },
+                  site_lock_claims: ([ $sl[] | select(.action == "site-lock-claim") ] | length),
+                  machine_alerts: ([ $nbev[] | select(.event == "alert.raised") ] | length),
+                  machine_events: ([ $nbev[] | select((.event // "") | startswith("machine.")) ] | length) },
         anomalies: ($AN | sort_by(-.at)),
         events: ($EV | sort_by(-.at) | .[0:500]),
         # sem gate o painel esconde a tabela de times: não mandar 1.900 linhas (1,3 MB na LATAM)

@@ -15,7 +15,8 @@
 #   7. move o arquivo de spool p/ $SPOOLDONEDIR.
 # Arquivos ":rejulgar:" são tratados igual (re-julga + atualiza).
 #
-# Sem inotifywait? cai p/ um loop de polling. --once processa 1 arquivo e sai
+# (inotifywait -m PERSISTENTE via coproc: evento durante o dreno não se perde; re-drain de
+# WATCH_REDRAIN_SECS=10 s é só rede de segurança.) Sem inotifywait? loop de polling. --once processa 1 arquivo e sai
 # (testabilidade). Aditivo e file-based: NÃO altera api/** nem mojtools/**.
 #
 # Uso:
@@ -58,6 +59,8 @@ source "$SERVER_DIR/judge-gw/sched-lib.sh"
 source "$SERVER_DIR/api/v1/lib/users.sh"
 # partição do escritor por hash(login) — a MESMA lib dos handlers (shard_of_login)
 source "$SERVER_DIR/api/v1/lib/spool-shard.sh"
+# o que vai para revisão no veredicto manual — a MESMA regra da API/tela (rr_file_hold)
+source "$SERVER_DIR/api/v1/lib/review-rules.sh"
 
 # ===== SHARDS do escritor (2026-08-30) =====================================================
 # JUDGED_SHARDS=K (>1) particiona o daemon em K workers por hash(login) — o teto serial de
@@ -75,7 +78,9 @@ fi
 # login por KIND: submit/rejulgar = campo 4 do NOME (zero forks); result/setverdict = 1
 # extração do JSON (só no caminho legado — os produtores quentes já gravam no shard certo).
 route_root_file() {
-  local f="$1" base="${f##*/}" login="" k
+  # (dois `local`: numa declaração só, o `${f##*/}` expandiria ANTES de o `f` receber o $1 — só dava certo
+  # porque quem chama tem um `f` com o mesmo arquivo; ver o incidente do agente em 28/09/2026)
+  local f="$1"; local base="${f##*/}" login="" k
   local _f1 _f2 _f3 _f4 _f5
   IFS=: read -r _f1 _f2 _f3 _f4 _f5 _ <<<"$base"
   case "$_f5" in
@@ -110,13 +115,24 @@ sweep_orphan_shards() {
 : "${INTAKE_MODE:=legacy}"
 
 # ---- helpers de write-path (store por-usuário) ----------------------------
-# report_out_path <c> <login> <problem> <id> : caminho absoluto do report .html.
+# mojlog em REPOUSO é GZIP (2026-09-16: 54 GB de report.html em produção, comprime a 29 %).
+# Leitores aceitam .html.gz e .html legado (resolve_submission; submission/log.sh serve com
+# Content-Encoding). Escrita ATÔMICA (tmp+mv): o leitor nunca vê gz pela metade.
+# report_out_path <c> <login> <problem> <id> : caminho absoluto do report .html.gz.
 report_out_path() {
-  printf '%s/mojlog/%s.html' "$(user_dir "$1" "$2")" "$4"
+  printf '%s/mojlog/%s.html.gz' "$(user_dir "$1" "$2")" "$4"
 }
 # report_html_rel <c> <login> <problem> <id> : caminho relativo gravado no result/review json.
 report_html_rel() {
-  printf 'mojlog/%s.html' "$4"
+  printf 'mojlog/%s.html.gz' "$4"
+}
+# write_report_gz <b64> <destino .html.gz> : decodifica e grava comprimido, atômico (vazio = nada).
+write_report_gz() {
+  local b64="$1" out="$2" tmp; [[ -n "$b64" ]] || return 0
+  [[ -d "${out%/*}" ]] || mkdir -p "${out%/*}" 2>/dev/null
+  tmp="${out%/*}/.${out##*/}.tmp.${BASHPID}"
+  if printf '%s' "$b64" | base64 -d 2>/dev/null | gzip -6 > "$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then mv -f "$tmp" "$out"; else rm -f "$tmp"; fi
+  return 0
 }
 # record_verdict <c> <login> <tempo> <problem> <lang> <verdict> <sub_epoch> <id> : finaliza no history.
 record_verdict() {
@@ -263,15 +279,11 @@ intake_enqueue() {
 
 # ===== Veredicto MANUAL (.judge): segura o veredicto computado p/ revisão de 2 juízes ======
 
-# auto_allows <contest> <cid> <lang> <verdict> : 0 se a matriz auto-verdicts.json permite que
-# este (problema, linguagem, veredicto) saia AUTOMÁTICO (lang minúsculo ou '*' = qualquer).
-auto_allows() {
-  local f="$CONTESTSDIR/$1/auto-verdicts.json"; [[ -f "$f" ]] || return 1
-  local lang_lc; lang_lc="$(printf '%s' "$3" | tr '[:upper:]' '[:lower:]')"
-  jq -e --arg p "$2" --arg pp "${2//\//#}" --arg l "$lang_lc" --arg v "$4" '
-    ((.[$p] // .[$pp] // {})) as $m
-    | (($m[$l] // []) + ($m["*"] // [])) | index($v)' "$f" >/dev/null 2>&1
-}
+# auto_allows <contest> <cid> <lang> <verdict> : 0 se este (problema, linguagem, veredicto) sai
+# AUTOMÁTICO. A regra mora em lib/review-rules.sh (rr_file_hold): v2 = OPT-OUT (auto-verdicts.json
+# lista o que vai para REVISÃO; sem arquivo, tudo automático; erro do juiz sempre revisão); v1 (o
+# formato antigo, opt-in) segue valendo até alguém salvar pela tela nova. Arquivo ilegível = segura.
+auto_allows() { ! rr_file_hold "$@"; }
 
 # should_hold <contest> <login> <cid> <lang> <verdict> : 0 se deve SEGURAR p/ revisão manual.
 # Condições: MANUAL_VERDICT=1 no conf, submissor NÃO-privilegiado, veredicto real (não erro de
@@ -335,9 +347,11 @@ consume_setverdict() {
   IFS=: read -r tempo h_login h_prob h_lang _v sub_epoch h_id <<<"$line"
   [[ -n "$id" ]] || id="$h_id"
   record_verdict "$contest" "$h_login" "$tempo" "$h_prob" "$h_lang" "$verdict" "$sub_epoch" "$id"
+  # verdict_canon = a CLASSE (antes do ¦), verdict_team = o texto que o time vê (depois do ¦)
   local rjson; rjson="$(jq -cn --arg id "$id" --arg c "$contest" --arg p "$h_prob" --arg l "$h_login" \
     --arg lang "$h_lang" --arg v "$verdict" \
-    '{id:$id, contest:$c, problem_id:$p, login:$l, lang:$lang, verdict:$v, host:"manual"}')"
+    '{id:$id, contest:$c, problem_id:$p, login:$l, lang:$lang, verdict:$v, host:"manual",
+      verdict_canon:($v|split("¦")[0]), verdict_team:(if ($v|test("¦")) then ($v|split("¦")|.[1:]|join("¦")) else null end)}')"
   write_result_json "$contest" "$id" "$h_login" "$h_prob" "$rjson"
   local rf="$cdir/review/$id.json"
   if [[ -f "$rf" ]]; then
@@ -431,18 +445,14 @@ ingest_result() {
   [[ -n "$tempo" ]] || tempo="$sub_epoch"
   # MODO VEREDICTO MANUAL: segura o veredicto computado p/ revisão de 2 juízes (não finaliza).
   if should_hold "$contest" "$h_login" "$h_prob" "$h_lang" "$verdict" "$vcanon"; then
-    local hb hout; hb="$hb_all"
-    hout="$(report_out_path "$contest" "$h_login" "$h_prob" "$id")"; [[ -d "${hout%/*}" ]] || mkdir -p "${hout%/*}" 2>/dev/null
-    [[ -n "$hb" ]] && printf '%s' "$hb" | base64 -d > "$hout" 2>/dev/null
+    write_report_gz "$hb_all" "$(report_out_path "$contest" "$h_login" "$h_prob" "$id")"
     write_review_item "$contest" "$id" "$h_login" "$h_prob" "$h_lang" "$sub_epoch" "$verdict"
     [[ -n "$host" ]] && q_done "$host" "$id"
     log "veredicto SEGURADO p/ revisão id=$id contest=$contest verdict=$verdict"
     return 0
   fi
   record_verdict "$contest" "$h_login" "$tempo" "$h_prob" "$h_lang" "$verdict" "$sub_epoch" "$id"
-  local html_b64 hout; html_b64="$hb_all"
-  hout="$(report_out_path "$contest" "$h_login" "$h_prob" "$id")"; [[ -d "${hout%/*}" ]] || mkdir -p "${hout%/*}" 2>/dev/null
-  [[ -n "$html_b64" ]] && printf '%s' "$html_b64" | base64 -d > "$hout" 2>/dev/null
+  write_report_gz "$hb_all" "$(report_out_path "$contest" "$h_login" "$h_prob" "$id")"
   write_result_json "$contest" "$id" "$h_login" "$h_prob" "$json"
   [[ -n "$host" ]] && q_done "$host" "$id"
   schedule_score_rebuild "$contest"
@@ -530,7 +540,12 @@ process_spool_file() {
   # ---- comando "result": ingestão do veredicto vindo do worker (modelo pull) ----
   if [[ "$comando" == result ]]; then
     ingest_result "$json"
-    mv -f "$f" "$SPOOLDONEDIR/$base" 2>/dev/null
+    # done/ guarda o result SEM o report_html_b64 (o mojlog já foi persistido no store do time):
+    # com ele, um mês da Maratona eram 72 GB de cópia redundante (2026-09-16). Ninguém relê o
+    # conteúdo de done/ — só existência/contagem/mtime.
+    if jq -c 'del(.report_html_b64)' "$f" > "$SPOOLDONEDIR/.$base.tmp" 2>/dev/null; then
+      mv -f "$SPOOLDONEDIR/.$base.tmp" "$SPOOLDONEDIR/$base" 2>/dev/null && rm -f "$f"
+    else rm -f "$SPOOLDONEDIR/.$base.tmp"; mv -f "$f" "$SPOOLDONEDIR/$base" 2>/dev/null; fi
     return 0
   fi
 
@@ -714,9 +729,11 @@ _recon_tried_dir="$RUNDIR/.reconciled"   # ids já re-enfileirados (1 tentativa 
 # o relatório inteiro em base64. Nunca era limpo: em 24/08/2026 eram **7,4 GB** em 6.789
 # arquivos, o mais antigo de 12 de ABRIL (37 passavam de 50 MB; o maior tinha 200 MB).
 # É evidência de incidente — foi lendo isto que se explicou a fila travada de julho —, então a
-# retenção é generosa e a varredura é preguiçosa, no molde do `run/testrun/`.
-# `SPOOL_DONE_KEEP_DAYS=0` desliga. Apaga só o que JÁ SAIU do pipeline: nunca toca em $SPOOLDIR.
-: "${SPOOL_DONE_KEEP_DAYS:=30}"
+# varredura é preguiçosa, no molde do `run/testrun/`. Retenção: 30 → **7 dias** (2026-09-16: com
+# 30 dias e o report dentro do result, agosto deixou 76 GB em done/; hoje o result entra SEM o
+# report, e 7 dias bastam p/ a evidência de incidente). `SPOOL_DONE_KEEP_DAYS=0` desliga.
+# Apaga só o que JÁ SAIU do pipeline: nunca toca em $SPOOLDIR.
+: "${SPOOL_DONE_KEEP_DAYS:=7}"
 : "${SPOOL_GC_EVERY_S:=3600}"
 _SPOOL_GC_LAST=0
 
@@ -803,17 +820,21 @@ reconcile_stale_pending() {
 }
 
 # loop principal: inotify (push) com fallback p/ polling.
-# IMPORTANTE: o padrão é DRENA-então-ESPERA-UM-evento (inotifywait sem -m, com -t de
-# re-drain). Todo giro drena TODO o spool no topo; então o inotifywait espera UM evento
-# ou o timeout de re-drain e sai — e o loop re-drena. Assim um evento perdido (ex.: escritor
-# num OUTRO container/namespace, ou race entre sair e re-armar) NÃO trava o julgamento: no
-# pior caso o re-drain o pega em WATCH_REDRAIN_SECS. (O `-m` contínuo antigo bloqueava p/
-# sempre se um evento não chegasse — sem rede de segurança.)
+# HISTÓRICO: até 03/09/2026 era DRENA-então-ESPERA-UM-evento (inotifywait SEM -m, um exec por
+# giro). Medido em produção: ~15% das submissões E ~15% dos results esperavam o re-drain de
+# 30 s — o `.in.*` do escritor atômico (cp) acordava o laço, o dreno não achava nada elegível,
+# e o `mv` final caía no buraco entre o fim do dreno e o novo exec do inotifywait. Era o "piso
+# de 30 s" do veredicto (p50 33 s com juiz de 9 s).
+# AGORA: UM inotifywait -m PERSISTENTE (coproc) alimenta um pipe; o laço drena e depois faz
+# `read -t` no pipe. Evento que chega DURANTE o dreno fica no pipe — nada se perde; o timeout
+# (WATCH_REDRAIN_SECS, agora 10 s) é só rede de segurança (escritor noutro namespace, watcher
+# morto). Se o inotifywait morrer (EOF no pipe), é re-sobe com 1 s de backoff.
 # heartbeat: a API precisa saber que o daemon está vivo, mas o `pgrep` dela NÃO enxerga este
 # processo quando ela roda em OUTRO container (PID namespace separado — que é justamente o
 # deploy recomendado: moj-api + moj-judged). Batemos num arquivo do $RUNDIR (volume
 # compartilhado) a cada giro do laço; quem lê é o daemon_judged_alive() do lib/common.sh.
 : "${JUDGED_ALIVE_FILE:=$RUNDIR/judged.alive}"
+: "${WATCH_REDRAIN_SECS:=10}"
 # com shards: TODO worker bate o alive global (qualquer um vivo = daemon vivo p/ a API) e o
 # próprio judged.alive.s<k> — é o que permite alertar shard morto individualmente.
 beat(){
@@ -821,11 +842,39 @@ beat(){
   [[ -n "${JUDGED_SHARD:-}" ]] && { : > "$JUDGED_ALIVE_FILE.s$JUDGED_SHARD" 2>/dev/null || true; }
 }
 
+# watcher persistente: coproc com inotifywait -m; INW_FD = ponta de leitura; INW_PID é do bash
+# (ele o APAGA — e fecha os fds — quando colhe o coproc morto; por isso toda referência é
+# ${INW_PID:-}). Não fechamos fd algum "à mão": redirect que falha num `exec` ENCERRA o shell
+# em silêncio (foi assim que a 1ª versão morria ao re-subir o watcher).
+INW_FD=""
+inw_start() {
+  local _p="${INW_PID:-}"
+  [[ -n "$_p" ]] && { kill "$_p" 2>/dev/null; wait "$_p" 2>/dev/null; }
+  coproc INW { exec inotifywait -m -q -e create -e moved_to --format '%f' "$MY_SPOOL" 2>/dev/null; }
+  INW_FD="${INW[0]}"
+  return 0
+}
+# inw_wait: espera UM evento (ou o re-drain) e esvazia os que já estão no pipe. rc 0 = evento
+# ou timeout (drena de novo); rc 1 = watcher morreu (re-subir).
+inw_wait() {
+  local ev rc
+  [[ -n "${INW_PID:-}" ]] || return 1          # o bash já colheu o coproc: morreu
+  IFS= read -r -t "$WATCH_REDRAIN_SECS" -u "$INW_FD" ev 2>/dev/null; rc=$?
+  if (( rc == 0 )); then
+    # rajada: consome o que já está no pipe — o dreno que vem a seguir vê TODOS os arquivos
+    while IFS= read -r -t 0.01 -u "$INW_FD" ev 2>/dev/null; do :; done
+    return 0
+  fi
+  (( rc > 128 )) && return 0          # timeout: re-drain de segurança
+  return 1                            # EOF/fd fechado: inotifywait caiu
+}
+
 watch_loop() {
-  local f rc
+  local f
   beat
   if command -v inotifywait >/dev/null 2>&1; then
-    log "watch: inotifywait em $MY_SPOOL (shard ${JUDGED_SHARD:-0}/${JUDGED_SHARDS:-1}; re-drena a cada ${WATCH_REDRAIN_SECS:-30}s)"
+    log "watch: inotifywait -m persistente em $MY_SPOOL (shard ${JUDGED_SHARD:-0}/${JUDGED_SHARDS:-1}; re-drena a cada ${WATCH_REDRAIN_SECS}s)"
+    inw_start
     while true; do
       beat
       # beat POR ARQUIVO: um dreno de backlog longo (Maratona 29/08: 2.000+ no spool) passava
@@ -835,10 +884,10 @@ watch_loop() {
       reconcile_stale_pending
       spool_done_gc
       if (( ${JUDGED_SHARDS:-1} > 1 )) && [[ "${JUDGED_SHARD:-0}" == 0 ]]; then sweep_orphan_shards; fi
-      inotifywait -q -e create -e moved_to -t "${WATCH_REDRAIN_SECS:-30}" "$MY_SPOOL" >/dev/null 2>&1
-      rc=$?
-      # rc 0=evento, 2=timeout (re-drena no topo). Erro real (1/outros): evita busy-loop.
-      (( rc == 0 || rc == 2 )) || sleep 1
+      if ! inw_wait; then
+        log "watch: inotifywait terminou — re-subindo em 1s (o re-drain segurou a fila)"
+        sleep 1; inw_start
+      fi
     done
   else
     log "watch: inotifywait AUSENTE — fallback p/ polling (1s)"

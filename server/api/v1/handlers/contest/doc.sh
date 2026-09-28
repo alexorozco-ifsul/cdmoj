@@ -1,12 +1,15 @@
-# GET /contest/doc?contest=<c>[&type=<info-sheet|contest|times|editorial>&lang=<pt|en>&fmt=<pdf|html>]
+# GET /contest/doc?contest=<c>[&type=<info-sheet|contest|times|editorial>&lang=<pt|en|es>&fmt=<pdf|html|odt>]
+# fmt=odt = o INTERMEDIÁRIO editável do PDF gerado (25/09/2026): SÓ admin/juiz-chefe (403 p/ os demais,
+# publicado ou não) — é p/ a organização ajustar no LibreOffice e subir o PDF final, não p/ circular.
 # SEM `type`  -> LISTA os documentos que o login pode baixar (JSON).
 # COM `type`  -> baixa o arquivo.
 # ACESSO (cortado AQUI, nunca só na UI):
 #   admin / juiz-chefe               -> sempre (mesmo antes de publicar; é a revisão deles)
-#   ORGANIZAÇÃO (.judge/.staff/.cstaff/.mon) -> se PUBLICADO (a sede imprime ANTES da prova)
-#   TIMES / demais -> publicado E, para `contest`/`times`, só a partir do INÍCIO
-#     (contest_phase != before — publicar p/ a sede não pode vazar a prova p/ time logado
-#     no aquecimento); para `editorial`, só depois do FIM p/ TODOS (contest_over_for_all —
+#   .judge                           -> se PUBLICADO (o juiz vê enunciado sempre)
+#   .staff/.cstaff/.mon e TIMES      -> publicado E, para `contest`/`times`, só a partir do INÍCIO
+#     (contest_phase != before — o caderno é conteúdo de PROVA: a sede NÃO o recebe antes,
+#     decisão do Ribas em 2026-09-15; a mesma regra do `can_see_problems`, onde .staff/.cstaff
+#     nunca veem enunciado); para `editorial`, só depois do FIM p/ TODOS (contest_over_for_all —
 #     sede prorrogada segura o editorial). `info-sheet` é logística: publicado = visível.
 require_auth_contest "$(param contest)"
 contest="$(param contest)"
@@ -15,9 +18,10 @@ require_contest "$contest"
 source "$_DIR/lib/contest-docs.sh"
 source "$_DIR/lib/contest-gate.sh"
 
-# organização = vê publicado ANTES do início (impressão/entrega); time espera a fase
+# organização que julga = vê publicado ANTES do início; sede (.staff/.cstaff), .mon e time
+# esperam a fase — o caderno antes do início é a prova vazada, não importa o papel da sala
 _doc_org=false
-{ is_admin_or_chief || is_judge || is_staff || is_cstaff || is_mon; } && _doc_org=true
+{ is_admin_or_chief || is_judge; } && _doc_org=true
 # _doc_phase_ok <type> -> 0 se ESTE login pode ver o tipo AGORA (fase; publicação à parte)
 _doc_phase_ok(){
   [[ "$_doc_org" == true ]] && return 0
@@ -52,7 +56,8 @@ fi
 
 case "$t" in info-sheet|contest|times|editorial) ;; *) fail 400 "type inválido" "type_invalid";; esac
 doc_lang_ok "$l" || fail 400 "lang deve ser um de: $DOC_LANGS" "lang_invalid"
-case "$f" in pdf|html) ;; *) f=pdf;; esac
+case "$f" in pdf|html|odt) ;; *) f=pdf;; esac
+[[ "$f" == odt ]] && ! is_admin_or_chief && fail 403 "O .odt editável é só da organização (admin ou juiz-chefe)" "odt_org_only"
 
 if ! is_admin_or_chief; then
   jq -e --arg k "$t.$l" '((.published // []) | index($k)) != null' <<<"$(doc_conf_get "$contest")" >/dev/null 2>&1 \
@@ -63,11 +68,15 @@ fi
 # PDF: o ENVIADO pelo admin vence o gerado (doc_pdf_served). HTML é sempre o gerado —
 # documento enviado é PDF pronto, não tem versão HTML.
 if [[ "$f" == pdf ]]; then file="$(doc_pdf_served "$contest" "$t" "$l")"
-else file="$(doc_file "$contest" "$t" "$l" html)"; fi
+else file="$(doc_file "$contest" "$t" "$l" "$f")"; fi
 [[ -n "$file" && -s "$file" ]] || fail 404 "Documento não gerado" "not_generated"
 
 name="$contest-$t.$l.$f"
-if [[ "$f" == pdf ]]; then ct="application/pdf"; disp="inline"; else ct="text/html; charset=utf-8"; disp="inline"; fi
+case "$f" in
+  pdf) ct="application/pdf"; disp="inline";;
+  odt) ct="application/vnd.oasis.opendocument.text"; disp="attachment";;
+  *)   ct="text/html; charset=utf-8"; disp="inline";;
+esac
 printf 'Status: 200 OK\r\n'
 printf 'Content-Type: %s\r\n' "$ct"
 printf 'Content-Disposition: %s; filename="%s"\r\n' "$disp" "$name"

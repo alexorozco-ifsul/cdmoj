@@ -31,6 +31,30 @@ jq -r '.code_b64 // empty' <<<"$body" | tr -d '\r\n' > "$B64F"
 b64sz="$(stat -c%s "$B64F" 2>/dev/null || echo 0)"
 [[ -n "$problem" && "$b64sz" -gt 0 ]] || fail 400 "Missing problem_id or code_b64" "submit_incomplete"
 valid_id "$problem" || fail 400 "Invalid problem id" "problem_invalid"
+
+# VISIBILIDADE DO PROBLEMA (só no TREINO — em contest o conjunto é o do conf): o login precisa
+# PODER VER o problema. Sem isto, um id privado conhecido era julgado e devolvia veredicto + report
+# a qualquer conta — uma sonda contra prova em elaboração (achado de 2026-09-18). Caminho quente:
+# público = UM teste de arquivo (estar em var/jsons/ já passou pelo portão do índice público).
+# Só o não-público paga o índice de donos: dono/colaborador/membro da org seguem submetendo
+# (autor testa o próprio problema). Privado alheio e inexistente saem IDÊNTICOS (404) — a
+# resposta não pode confirmar que o id existe. Índice quebrado = recusa (fail-closed).
+if [[ "$contest" == treino && ! -f "$CONTESTSDIR/treino/var/jsons/$problem.json" ]]; then
+  source "$_LIBDIR/problems.sh"
+  _vis=0
+  if [[ -f "$CONTESTSDIR/treino/var/jsons-private/$problem.json" ]]; then
+    if _den="$(problems_denied_for "$SESSION_LOGIN" "$(jq -cn --arg p "$problem" '[$p]')")"; then
+      [[ -z "$_den" ]] && _vis=1
+    fi
+    # ⚠ "desconhecido no índice NÃO nega" (contrato de problems_denied_for): aqui isso seria
+    # fail-open — privado que (ainda) não consta do índice de donos não passa p/ ninguém: sem a
+    # entrada não há como provar que o login é dono/colaborador/membro.
+    if (( _vis )) && ! owners_merged 2>/dev/null | jq -e --arg p "$problem"          '.problems | any(.id == $p)' >/dev/null 2>&1; then
+      _vis=0
+    fi
+  fi
+  (( _vis )) || fail 404 "Problem not found" "problem_notfound"
+fi
 [[ -n "$filename" ]] || filename="solution"
 # nome de arquivo do aluno é ENTRADA HOSTIL (ver safe_src_filename): o juiz o materializa e os
 # compile.sh de make o entregam ao /bin/sh. `l(1).cpp` — a marca de download repetido do
@@ -43,15 +67,16 @@ if (( b64sz > SUBMIT_MAX_KB * 1024 * 4 / 3 + 4096 )); then
   fail 413 "Fonte muito grande (máx ${SUBMIT_MAX_KB} KB)" "source_too_large"
 fi
 
-# extensão -> tipo/linguagem (uppercase), como no MOJ
+# extensão -> linguagem CANÔNICA em maiúsculas (lang_canon_ext: .cc/.cxx/.c++ -> CPP, .h -> C,
+# .py3 -> PY). É o que vai ao spool/history/archive e ao juiz; o `filename` do aluno fica intacto.
+source "$_LIBDIR/langs.sh"
 ext="${filename##*.}"
 if [[ "$ext" == "$filename" || -z "$ext" ]]; then FILETYPE="TXT"
-else FILETYPE="$(printf '%s' "$ext" | tr '[:lower:]' '[:upper:]')"; fi
+else FILETYPE="$(lang_canon_ext "$ext" | tr '[:lower:]' '[:upper:]')"; fi
 
 # WHITELIST de linguagens do problema — FORÇADA AQUI (o dropdown da web é só conveniência;
 # antes disto a restrição era decorativa: trocar a extensão burlava até o ban de função).
 # Mesma cadeia da listagem (lib/langs.sh): override do contest -> LANGUAGES -> pacote -> todas.
-source "$_LIBDIR/langs.sh"
 _wl="$(effective_problem_langs "$contest" "$problem")"
 if ! lang_allowed "$_wl" "$FILETYPE"; then
   [[ -z "$_wl" || "$_wl" == '[]' ]] && _wl="$(platform_langs_json)"   # mostra o CHÃO real
@@ -60,6 +85,26 @@ if ! lang_allowed "$_wl" "$FILETYPE"; then
     fail 400 "Arquivo sem extensão de linguagem — este problema aceita: ${_wll:-?}" "lang_not_allowed"
   fi
   fail 400 "Linguagem .${ext,,} não aceita neste problema (aceitas: ${_wll:-?})" "lang_not_allowed"
+fi
+
+# PARTICIPAÇÃO VIRTUAL (lib/virtual.sh): `virtual:"<cid>"` etiqueta ESTA submissão do treino como
+# parte da run virtual do login naquele contest. Custo zero sem o campo. Mesmo portão das rotas do
+# virtual (404 idêntico a inexistente), problema tem de ser DA prova, run tem de estar RODANDO, e a
+# whitelist de linguagem passa a ser a do CONTEST. Problema privado nunca chega aqui: o portão
+# exige todos públicos, e o gate de visibilidade acima já rodou.
+virtual_cid="$(jq -r '.virtual // empty' <<<"$body")"
+if [[ -n "$virtual_cid" ]]; then
+  [[ "$contest" == treino ]] || fail 400 "virtual só vale no treino" "virtual_invalid"
+  source "$_LIBDIR/virtual.sh"
+  vr_load "$virtual_cid" || fail 404 "Not found" "virtual_unavailable"
+  vr_pidx "$problem" >/dev/null || fail 400 "Problema não pertence a este contest" "virtual_problem"
+  [[ "$(vr_effective "$(vr_state "$SESSION_LOGIN" "$virtual_cid")")" == running ]] \
+    || fail 403 "Sua participação virtual não está em andamento" "virtual_not_running"
+  _wl="$(effective_problem_langs "$virtual_cid" "$problem")"
+  if ! lang_allowed "$_wl" "$FILETYPE"; then
+    [[ -z "$_wl" || "$_wl" == '[]' ]] && _wl="$(platform_langs_json)"
+    fail 400 "Linguagem .${ext,,} não aceita neste problema da prova (aceitas: $(jq -r 'join(", ")' <<<"$_wl" 2>/dev/null))" "lang_not_allowed"
+  fi
 fi
 
 AGORA="$EPOCHSECONDS"
@@ -86,6 +131,9 @@ mv -f "$tmp" "$_sd/$spoolname"   # atômico: só aparece pronto p/ o daemon (no 
 mkdir -p "$(user_dir "$contest" "$SESSION_LOGIN")" 2>/dev/null
 user_history_append "$contest" "$SESSION_LOGIN" \
   "$AGORA:$problem:$FILETYPE:Not Answered Yet:$AGORA:$ID"
+# etiqueta da run virtual: uma linha < PIPE_BUF em O_APPEND é atômica; a janela é conferida de
+# novo na leitura (sub_epoch < end), então corrida com o fim da run não conta submissão tardia
+[[ -n "$virtual_cid" ]] && printf '%s\n' "$ID" >> "$(vr_subs "$SESSION_LOGIN" "$virtual_cid")"
 # metrics carregam o PENDING que o placar (gerado só de metrics) mostra na hora
 metrics_recompute "$contest" "$SESSION_LOGIN"
 

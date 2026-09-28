@@ -17,7 +17,7 @@ ensure_owners_index(){
       bash "$MOJTOOLS_DIR/gen-problem-owners.sh" >/dev/null 2>&1
     # confere DE VERDADE: o exit code do gerador era descartado, então uma falha dele (MOJTOOLS_DIR
     # errado, var/ não gravável, morto pelo timeout) ficava invisível p/ sempre.
-    if [[ -s "$f" ]] && jq -e . "$f" >/dev/null 2>&1; then authored_prune; return 0; fi
+    if [[ -s "$f" ]] && jq -e . "$f" >/dev/null 2>&1; then authored_prune; _tl_fresh_prune_safe; return 0; fi
     return 1
   fi
   if [[ -n "$(find "$f" -mmin "+$PROBLEM_OWNERS_TTL_MIN" 2>/dev/null)" ]]; then
@@ -36,7 +36,7 @@ ensure_owners_index(){
     fi
   fi
   # poda oportunista do overlay (barata: mtime curto-circuita quando não há regen nova)
-  authored_prune
+  authored_prune; _tl_fresh_prune_safe
   return 0
 }
 
@@ -49,7 +49,11 @@ owners_merged(){
   # o overlay authored dá visibilidade IMEDIATA ao recém-criado/editado, mas NÃO pode APAGAR os campos
   # que só o índice calcula (tl_checksum, public_at — protegidos por o overlay não os escrever — e
   # `html`, DELETADO do overlay na mescla: o upsert antigo gravava html:false fixo e, antes da poda
-  # do authored_prune, 343 problemas públicos ficaram com "sem HTML" eterno no painel) — por isso é
+  # do authored_prune, 343 problemas públicos ficaram com "sem HTML" eterno no painel; e `title`
+  # quando é VAZIO ou o próprio SLUG, pelo mesmo motivo: o upsert antigo gravava o slug quando o
+  # título vinha vazio e o Painel mostrava `obi2023f2pj_pizza` no lugar de "Pizza da OBI" — 21
+  # problemas, relato do Ribas 21/09/2026. Curar na MESCLA é o que conserta o overlay que já está
+  # no disco, sem migração; o upsert já não escreve mais isso) — por isso é
   # MESCLADO sobre a entrada do índice (base + overlay, overlay vence campo-a-campo) em vez de
   # substituí-la. Sem isso, todo problema no overlay perdia tl_checksum/public_at (staleness e
   # heatmap de entrada sub-reportados).
@@ -66,16 +70,28 @@ owners_merged(){
   # cliente recebe 200 com lista vazia (e o overlay é engolido junto). Por isso: (1) o índice é
   # VALIDADO antes (ensure_owners_index), (2) os dois arquivos entram por --slurpfile — que ERRA se o
   # arquivo não abre, em vez de deslocar — e (3) vazio aqui é ERRO (return 1), nunca lista vazia.
-  local ovf="$AUTHORED_INDEX" out
+  local ovf="$AUTHORED_INDEX" out frf
   # overlay corrompido não pode derrubar a listagem INTEIRA (ele é só "visibilidade imediata")
   jq -e . "$ovf" >/dev/null 2>&1 || ovf=/dev/null
-  out="$(jq -n --slurpfile idx "$OWNERS_INDEX" --slurpfile ov "$ovf" '
-    ($idx[0] // {problems:[]}) as $base
+  # CARIMBO do checksum fresco (lib/tl-store.sh `tl_fresh_*`): o /judge/tl-report sabe o tl_checksum
+  # real ANTES de o índice se refazer — sem isto o Painel dizia "precisa recalibrar" por dezenas de
+  # minutos depois de recalibrar (e o contest escondia o TL). Mesmo cuidado do overlay: lixo = ignora.
+  frf="$CONTESTSDIR/treino/var/tl-checksum-fresh.json"; jq -e 'type=="object"' "$frf" >/dev/null 2>&1 || frf=/dev/null
+  out="$(jq -n --slurpfile idx "$OWNERS_INDEX" --slurpfile ov "$ovf" --slurpfile fr "$frf" '
+    ((($fr[0]) // {})) as $fresh
+    | ($idx[0] // {problems:[]}) as $base0
+    | ($base0 | .problems = ((.problems // []) | map(if ($fresh[.id] // "") != "" then (. + {tl_checksum: $fresh[.id]}) else . end))) as $base
     | ((($ov[0]) // {}) | [to_entries[].value]) as $ovl
     | (($base.problems // []) | map({key:.id, value:.}) | from_entries) as $bmap
     | ($ovl | map(.id)) as $ids
+    # título do overlay que é vazio OU o próprio slug NÃO vence um título de verdade do índice
     | { problems: ( (($base.problems // []) | map(select((.id as $i | $ids|index($i)) | not)))
-                    + ($ovl | map(($bmap[.id] // {}) + (. | del(.html)))) ) }
+                    + ($ovl | map(. as $o | ($bmap[$o.id] // {}) as $b
+                                  | ($b.title // "") as $bt
+                                  | (if (($o.title // "") == "" or ($o.title // "") == ($o.prob // ""))
+                                       and $bt != "" and $bt != ($o.prob // "")
+                                     then ($o | del(.title)) else $o end) as $ov2
+                                  | $b + ($ov2 | del(.html)))) ) }
   ' 2>/dev/null)" || return 1
   [[ -n "$out" ]] || return 1
   printf '%s' "$out"
@@ -108,6 +124,28 @@ owners_visible(){
        or ((.collaborators // [])|index($_me)|type=="number")
        or (((.repo // (.id|split("#")[0])) as $r | $_orgs|index($r))|type=="number")))' \
     <<<"$m" 2>/dev/null
+}
+# problems_denied_for <login> <ids-json-array> — ecoa (csv) os ids que o LOGIN não pode usar num
+# contest: privado E (não dono E não colaborador E não membro da org do repo). É o MESMO predicado
+# de owners_visible, parametrizado pelo sujeito — os três portões de "problema entra no contest"
+# (wizard, Prova › Problemas, Evento › Rodadas) chamam ESTA função; antes eram três cópias de jq e
+# a das rodadas esquecia colaborador/org (relato do Ribas, 2026-09-14: privado compartilhado
+# entrava pela aba Problemas mas dava 403 na rodada planejada). Desconhecido no índice NÃO nega
+# (privado sempre consta do índice). rc 1 + stdout vazio = índice quebrado (quem chama vira 503
+# — dentro de `$(… | jq)` a falha viraria "nada negado", FAIL-OPEN). ids já canônicos (`#`).
+problems_denied_for(){
+  local login="$1" pids="$2" _om _orgs
+  [[ -n "$pids" && "$pids" != '[]' ]] || return 0
+  _om="$(owners_merged)" || return 1
+  _orgs="$(orgs_json_for "$login")"
+  jq -r --argjson pids "$pids" --arg me "$login" --argjson orgs "$_orgs" '
+    (.problems | map({key:.id, value:.}) | from_entries) as $by
+    | [ $pids[] | . as $id | ($by[$id]) as $p
+        | select($p != null and ($p.public|not)
+                 and ($me == "" or ($p.owner != $me
+                      and ((($p.collaborators // [])|index($me))|not)
+                      and (((($p.repo // ($id|split("#")[0])) as $r | $orgs|index($r))|type=="number")|not)))) | $id ]
+    | unique | join(", ")' <<<"$_om" 2>/dev/null
 }
 # owners_emit <jq-program> [jq-args...] — emite {success,...} aplicando o programa sobre o objeto JÁ
 # FILTRADO (com .problems só visíveis). Use $login/$name já passados via --arg pelos handlers.
@@ -144,6 +182,36 @@ calibrating_set(){
   } 2>/dev/null | LC_ALL=C sort -u | jq -Rc -n '[inputs|select(length>0)]' 2>/dev/null || echo '[]'
 }
 
+# calibrating_for <id> -> [{host, since, state:"queued"|"running"}] — o que está EM VOO p/ ESTE
+# problema, com DETALHE (o calibrating_set responde só "algum id está calibrando?", e é o que o
+# Painel precisa; aqui é a tela do autor, que fica minutos olhando e merece saber ONDE e DESDE
+# QUANDO). Mesmas três filas, e a calibração DIRIGIDA entra pelo marcador que a entrega do comando
+# deixa em updates/inprogress/<host>/cmd-*.json. `queued` = ainda não reivindicada.
+# Vale o mesmo aviso do calibrating_set: `jq -n`, senão fila vazia (o normal) devolve "" e estoura
+# no --argjson de quem chama.
+calibrating_for(){
+  local id="$1" _ud="${UPDATESDIR:-${RUNDIR:-/home/ribas/moj/run}/updates}"
+  local _cd="${CMDDIR:-${RUNDIR:-/home/ribas/moj/run}/commands}" d h
+  [[ -n "$id" ]] || { printf '[]'; return 0; }
+  {
+    find "$_ud/pending" -maxdepth 1 -name '*.json' -exec cat {} + 2>/dev/null \
+      | jq -c --arg t "$id" 'select(.kind=="calibrate" and .target==$t)
+          | {host:"", since:((.requested_at // 0)|tonumber? // 0), state:"queued"}'
+    # inprogress e commands são POR HOST: o host é o nome do diretório
+    for d in "$_ud/inprogress" "$_cd"; do
+      [[ -d "$d" ]] || continue
+      while IFS= read -r h; do
+        [[ -d "$h" ]] || continue
+        find "$h" -maxdepth 1 -name '*.json' -exec cat {} + 2>/dev/null \
+          | jq -c --arg t "$id" --arg host "${h##*/}" '
+              select((.kind=="calibrate" and .target==$t) or (.action=="calibrate" and .id==$t))
+              | {host:$host, since:((.claimed_at // .at // .requested_at // 0)|tonumber? // 0),
+                 state:(if .action=="calibrate" then "queued" else "running" end)}'
+      done < <(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+    done
+  } 2>/dev/null | jq -cn '[inputs] | sort_by(.since)' 2>/dev/null || printf '[]'
+}
+
 # _idx_lock <arquivo> — abre o fd 9 travado (flock) p/ o read-modify-write de um índice JSON.
 # SEM ISTO, dois pushes/saves simultâneos liam o MESMO estado, reconstruíam e gravavam: o último
 # vencia e a entrada do outro SUMIA da listagem. Pior: quando o `cat` devolvia vazio (janela do
@@ -168,18 +236,30 @@ authored_upsert(){
     # que VENCE a mescla com o valor pior): título sem \r/\t/\n (metas CRLF da migração serviam
     # "Título\r" nas listagens) e collections vazio = [org] (a convenção "o repo é a coleção-curso"
     # do gen-problem-owners — o [] literal atropelava a coleção-default do índice).
+    # ⚠ O OVERLAY NÃO INVENTA TÍTULO. Até 21/09/2026 esta linha era
+    #   title:(if $tc=="" then ($old.title // $p) else $tc end)
+    # — título vazio virava `$p`, o SLUG. E título vazio é o caso NORMAL de todo chamador que lê
+    # `.display_title // ""` de um pacote que não tem o campo (set-public, set-collections, move,
+    # upload, import, coll_bulk_retag): publicar um OBI migrado bastava. Como o overlay VENCE a
+    # mescla e o authored_prune trata divergência como "não pode podar", o slug passava a
+    # sobrescrever o título bom do índice PARA SEMPRE — 21 problemas assim no Painel (relato do
+    # Ribas). Sem título, a chave simplesmente NÃO ENTRA e o índice manda (que é quem sabe: ele lê
+    # o título do json servível, derivado do enunciado). Título anterior IGUAL AO SLUG é veneno
+    # velho: também não se preserva.
     ( umask 077; printf '%s' "$cur" | jq --arg id "$1" --arg o "$2" --arg r "$3" --arg p "$4" \
         --arg t "$5" --arg pub "$6" --argjson colls "${7:-[]}" --arg au "$8" --argjson cb "${9:-[]}" '
         . as $cur
         | ($cur[$id] // {}) as $old
         | ($t | gsub("[\r\n\t]"; "")) as $tc
-        | $cur + { ($id): ($old + {
+        | ($old.title // "") as $ot
+        | (if $tc != "" then $tc elif ($ot != "" and $ot != $p) then $ot else "" end) as $keep
+        | (if $keep == "" then {} else {title:$keep} end) as $ttl
+        | $cur + { ($id): (($old | del(.title)) + {
             id:$id, owner:$o, repo:$r, prob:$p,
-            title:(if $tc=="" then ($old.title // $p) else $tc end),
             author:($au | gsub("[\r\n\t]"; "")), author_norm:(($au | gsub("[\r\n\t]"; ""))|ascii_downcase),
             collaborators:$cb,
             collections:(if ($colls|length)==0 then [$r] else $colls end),
-            public:($pub=="true") }) }
+            public:($pub=="true") } + $ttl) }
       ' ) > "$tmp" 2>/dev/null && [[ -s "$tmp" ]] && mv -f "$tmp" "$f" || rm -f "$tmp"
   ) 9>"$lk"
 }
@@ -194,6 +274,9 @@ authored_patch(){
       > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" || rm -f "$tmp"
   ) 9>"$lk"
 }
+# poda dos carimbos de checksum fresco que o índice já alcançou (lib/tl-store.sh); tolerante a lib ausente
+_tl_fresh_prune_safe(){ declare -F tl_fresh_prune >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/tl-store.sh" 2>/dev/null; declare -F tl_fresh_prune >/dev/null && tl_fresh_prune; return 0; }
+
 # authored_prune — PODA do overlay: remove as entradas JÁ refletidas no índice de donos SEM
 # divergência nos campos de setter (owner/title/public/collections/collaborators). O overlay é
 # só a ponte de visibilidade imediata até o índice alcançar; sem poda ele crescia p/ sempre
@@ -215,7 +298,13 @@ authored_prune(){
       | with_entries( .value as $v | ($by[$v.id] // null) as $p
           | select( ($p == null)
               or (($v.owner // "") != ($p.owner // ""))
-              or (($v.title // "") != ($p.title // ""))
+              # título só conta como divergência quando o overlay tem um TÍTULO DE VERDADE: desde
+              # 21/09/2026 ele pode não ter (o upsert não inventa mais), e o que ficou no disco do
+              # tempo em que inventava é o SLUG — a MESMA coisa que a mescla já ignora. Comparar
+              # esses dois com o título do índice faria a entrada nunca podar (foi o que manteve
+              # 21 entradas envenenadas vivas): o overlay só cresceria.
+              or ((($v.title // "") != "") and (($v.title // "") != ($v.prob // ""))
+                  and (($v.title // "") != ($p.title // "")))
               or (($v.public // false) != ($p.public // false))
               or ((($v.collections // [])|sort) != (($p.collections // [])|sort))
               or ((($v.collaborators // [])|sort) != (($p.collaborators // [])|sort)) ) )
@@ -248,6 +337,44 @@ _need_orgs(){ declare -F org_is_member >/dev/null || source "$(dirname "${BASH_S
 
 # problem_commit <pkgdir> <login> <msg> -> HEAD sha. git init idempotente + add -A + commit autorado
 # pelo login. flock POR-PROBLEMA (dois saves no mesmo problema não corrompem a árvore/índice git).
+# problem_lockfile <pkg> -> o arquivo de lock POR PROBLEMA (o do problem_commit; quem precisa de uma seção
+# crítica maior — conferir o `rev` antes de escrever — pega o MESMO lock e exporta _PC_LOCK_HELD=1)
+problem_lockfile(){
+  mkdir -p "${RUNDIR:-/home/ribas/moj/run}/locks" 2>/dev/null
+  printf '%s/locks/%s.lock' "${RUNDIR:-/home/ribas/moj/run}" "$(printf '%s' "$1" | md5sum 2>/dev/null | cut -c1-24)"
+}
+
+# pkg_rev <pkg> -> a REVISÃO DO CONTEÚDO do pacote (16 hex; vazio sem repo). É a trava de edição
+# concorrente: o editor web e a CLI mandam o `rev` que carregaram (`base_rev`) e o edit/upload recusa com
+# 409 `stale_rev` se o pacote mudou desde então. Não é o sha do HEAD de propósito: publicar
+# (`set-public`), trocar o dono (`owner-rename`) e mover de org também commitam, e isso não é mudança no
+# que o autor edita — travaria o push de todo mundo à toa. Então: `git ls-tree HEAD` SEM a linha do
+# .moj-meta.json (o git já tem o hash de cada subárvore: barato mesmo num pacote de 300 MB) + só os
+# campos de AUTORIA do meta (título, títulos, linguagens, coleções — o push e o "Salvar" mandam os quatro).
+pkg_rev(){
+  local pkg="$1" t m
+  [[ -d "$pkg/.git" ]] || return 0
+  t="$(git -C "$pkg" ls-tree HEAD 2>/dev/null | grep -v $'\t\.moj-meta\.json$')"
+  m="$(jq -cS '{t: (.display_title // ""), ts: (.titles // {}), l: (.languages // []), c: (.collections // [])}' "$pkg/.moj-meta.json" 2>/dev/null)"
+  printf '%s\n%s' "$t" "$m" | md5sum | cut -c1-16
+}
+# pkg_rev_who <pkg> -> "autor\tepoch" do último commit que NÃO foi só de metadado de sistema (publicar,
+# dono, mover) — é quem o 409 aponta como "alterou depois que você abriu"
+pkg_rev_who(){
+  git -C "$1" log -1 --format='%an%x09%at' --invert-grep --grep='^set public=' --grep='^dono: ' --grep='^move: ' 2>/dev/null
+}
+# pkg_rev_guard <pkg> <base_rev> <force 0|1> — morre com 409 `stale_rev` se o pacote mudou desde `base_rev`.
+# Chame SEGURANDO o lock do problema (ver problem_lockfile). base_rev vazio = cliente antigo: não confere.
+pkg_rev_guard(){
+  local pkg="$1" base="$2" force="${3:-0}" cur who by at
+  [[ -n "$base" && "$force" != 1 ]] || return 0
+  cur="$(pkg_rev "$pkg")"
+  [[ -z "$cur" || "$cur" == "$base" ]] && return 0
+  who="$(pkg_rev_who "$pkg")"; by="${who%%$'\t'*}"; at="${who##*$'\t'}"; [[ "$at" =~ ^[0-9]+$ ]] || at=0
+  FAIL_EXTRA="$(jq -cn --arg r "$cur" --arg b "$by" --argjson a "$at" '{current_rev: $r, changed_by: $b, changed_at: $a}')" \
+    fail 409 "O problema foi alterado${by:+ por $by} depois que você o abriu — recarregue (moj pull) antes de enviar, ou envie por cima" "stale_rev"
+}
+
 problem_commit(){
   local pkg="$1" login="${2:-moj}" msg="${3:-update}" em="${2:-moj}@moj.local" lk
   [[ -d "$pkg" ]] || return 1
@@ -255,10 +382,38 @@ problem_commit(){
   # quem grava DEPOIS dele (write_meta, o sidecar do Kattis: problem.yaml/.kattis.json) pegava o
   # `umask 007` do fcgiwrap e saía 660. Aqui nada escapa — o que vai p/ o commit está em 644/755.
   _pkg_canon_modes "$pkg"
-  mkdir -p "${RUNDIR:-/home/ribas/moj/run}/locks" 2>/dev/null
-  lk="${RUNDIR:-/home/ribas/moj/run}/locks/$(printf '%s' "$pkg" | md5sum 2>/dev/null | cut -c1-24).lock"
+  # CARIMBO do checksum fresco (tl_fresh_*, lib/tl-store.sh): ele diz "o pacote ATUAL tem este
+  # checksum". Se esta escrita mudou o que o tl-checksum cobre (testes, sols/good, conf, scripts), o
+  # carimbo deixou de ser verdade e SAI — volta a valer o índice. Edição que não toca nisso (enunciado,
+  # metadados) mantém o carimbo: senão o TL sumiria de novo do contest a cada "Salvar" dentro da janela
+  # do índice. Só paga o checksum (memoizado por metadata) quem TEM carimbo — quase ninguém.
+  local _rel="${pkg#"${MOJ_PROBLEMS_DIR%/}/"}" _pid _st
+  if [[ "$_rel" != "$pkg" && "$_rel" == */* ]]; then
+    _pid="${_rel%%/*}#${_rel#*/}"
+    _st="$(jq -r --arg i "$_pid" '.[$i] // empty' "$CONTESTSDIR/treino/var/tl-checksum-fresh.json" 2>/dev/null)"
+    if [[ -n "$_st" ]]; then
+      declare -F tl_fresh_drop >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/tl-store.sh" 2>/dev/null
+      [[ "$(pkg_tl_checksum "$pkg" "$_pid" 2>/dev/null)" == "$_st" ]] || tl_fresh_drop "$_pid"
+    fi
+    # SUMÁRIO DAS SOLUÇÕES (lib/calib-expect.sh): se esta escrita mexe no que a calibração exercita
+    # (sols/, tests/, scripts/, conf), o "conforme/divergente" que o Painel mostra deixou de ser o de
+    # AGORA — vira "não conferido desde a última edição" até a próxima calibração. Só paga o
+    # `git status` quem já tem sumário.
+    declare -F calx_mark_stale >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/calib-expect.sh" 2>/dev/null
+    if declare -F calx_summary_file >/dev/null && [[ -s "$(calx_summary_file "$_pid")" ]]; then
+      if [[ ! -d "$pkg/.git" ]] \
+         || [[ -n "$(git -C "$pkg" status --porcelain -- sols tests scripts conf 2>/dev/null)" ]]; then
+        declare -F _summary_upsert >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/tl-store.sh" 2>/dev/null
+        calx_mark_stale "$_pid"
+      fi
+    fi
+  fi
+  lk="$(problem_lockfile "$pkg")"
   (
-    flock 9 2>/dev/null
+    # quem já segura o lock deste problema (edit/upload: conferir o `rev` + escrever + commitar numa
+    # seção crítica só) avisa por _PC_LOCK_HELD — um 2º flock no MESMO arquivo, noutro fd do mesmo
+    # processo, esperaria para sempre
+    [[ "${_PC_LOCK_HELD:-0}" == 1 ]] || flock 9 2>/dev/null
     cd "$pkg" || exit 1
     if [[ ! -d .git ]]; then
       git -c init.defaultBranch=master init -q 2>/dev/null
@@ -267,7 +422,7 @@ problem_commit(){
     # checker testlib (.checker-cache) e do árbitro interativo (.arbitro-cache) — são ELFs de
     # vários MB que um `git add -A` commitaria dentro do pacote. Idempotente de propósito: repo
     # criado antes destas linhas também as ganha (antes, o exclude só era escrito no `git init`).
-    for _ex in 'tl' 'tl.*' '.checker-cache/' '.arbitro-cache/'; do
+    for _ex in 'tl' 'tl.*' '.checker-cache/' '.arbitro-cache/' '.validator-cache/'; do
       grep -qxF "$_ex" .git/info/exclude 2>/dev/null || printf '%s\n' "$_ex" >> .git/info/exclude 2>/dev/null
     done
     git add -A 2>/dev/null
@@ -488,6 +643,28 @@ problem_owner(){
 # mesmo resultado byte-a-byte e sem um fork por arquivo. Fica p/ quem grava 1 arquivo avulso.
 _putfile(){ local f="$1" c; c="$(cat)"; if [[ -n "$c" ]]; then printf '%s\n' "$c" > "$f"; else : > "$f"; fi; }
 
+# IDIOMAS DO ENUNCIADO (2026-09-15): a descoberta de arquivo por idioma (docs/enunciado.<lang>.md,
+# docs/notes/<sample>.<lang>.md, docs/solucao.<lang>.md, titles do meta) é a do
+# mojtools/statement-langs.sh — a MESMA que o gen-problem-json/validate usam. Nunca reescreva o glob.
+declare -F stmt_langs_all >/dev/null || source "${MOJTOOLS_DIR:-/home/ribas/moj/mojtools}/statement-langs.sh"
+# _notes_rm_lang <pkg> <lang|pt> — apaga só as notas DO idioma (pt = <sample>.md sem sufixo de
+# idioma; outro = <sample>.<lang>.md). Substitui o `rm -rf docs/notes` que levava as traduções junto.
+_notes_rm_lang(){
+  local pkg="$1" lang="$2" f b
+  [[ -d "$pkg/docs/notes" ]] || return 0
+  # find, não glob: a API roda com `set -o noglob` (o `*.md` viria literal e nada seria apagado)
+  while IFS= read -r f; do
+    b="${f##*/}"; b="${b%.md}"
+    if [[ "$lang" == pt ]]; then
+      { [[ "$b" == *.* ]] && stmt_lang_ok "${b##*.}"; } && continue   # nota traduzida: fica
+      rm -f "$f"
+    else
+      [[ "$b" == *".$lang" ]] && rm -f "$f"
+    fi
+  done < <(find "$pkg/docs/notes" -maxdepth 1 -type f -name '*.md' 2>/dev/null)
+  rmdir "$pkg/docs/notes" 2>/dev/null || true
+}
+
 # _pkg_canon_modes <pkgdir> — MODO CANÔNICO do pacote: 644 (arquivo), 755 (dir e arquivo com +x).
 # INDEPENDENTE do umask do processo. O fcgiwrap roda com `umask 007` (p/ o socket unix nascer 0770,
 # senão o nginx do sistema toma EACCES), e sem isto TODO arquivo gravado pela API saía 660 enquanto
@@ -531,7 +708,7 @@ apply_problem_fields(){  # <pkgdir> <body-json-FILE>
   # ---------- 1 passada: TODAS as sondas + os escalares curtos (antes: ~36 re-parses) ----------
   local HAS_ENUN=0 HAS_AUTHOR=0 HAS_TAGS=0 HAS_CONF=0 HAS_EXAMPLES=0 HAS_NOTES=0 HAS_TESTS=0 \
         HAS_SCORE=0 SCORE_ENABLED=0 HAS_SOLS=0 HAS_GOODSOL=0 HAS_SCRIPTS=0 HAS_SCORETXT=0 \
-        HAS_EDITORIAL=0 HAS_DOCSFILES=0 EFMT='' GOODSOL_FN='' SOLS_CATS=''
+        HAS_EDITORIAL=0 HAS_DOCSFILES=0 HAS_TRANS=0 HAS_TITLES=0 EFMT='' GOODSOL_FN='' SOLS_CATS=''
   _man="$(jq -r '
       def b(x): (if x then "1" else "0" end);
       "HAS_ENUN=\(b(has("enunciado_md")))",
@@ -549,6 +726,8 @@ apply_problem_fields(){  # <pkgdir> <body-json-FILE>
       "HAS_DOCSFILES=\(b(has("docs_files")))",
       "HAS_SCORETXT=\(b(has("score_text")))",
       "HAS_EDITORIAL=\(b(has("editorial_md")))",
+      "HAS_TRANS=\(b((.translations|type)=="object"))",
+      "HAS_TITLES=\(b((.titles|type)=="object"))",
       "EFMT=\((.enunciado_format // "") | @sh)",
       "GOODSOL_FN=\((.good_sol.filename // "sol.cpp") | @sh)",
       "SOLS_CATS=\(((.sols // {}) | keys | join(" ")) | @sh)"
@@ -578,6 +757,7 @@ apply_problem_fields(){  # <pkgdir> <body-json-FILE>
     local e
     if [[ -z "$EFMT" ]]; then for e in md org tex; do [[ -f "$pkg/docs/enunciado.$e" ]] && { EFMT="$e"; break; }; done; fi
     [[ "$EFMT" =~ ^(md|org|tex)$ ]] || EFMT=md
+    # só os formatos PT (enunciado.md|org|tex) — as traduções enunciado.<lang>.md NUNCA entram aqui
     for e in md org tex; do [[ "$e" != "$EFMT" && -f "$pkg/docs/enunciado.$e" ]] && rm -f "$pkg/docs/enunciado.$e"; done
     printf '%s' "$S_ENUN" > "$pkg/docs/enunciado.$EFMT"
   fi
@@ -610,7 +790,8 @@ apply_problem_fields(){  # <pkgdir> <body-json-FILE>
     # sample-notes.json (fonte única). Só mexe se o cliente for "ciente de explicação"
     # (algum exemplo traz a chave); cliente antigo não apaga as notas de ninguém.
     if (( HAS_NOTES )); then
-      rm -rf "$pkg/docs/notes"; rm -f "$pkg/docs/sample-notes.json"
+      # só as notas PT (<sample>.md): as traduzidas (<sample>.<lang>.md) são do bloco `translations`
+      _notes_rm_lang "$pkg" pt; rm -f "$pkg/docs/sample-notes.json"
       if [[ "$(jq -r 'map(select(.!=""))|length' <<<"$S_NOTES" 2>/dev/null)" -gt 0 ]]; then
         mkdir -p "$pkg/docs/notes"
         printf '%s' "$S_NOTES" > "$_t/notes.json"
@@ -629,6 +810,67 @@ apply_problem_fields(){  # <pkgdir> <body-json-FILE>
   # ---- resolução/editorial (só p/ setters; docs/solucao.md; não vai p/ o aluno) -------------
   if (( HAS_EDITORIAL )); then
     if [[ -n "$S_EDIT" ]]; then printf '%s' "$S_EDIT" > "$pkg/docs/solucao.md"; else rm -f "$pkg/docs/solucao.md"; fi
+  fi
+
+  # ---- TRADUÇÕES: translations = {"<lang>": {title?, enunciado_md?, editorial_md?, notes?:{<sample>:md}} | null}
+  # Idioma AUSENTE do objeto = intocado; `null` = apaga o idioma inteiro (enunciado, editorial, notas
+  # e o título); dentro do idioma, campo ausente = intocado, "" = apaga. `notes` presente SUBSTITUI
+  # as notas daquele idioma (as PT ficam). Título vai p/ .moj-meta.json `titles` (write_meta poda
+  # os idiomas sem arquivo). Só idiomas da allowlist (statement-langs.sh) e só .md.
+  local TITLES_PATCH='{}'
+  if (( HAS_TRANS )); then
+    local tl tk tv
+    while IFS= read -r tl; do
+      [[ -n "$tl" && "$tl" != pt ]] || continue
+      stmt_lang_ok "$tl" || continue
+      if [[ "$(jq -r --arg l "$tl" '.translations[$l] | type' < "$bodyf" 2>/dev/null)" == null ]]; then
+        rm -f "$pkg/docs/enunciado.$tl.md" "$pkg/docs/solucao.$tl.md"; _notes_rm_lang "$pkg" "$tl"
+        TITLES_PATCH="$(jq -c --arg l "$tl" '.[$l]=""' <<<"$TITLES_PATCH")"
+        continue
+      fi
+      jq --raw-output0 --arg l "$tl" "$JQNL"'
+          .translations[$l]
+          | (if has("enunciado_md") then "1" else "0" end), (.enunciado_md // "" | nl1),
+            (if has("editorial_md") then "1" else "0" end), (.editorial_md // "" | rtrim),
+            (if has("title") then "1" else "0" end), (.title // ""),
+            (if (.notes|type)=="object" then "1" else "0" end)
+        ' < "$bodyf" > "$_t/tr.nul" 2>/dev/null
+      local T_HE='' T_EN='' T_HD='' T_ED='' T_HT='' T_TT='' T_HN=''
+      { IFS= read -r -d '' T_HE; IFS= read -r -d '' T_EN; IFS= read -r -d '' T_HD; IFS= read -r -d '' T_ED
+        IFS= read -r -d '' T_HT; IFS= read -r -d '' T_TT; IFS= read -r -d '' T_HN; } < "$_t/tr.nul" 2>/dev/null
+      if [[ "$T_HE" == 1 ]]; then
+        if [[ -n "$T_EN" ]]; then printf '%s' "$T_EN" > "$pkg/docs/enunciado.$tl.md"; else rm -f "$pkg/docs/enunciado.$tl.md"; fi
+      fi
+      if [[ "$T_HD" == 1 ]]; then
+        if [[ -n "$T_ED" ]]; then printf '%s' "$T_ED" > "$pkg/docs/solucao.$tl.md"; else rm -f "$pkg/docs/solucao.$tl.md"; fi
+      fi
+      [[ "$T_HT" == 1 ]] && TITLES_PATCH="$(jq -c --arg l "$tl" --arg t "${T_TT:0:200}" '.[$l]=$t' <<<"$TITLES_PATCH")"
+      if [[ "$T_HN" == 1 ]]; then
+        _notes_rm_lang "$pkg" "$tl"
+        jq --raw-output0 --arg l "$tl" "$JQNL"'.translations[$l].notes | to_entries[] | .key, (.value // "" | nl1)'           < "$bodyf" > "$_t/tn.nul" 2>/dev/null
+        while IFS= read -r -d '' tk && IFS= read -r -d '' tv; do
+          [[ "$tk" =~ ^[A-Za-z0-9_-]+$ ]] || continue          # nome de sample: sem ponto/barra
+          [[ -n "$(tr -d '[:space:]' <<<"$tv")" ]] || continue
+          mkdir -p "$pkg/docs/notes"; printf '%s' "$tv" > "$pkg/docs/notes/$tk.$tl.md"
+        done < "$_t/tn.nul"
+      fi
+    done < <(jq -r '.translations | keys[]' < "$bodyf" 2>/dev/null)
+  fi
+  # titles no topo do body (a CLI manda o .moj-id `titles`; o editor manda dentro de translations)
+  if (( HAS_TITLES )); then
+    # `.key as $k` ANTES do index: dentro do pipe `$all|split|index(.key)` o `.` já é a lista
+    # (armadilha do jq — foi o que apagou os títulos traduzidos no 1º push p/ produção, 15/09)
+    TITLES_PATCH="$(jq -c --slurpfile b "$bodyf" --arg all "$(stmt_langs_all)" '($all|split(" ")) as $ok | . + (($b[0].titles // {})
+      | with_entries(.key as $k | select((.value|type)=="string" and $k != "pt" and (($ok|index($k)) != null)) | .value |= .[0:200]))' <<<"$TITLES_PATCH")"
+    [[ -n "$TITLES_PATCH" ]] || TITLES_PATCH='{}'   # jq mudo nunca vira patch vazio-string
+  fi
+  if [[ "$TITLES_PATCH" != '{}' ]]; then
+    local _mf="$pkg/.moj-meta.json" _cur='{}' _mtmp
+    [[ -f "$_mf" ]] && _cur="$(cat "$_mf" 2>/dev/null)"; jq -e . >/dev/null 2>&1 <<<"$_cur" || _cur='{}'
+    _mtmp="$_mf.tmp.${BASHPID}"   # expandido ANTES do jq (no alvo de redirect expandiria no FILHO)
+    jq -c --argjson p "$TITLES_PATCH" '. + {titles: (((.titles // {}) + $p) | with_entries(select(.value != "")))}
+      | if (.titles|length)==0 then del(.titles) else . end' <<<"$_cur" > "$_mtmp" \
+      && mv -f "$_mtmp" "$_mf" || rm -f "$_mtmp"
   fi
 
   # ---- pontuação por grupos (subtasks) ----------------------------------------
@@ -856,10 +1098,9 @@ _read_score(){
 # symlinks — round-trip do moj push/clone via apply_problem_fields). tests/score sai cru em
 # `score_text` (além do estruturado `score` do editor web).
 read_problem_source(){
-  local pkg="$1" enunf="" fmt="md" ef
-  for ef in docs/enunciado.md enunciado.md docs/enunciado.org docs/enunciado.tex; do
-    [[ -f "$pkg/$ef" ]] && { enunf="$pkg/$ef"; [[ "$ef" == *.org ]] && fmt=org; [[ "$ef" == *.tex ]] && fmt=tex; break; }
-  done
+  local pkg="$1" enunf="" fmt="md"
+  enunf="$(stmt_file "$pkg" pt)" || enunf=""
+  [[ -n "$enunf" ]] && fmt="$(stmt_fmt "$enunf")"
   local te ta tc ted; te="$(mktemp)"; ta="$(mktemp)"; tc="$(mktemp)"; ted="$(mktemp)"
   [[ -n "$enunf" ]] && cat "$enunf" > "$te"
   [[ -f "$pkg/author" ]] && cat "$pkg/author" > "$ta"
@@ -867,6 +1108,12 @@ read_problem_source(){
   [[ -f "$pkg/docs/solucao.md" ]] && cat "$pkg/docs/solucao.md" > "$ted"   # editorial (só setters)
   local tags='[]'; [[ -f "$pkg/tags" ]] && tags="$(jq -R . "$pkg/tags" 2>/dev/null | jq -sc . 2>/dev/null)"; [[ -n "$tags" ]] || tags='[]'
   local meta='{}'; [[ -f "$pkg/.moj-meta.json" ]] && meta="$(cat "$pkg/.moj-meta.json" 2>/dev/null)"; [[ -n "$meta" ]] || meta='{}'
+  # TÍTULO NUNCA VEM EM BRANCO: pacote migrado/subido sem `display_title` (todo o acervo OBI é
+  # assim) abria o editor com o campo vazio — e era esse vazio que o autor salvava, envenenando o
+  # overlay com o slug (ver authored_upsert). Deriva do enunciado, a MESMA extração do
+  # gen-problem-json.sh (que é de onde o treino tira o título que ele mostra).
+  local dtitle; dtitle="$(jq -r '.display_title // empty' <<<"$meta" 2>/dev/null)"
+  [[ -n "$dtitle" ]] || dtitle="$(_derive_title "$pkg")"
   local score; score="$(_read_score "$pkg")"
   # scripts/ (correção especial: compare/compile por linguagem) -> caminhos relativos p/ a
   # árvore do editor web (campo `scripts`); o CONTEÚDO vai em `scripts_files` (round-trip)
@@ -903,6 +1150,27 @@ read_problem_source(){
        '($nn[0] // []) as $n | $all | to_entries[] | .value + {explanation: ($n[.key] // "")}' \
        > "$d/exs2" 2>/dev/null && mv -f "$d/exs2" "$d/exs"
   fi
+  # TRADUÇÕES (translations): um objeto por idioma com arquivo (enunciado, editorial ou nota):
+  # {title (titles[lang] do meta), enunciado_md, editorial_md?, notes:{<sample>:md}}. Conteúdo por
+  # --rawfile (nunca argv). PT segue nos campos de sempre.
+  : > "$d/trans"
+  local _tl _tf _nf _ns _targs _tfilt
+  for _tl in $(stmt_langs_all); do
+    [[ "$_tl" == pt ]] && continue
+    _targs=(); _tfilt='{title:($meta.titles[$l] // "")}'
+    if _tf="$(stmt_file "$pkg" "$_tl")"; then _targs+=( --rawfile e "$_tf" ); _tfilt+=' + {enunciado_md:$e}'; fi
+    if [[ -f "$pkg/docs/solucao.$_tl.md" ]]; then _targs+=( --rawfile s "$pkg/docs/solucao.$_tl.md" ); _tfilt+=' + {editorial_md:($s|rtrimstr("\n"))}'; fi
+    : > "$d/tnotes"
+    ( set +o noglob; shopt -s nullglob
+      for _nf in "$pkg/docs/notes"/*."$_tl".md; do
+        _ns="${_nf##*/}"; _ns="${_ns%."$_tl".md}"
+        jq -nc --arg n "$_ns" --rawfile v "$_nf" '{key:$n, value:($v|rtrimstr("\n"))}'
+      done ) >> "$d/tnotes"
+    [[ -s "$d/tnotes" ]] && { _targs+=( --slurpfile nn "$d/tnotes" ); _tfilt+=' + {notes:($nn|from_entries)}'; }
+    (( ${#_targs[@]} )) || continue
+    jq -nc --arg l "$_tl" --argjson meta "$meta" "${_targs[@]}" \
+      "{key:\$l, value:($_tfilt)}" >> "$d/trans"
+  done
   # imagens de docs/ (docs_files) — round-trip do clone/push
   : > "$d/docsf"
   ( set +o noglob; shopt -s nullglob
@@ -915,13 +1183,16 @@ read_problem_source(){
   jq -n --rawfile enun "$te" --rawfile author "$ta" --rawfile conf "$tc" --rawfile editorial "$ted" \
         --rawfile scr "$tscr" --rawfile scoretxt "$tsct" \
         --argjson tags "$tags" --argjson meta "$meta" --argjson score "$score" --arg fmt "$fmt" \
+        --arg dtitle "$dtitle" \
         --slurpfile exs "$d/exs" --slurpfile tss "$d/tss" --slurpfile scf "$d/scf" \
-        --slurpfile dfl "$d/docsf" \
+        --slurpfile dfl "$d/docsf" --slurpfile trs "$d/trans" \
         --slurpfile sg "$d/sg" --slurpfile ss "$d/ss" --slurpfile sw "$d/sw" --slurpfile sp "$d/sp" --slurpfile su "$d/su" '
     { format:$fmt, enunciado_md:$enun, author:($author|rtrimstr("\n")), conf_text:$conf,
       tags:$tags, public:($meta.public // false), collections:($meta.collections // []),
       languages:($meta.languages // []),
-      title:($meta.display_title // ""), examples:$exs, tests:$tss, score:$score,
+      title:$dtitle, titles:($meta.titles // {}),
+      statement_langs:(["pt"] + ($trs | map(.key))), translations:($trs | from_entries),
+      examples:$exs, tests:$tss, score:$score,
       tests_omitted:($tss | any(.omitted == true)),
       score_text:$scoretxt,
       scripts:($scr | split("\n") | map(select(. != ""))),
@@ -975,7 +1246,7 @@ _derive_title(){
   printf '%s' "$t"
 }
 
-# write_meta <pkgdir> <owner> <repo> [public:true|false|""] [collections-json|""] [display_title] [languages-json|""]
+# write_meta <pkgdir> <owner> <repo> [public:true|false|""] [collections-json|""] [display_title] [languages-json|""] [titles-json|""]
 # BLINDAGEM: display_title nunca fica ausente — se não veio título E o meta ainda não tem um,
 # deriva do enunciado/slug (_derive_title). Assim o editor nunca vem em branco e as 3 telas (editor,
 # treino, gestão) ficam consistentes. Meta que já tem título não muda (o merge $cur+{} preserva).
@@ -983,16 +1254,26 @@ _derive_title(){
 # = todas). "" (ou omitido) = não mexe (preserva o que já houver); [] = limpa (volta a irrestrito).
 # Normalização espelha a whitelist de contest (contest/admin/settings.sh): sem lista de ids
 # hardcoded (não duplicar a lista JS em bash — forward-compat), só saneamento de forma.
+# titles: {"<lang>": "título da tradução"} — MESCLA no `titles` do meta ("" apaga a chave) e, sempre,
+# PODA os idiomas sem docs/enunciado.<lang>.md (o título só existe junto do arquivo; ver PACOTE.md).
 write_meta(){
-  local pkg="$1" owner="$2" repo="$3" pub="${4:-}" colls="${5:-}" title="${6:-}" langs="${7:-}" cur='{}'
+  local pkg="$1" owner="$2" repo="$3" pub="${4:-}" colls="${5:-}" title="${6:-}" langs="${7:-}" titles="${8:-}" cur='{}'
   [[ -f "$pkg/.moj-meta.json" ]] && cur="$(cat "$pkg/.moj-meta.json" 2>/dev/null)"; [[ -n "$cur" ]] || cur='{}'
   if [[ -z "$title" && -z "$(jq -r '.display_title // empty' <<<"$cur" 2>/dev/null)" ]]; then
     title="$(_derive_title "$pkg")"
   fi
+  jq -e . >/dev/null 2>&1 <<<"${titles:-null}" || titles=""
+  (( ${#titles} > 4096 )) && titles=""     # titles é um mapa pequeno; maior que isso é lixo (e nunca argv >128K)
+  local have_langs='[]' _l _mtmp="$pkg/.moj-meta.json.tmp.${BASHPID}"
+  for _l in $(stmt_langs_of "$pkg"); do [[ "$_l" == pt ]] || have_langs="$(jq -c --arg l "$_l" '. + [$l]' <<<"$have_langs")"; done
   jq -n --argjson cur "$cur" --arg o "$owner" --arg r "$repo" --arg pub "$pub" \
         --argjson colls "${colls:-null}" --arg title "$title" --argjson langs "${langs:-null}" \
+        --argjson titles "${titles:-null}" --argjson have "$have_langs" \
         --argjson now "$EPOCHSECONDS" '
-    $cur + {owner:$o}
+    ($cur + {owner:$o})
+    | .titles = ((($cur.titles // {}) + (if ($titles|type)=="object" then $titles else {} end))
+                 | with_entries(select((.value|type)=="string" and .value != "" and ((.key as $k | $have | index($k)) != null))))
+    | (if (.titles|length)==0 then del(.titles) else . end)
     + (if $pub=="" then {} elif $pub=="true" then {public:true} else {public:false} end)
     + (if $colls==null then {} else {collections:$colls} end)
     + (if $langs==null then {} else
@@ -1002,6 +1283,6 @@ write_meta(){
     + (if $title=="" then {} else {display_title:$title} end)
     # carimba a 1ª publicação (permanece ao despublicar); alimenta o heatmap "entrada de públicos"
     + (if $pub=="true" and (($cur.public_at // null)==null) then {public_at:$now} else {} end)
-  ' > "$pkg/.moj-meta.json"
+  ' > "$_mtmp" && [[ -s "$_mtmp" ]] && mv -f "$_mtmp" "$pkg/.moj-meta.json" || { rm -f "$_mtmp"; return 1; }   # tmp+mv: jq que falha não deixa o meta VAZIO
   chmod 644 "$pkg/.moj-meta.json" 2>/dev/null   # modo canônico (o fcgiwrap roda umask 007 -> 660)
 }

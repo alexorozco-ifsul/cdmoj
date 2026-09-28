@@ -2,7 +2,11 @@
 #
 # O MESMO contest roda várias rodadas em sequência: um aquecimento (dress rehearsal) com poucos
 # problemas e depois a prova oficial, sem recriar nada — a configuração (contas, senhas, sedes,
-# cores de balão, TL, linguagens, pool de juízes, papéis) é justamente o que se quer preservar.
+# TL, linguagens, pool de juízes, papéis) é justamente o que se quer preservar. Cores de balão
+# são config TAMBÉM, mas uma rodada pode ter as SUAS (`colors` no objeto, formato do
+# balloons.json, 2026-09-14): ao entrar no ar, rd_apply_obj grava o balloons.json com elas;
+# rodada sem `colors` herda o que está em vigor. Para a ativa, o balloons.json é a verdade
+# (rd_sync_active espelha, como faz com PROBS).
 #
 # PRINCÍPIO: a rodada ATIVA continua sendo o `conf` (CONTEST_START/END/FREEZE_TIME/PROBS). Nada
 # no caminho quente (placar, gates, daemon, juiz) fica "consciente de rodada" — trocar de rodada
@@ -22,8 +26,9 @@
 #     review/ print-requests/ clarifications/ news.json news-files/ backups/ jplag/ docs/
 #     placar*.txt statistics.cache.json time-overrides.json resources.json
 #     access.log admin-audit.log editor-log offline-log submit-origin.log session-events.log
+#     nutella-bind.log nutella-macs.tsv
 #                                               (CÓPIAS: append-only, precisam continuar)
-#     conf.snapshot machines.json meta.json
+#     conf.snapshot balloons.json machines.json meta.json
 #
 # Requer: lib/users.sh, lib/contest-create.sh, lib/print.sh (balões), lib/contest-gate.sh.
 
@@ -63,15 +68,20 @@ rd_sync_active(){
     j="$(jq -c --arg s "$act" '.active=$s' <<<"$j")"
   fi
   probs="$(cc_probs_json "$c")"; [[ -n "$probs" ]] || probs='[]'
+  # cores da rodada ativa = o balloons.json (ausente/inválido = sem cores próprias)
+  local colors='null'
+  [[ -s "$CONTESTSDIR/$c/balloons.json" ]] && colors="$(jq -c 'if type=="object" and length>0 then . else null end' "$CONTESTSDIR/$c/balloons.json" 2>/dev/null)"
+  [[ -n "$colors" ]] || colors='null'
   jq -c --arg s "$act" --arg dn "${rn:-Prova oficial}" \
      --argjson cs "${cs:-0}" --argjson ce "${ce:-0}" --argjson fz "${fz:-0}" \
-     --argjson p "$probs" '
+     --argjson p "$probs" --argjson cl "$colors" '
      .active = $s
      | .rounds = (if ((.rounds // []) | map(.slug) | index($s)) == null
                   then ((.rounds // []) + [{slug:$s, name:$dn, kind:"official", state:"active"}])
                   else (.rounds // []) end)
      | .rounds = [ .rounds[] | if .slug == $s
-         then (. + {state:"active", start:$cs, end:$ce, freeze:$fz, problems:$p})
+         then (. + {state:"active", start:$cs, end:$ce, freeze:$fz, problems:$p}
+               | if $cl == null then del(.colors) else .colors = $cl end)
          else . end ]' <<<"$j"
 }
 
@@ -126,6 +136,28 @@ rd_promote_blockers(){
   if declare -F contest_over_for_all >/dev/null && ! contest_over_for_all "$c"; then
     _add round_running "a rodada ativa ainda não terminou (inclusive prorrogações por sede)"
   fi
+  # freeze em vigor: promover re-aponta/apaga o FREEZE_TIME = descongela. Só a partir do fim
+  # geral + 1 min — e este é DURO (o `force` da promoção não passa por cima; ver rounds.sh).
+  local _fz; _fz="$(conf_value "$c" FREEZE_TIME)"; _fz="${_fz//[^0-9]/}"
+  if [[ -n "$_fz" ]] && (( _fz > 0 )) && declare -F freeze_release_ok >/dev/null && ! freeze_release_ok "$c"; then
+    _add freeze_locked "o placar está congelado e só pode ser descongelado a partir de $(fmt_epoch "$(freeze_release_at "$c")" '%d/%m %H:%M' "$c") (fim para todas as sedes + 1 min)"
+  fi
+  # problema PRIVADO que o DONO do contest não pode ver na rodada planejada: DURO (o `force` não
+  # passa). É a última porta antes de `cc_build_probs` materializar o enunciado do jsons-private —
+  # a lista pode ter vindo do spec unificado (create/duplicate) sem passar pelo `rounds problems`.
+  # (a lib de problemas não está no prelúdio: carrega aqui — sem isso o `declare -F` falhava em
+  #  silêncio e a checagem era pulada no GET/promote)
+  declare -F problems_denied_for >/dev/null || source "${BASH_SOURCE[0]%/*}/problems.sh" 2>/dev/null || true
+  if [[ -n "$next" ]] && declare -F problems_denied_for >/dev/null; then
+    local _pids _den _owner
+    _pids="$(jq -c --arg s "$next" '(.rounds // [])[] | select(.slug == $s) | [ (.problems // [])[] | (.bank_id // .problem_id // "") | gsub("/";"#") | select(. != "") ]' <<<"$(rd_get "$c")" 2>/dev/null)"
+    if [[ -n "$_pids" && "$_pids" != '[]' ]]; then
+      _owner="$(head -1 "$CONTESTSDIR/$c/owner" 2>/dev/null)"
+      if _den="$(problems_denied_for "${_owner:-}" "$_pids")"; then
+        [[ -n "$_den" ]] && _add problem_denied "a rodada '$next' tem $(wc -w <<<"$_den") problema(s) privado(s) que o dono do contest não pode ver — tire-o(s) da rodada"
+      else _add problem_denied "índice de problemas indisponível — não dá para conferir o acesso aos problemas da rodada"; fi
+    fi
+  fi
   n="$(rd_jobs_in_flight "$c")"
   (( n > 0 )) && _add jobs_in_flight "$n job(s) deste contest no spool/fila do juiz — espere drenar"
   n="$(rd_review_pending "$c")"
@@ -171,6 +203,11 @@ rd_apply_obj(){
     CC_KEEP_STATEMENTS=1 cc_set_probs "$c" "$probs" || return 1
     # a rodada nova tem OUTRA lista de problemas: derruba o cache de /contest/problems
     touch "$CONTESTSDIR/$c/var/.problems-dirty" 2>/dev/null
+  fi
+  # cores de balão da rodada: só quando ela TEM cores próprias (sem `colors` = herda as em vigor)
+  local colors; colors="$(jq -c '.colors // empty' <<<"$r")"
+  if [[ -n "$colors" && "$colors" != null ]]; then
+    cc_balloons_write "$c" "$colors" || return 1
   fi
   return 0
 }
@@ -313,6 +350,7 @@ rd_promote(){
   nsubs="$( ( set +o noglob; shopt -s nullglob; cat "$cdir"/users/*/history 2>/dev/null ) | wc -l | tr -d '[:space:]')"
   rd_machines "$c" "$from" > "$ad/machines.json" 2>/dev/null || printf '{}' > "$ad/machines.json"
   cp -f "$cdir/conf" "$ad/conf.snapshot" 2>/dev/null || true
+  [[ -s "$cdir/balloons.json" ]] && cp -f "$cdir/balloons.json" "$ad/balloons.json" 2>/dev/null   # cores que a rodada usou
   # meta.json: o arquivo tem de se explicar sozinho quando alguém abrir o tar.gz meses depois
   jq -cn --arg c "$c" --argjson r "$from_obj" --arg by "$by" \
      --argjson at "$EPOCHSECONDS" --argjson nu "${nusers:-0}" --argjson ns "${nsubs:-0}" \
@@ -353,7 +391,8 @@ rd_promote(){
   if [[ -d "$ad/docs" ]]; then
     mkdir -p "$cdir/docs"
     ( set +o noglob; shopt -s nullglob
-      for f in "$ad/docs"/*.md "$ad/docs"/cover.*.pdf; do cp -f "$f" "$cdir/docs/" 2>/dev/null; done )
+      # (o PDF ENVIADO pelo admin também é config feita à mão: volta — 2026-09-14)
+      for f in "$ad/docs"/*.md "$ad/docs"/cover.*.pdf "$ad/docs"/*.uploaded.pdf; do cp -f "$f" "$cdir/docs/" 2>/dev/null; done )
     [[ -f "$ad/docs/config.json" ]] && jq -c 'del(.published)' "$ad/docs/config.json" \
       > "$cdir/docs/config.json" 2>/dev/null
   fi
@@ -367,7 +406,9 @@ rd_promote(){
     for f in "$cdir"/var/placar-view-*.txt; do mv -f "$f" "$ad/${f##*/}" 2>/dev/null; done )
   # append-only: COPIA (a trilha do contest precisa continuar; o access.log é a fonte do
   # mapa de máquinas e tem de atravessar as rodadas)
-  for x in access.log admin-audit.log editor-log offline-log submit-origin.log session-events.log; do
+  # (nutella-bind.log/nutella-macs.tsv: o elo máquina↔time publicado no nutellaboot — a máquina do time
+  # é a mesma no aquecimento e na prova, então o estado CONTINUA e a rodada guarda a cópia)
+  for x in access.log admin-audit.log editor-log offline-log submit-origin.log session-events.log nutella-bind.log nutella-macs.tsv; do
     [[ -e "$cdir/var/$x" ]] && cp -f "$cdir/var/$x" "$ad/$x" 2>/dev/null
   done
   rm -f "$cdir/var/.metrics-stamp" "$cdir/var/.pending-count" "$cdir/var/round-report.err" 2>/dev/null

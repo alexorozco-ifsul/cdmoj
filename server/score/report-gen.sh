@@ -140,6 +140,7 @@ rep_t(){ case "$LOC:$1" in
   pt:freeze_none) printf 'sem congelamento';;     en:freeze_none) printf 'no freeze';;
   pt:freeze_at) printf 'aos';;                    en:freeze_at) printf 'at';;
   pt:min_w) printf 'min';;                        en:min_w) printf 'min';;
+  pt:guest_pos) printf 'posição entre os convidados (não conta na oficial)';; en:guest_pos) printf 'position among guest teams (not in the official ranking)';;
   pt:teams) printf 'Times';;                      en:teams) printf 'Teams';;
   pt:subs) printf 'Submissões';;                  en:subs) printf 'Submissions';;
   pt:problems) printf 'Problemas';;               en:problems) printf 'Problems';;
@@ -151,6 +152,7 @@ rep_t(){ case "$LOC:$1" in
   pt:final_score) printf 'Placar final (aberto)';; en:final_score) printf 'Final scoreboard (open)';;
   pt:no_score) printf 'Sem placar gerado.';;      en:no_score) printf 'No scoreboard generated.';;
   pt:frozen_title) printf 'Placar congelado';;    en:frozen_title) printf 'Frozen scoreboard';;
+  pt:rounds_note) printf '📚 Rodadas anteriores deste evento:';; en:rounds_note) printf '📚 Earlier rounds of this event:';;
   pt:frozen_note) printf 'Visão CONGELADA aos %s min (%s) — é o placar que o público viu durante a prova. O placar final aberto está na aba' "$2" "$3";;
   en:frozen_note) printf 'FROZEN view at %s min (%s) — this is what the public saw during the contest. The final open scoreboard is in the tab' "$2" "$3";;
   pt:open_note) printf 'O placar abaixo está ABERTO (sem congelamento). A visão congelada aos %s min está em' "$2";;
@@ -243,7 +245,7 @@ rep_t(){ case "$LOC:$1" in
   pt:size) printf 'Tamanho';;                     en:size) printf 'Size';;
   pt:doc_contest) printf '📕 Caderno de problemas';; en:doc_contest) printf '📕 Problem set';;
   pt:doc_times) printf '⏱ Limites de tempo';;     en:doc_times) printf '⏱ Time limits';;
-  pt:doc_info) printf 'ℹ️ Informações do ambiente';; en:doc_info) printf 'ℹ️ Testing environment';;
+  pt:doc_info) printf 'ℹ️ Ambiente de julgamento';; en:doc_info) printf 'ℹ️ Judging environment';;
   pt:doc_editorial) printf '📝 Editorial (soluções)';; en:doc_editorial) printf '📝 Editorial (solutions)';;
   # filtros do placar (coorte, bandeira, universidade, sede, busca)
   pt:f_board) printf 'Placar:';;                  en:f_board) printf 'Board:';;
@@ -272,7 +274,7 @@ rep_t(){ case "$LOC:$1" in
   pt:view_all) printf 'Todos, com convidados';;   en:view_all) printf 'Everyone, incl. guests';;
   pt:view_of) printf 'Visão da coorte %s' "$2";;  en:view_of) printf 'As seen by cohort %s' "$2";;
   pt:gen_place) printf 'Geral';;                  en:gen_place) printf 'Overall';;
-  pt:tab_qual) printf 'Classificados';;           en:tab_qual) printf 'Qualified';;
+  pt:tab_qual) printf '🏅 Classificados';;        en:tab_qual) printf '🏅 Qualified';;
   pt:qual_title) printf '🎓 Classificados — próxima fase';; en:qual_title) printf '🎓 Qualified — next stage';;
   pt:qual_note) printf 'Times classificados para <b>%s</b> pelas regras da 1ª fase (chip ↑BR no placar). Vagas do comitê podem ser adicionadas depois.' "$2";; en:qual_note) printf 'Teams qualified to <b>%s</b> by the first-phase rules (↑BR chip on the scoreboard). Committee slots may be added later.' "$2";;
   pt:qual_chip) printf 'Classificado';;           en:qual_chip) printf 'Qualified';;
@@ -341,6 +343,12 @@ rmdir "$OUTD/fotos" 2>/dev/null || true   # sem foto nenhuma = sem diretório
 
 # escape/format: definidos ANTES das bandeiras — rep_flag usa esc() no alt/title.
 esc(){ printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"; }
+# rep_js_json — JSON que vai EMBUTIDO num <script> como literal JS (stdin → stdout). O parser de
+# HTML fecha o <script> no PRIMEIRO "</script>" que vê, mesmo dentro de uma string JSON: um time
+# chamado "<script>alert(1)</script>" (LATAM 2026) quebrava statistics.html inteiro ("literal not
+# terminated before end of script"). Todo "<" vira \u003c (válido em JSON e em JS; fora de string
+# o JSON nunca tem "<") e U+2028/U+2029 viram escapes (terminadores de linha p/ motores antigos).
+rep_js_json(){ LC_ALL=C sed -e 's/</\\u003c/g' -e 's/\xe2\x80\xa8/\\u2028/g' -e 's/\xe2\x80\xa9/\\u2029/g'; }
 # data no formato do idioma do relatório (dd/mm em pt, yyyy-mm-dd em en)
 fmt_dt(){ (( ${1:-0} > 0 )) && date -d "@$1" "+$([[ "${LOC:-pt}" == en ]] && printf '%%Y-%%m-%%d %%H:%%M' || printf '%%d/%%m/%%Y %%H:%%M')" 2>/dev/null || printf '—'; }
 
@@ -500,7 +508,7 @@ td.place{text-align:right}
 .doclist li{margin:.25rem 0}
 .btn-doc{display:inline-block;padding:.15em .6em;margin:0 .15em;border:1px solid var(--line,#c9d2e0);
   border-radius:.5em;text-decoration:none;font-size:.85em;font-weight:600}
-tr.guest-row td{background:#fbfbfd;color:var(--muted)}
+tr.guest-row td{background:#fbfbfd;color:var(--muted)} i.gplace{font-style:italic;font-weight:600}
 .v-ac{color:var(--ok);font-weight:700}
 .v-rej{color:var(--err)}
 .v-pend{color:var(--muted);font-style:italic}
@@ -552,6 +560,7 @@ if [[ -s "$CDIR/regions.json" ]]; then
                                      ((.subregions // []) | flat($d+1));
                [flat(0)] | map(select(.n != ""))' "$CDIR/regions.json" 2>/dev/null)"
   [[ -n "$RTREE_JSON" ]] || RTREE_JSON='[]'
+  RTREE_JSON="$(printf '%s' "$RTREE_JSON" | rep_js_json)"   # nome de sede/região vai dentro de <script>
 fi
 
 # --- classificação PUBLICADA p/ a próxima fase (chip ↑BR + página classificados.html) ---
@@ -576,6 +585,16 @@ if [[ -s "$CDIR/classification.json" ]]; then
     | ([.name // "", .venue // ""] | map(select(. != "")) | join(", "))] | first // ""'     "$CDIR/classification.json" 2>/dev/null)"
 fi
 
+# --- abas do relatório: decididas UMA vez, pelos DADOS ------------------------------------
+# rep_head testava `-f $OUTD/<página>.html` a cada chamada: página escrita ANTES de
+# mlinux.html/documentos.html nascia sem essas abas (Classificados e Congelado saíam sem
+# "Máquinas"). Toda página mostra a MESMA nav; os blocos que geram as páginas usam as MESMAS
+# flags (o smoke compara a nav de todas as páginas).
+NAV_FROZEN=0; (( FREEZE > 0 )) && [[ -f "$CDIR/var/placar-full.txt" || -n "$FROZEN_DIR" ]] && NAV_FROZEN=1
+NAV_QUAL=0;   [[ -s "$QUALF" ]] && NAV_QUAL=1
+NAV_DOCS=0;   [[ -s "$CDIR/docs/config.json" ]] && jq -e '(.published // []) | length > 0' "$CDIR/docs/config.json" >/dev/null 2>&1 && NAV_DOCS=1
+NAV_ML=0;     [[ -s "$CDIR/var/nutella.cache.json" ]] && jq -e '.global' "$CDIR/var/nutella.cache.json" >/dev/null 2>&1 && NAV_ML=1
+
 rep_head(){ # <título> <id-da-aba-ativa>
   local title="$1" active="$2" tabs t fn id label
   tabs=""
@@ -586,14 +605,12 @@ rep_head(){ # <título> <id-da-aba-ativa>
            "classificados.html:qual:$(rep_t tab_qual)" \
            "staff-tasks.html:staff:$(rep_t tab_staff)"; do
     IFS=: read -r fn id label <<< "$t"
-    [[ "$id" == docs && ! -f "$OUTD/documentos.html" && "$active" != docs ]] && continue
-    # a aba mlinux é CONDICIONAL: só quando a integração nutellaboot foi coletada
-    [[ "$id" == mlinux && ! -f "$OUTD/mlinux.html" && "$active" != mlinux ]] && continue
-    # classificados: só quando há classificação PUBLICADA
-    [[ "$id" == qual && ! -s "${QUALF:-}" && "$active" != qual ]] && continue
+    [[ "$id" == docs && ! $NAV_DOCS -eq 1 ]] && continue      # só com documento publicado
+    [[ "$id" == mlinux && ! $NAV_ML -eq 1 ]] && continue      # só com coleta do nutellaboot
+    [[ "$id" == qual && ! $NAV_QUAL -eq 1 ]] && continue      # só com classificação PUBLICADA
     tabs+="<a href=\"$fn\"$([[ "$id" == "$active" ]] && printf ' class="on"')>$label</a>"
   done
-  [[ -f "$OUTD/score-frozen.html" || "$active" == frozen ]] && \
+  (( NAV_FROZEN )) && \
     tabs+="<a href=\"score-frozen.html\"$([[ "$active" == frozen ]] && printf ' class="on"')>$(rep_t tab_frozen)</a>"
   cat <<EOF
 <!DOCTYPE html>
@@ -645,6 +662,7 @@ rep_score_html(){ # <placar.txt> [genplace.tsv] [photos.tsv]
   [[ -n "$ph" && -s "$ph" ]] || ph=/dev/null
   awk -F: -v MODE="$MODE" -v BSTYLE="$BSTYLE" -v BF="$W/balloons.tsv" -v FF="$W/flags.tsv" -v NF_="$W/names.tsv" \
       -v GP="$gp" -v PHF="$ph" -v T_GEN="$(rep_t gen_place)" -v T_GENT="$(rep_t gen_place_t)" \
+      -v T_GUESTPOS="$(rep_t guest_pos)" \
       -v T_TEAM="$(rep_t team_col)" -v T_TOTAL="$(rep_t total)" -v T_PEN="$(rep_t pen_col)" \
       -v T_GUEST="$(rep_t guest)" -v T_GUESTT="$(rep_t guest_title)" -v T_FTS="$(rep_t fts)" \
       -v T_PHOTO="$(rep_t photo_t)" -v QF="$QUALF" '
@@ -698,7 +716,7 @@ rep_score_html(){ # <placar.txt> [genplace.tsv] [photos.tsv]
       while ((getline l < GP) > 0) { n=split(l,a,"\t"); if(n>=2 && a[1]!=""){ gpl[a[1]]=a[2]; hasgp=1 } }
       close(GP)
     }
-    NR==1{ nw=split($0, MW, /[ \t]+/); for(wi=2; wi<=nw; wi++) if(MW[wi]=="s") SECS=1; next }
+    NR==1{ nw=split($0, MW, /[ \t]+/); for(wi=2; wi<=nw; wi++){ if(MW[wi]=="s") SECS=1; if(MW[wi]=="g") GNUM=1 }; next }
     NR==2{
       n=split($0, H, ":"); s=1
       while (s<=n) { h=trim(tolower(H[s])); if (h=="desc"||h=="asc") s++; else break }
@@ -753,9 +771,16 @@ rep_score_html(){ # <placar.txt> [genplace.tsv] [photos.tsv]
       # posição: aparece na linha do desempenho dele, com "–" no lugar do número.
       guest=(iguest ? trim($(iguest)) : "")
       isguest=(guest!="" && guest!="0" && tolower(guest)!="false" && tolower(guest)!="no")
-      pnum=""
+      pnum=""; gnum=""
       if (MODE=="icpc") {
         tot=(itot? trim($(itot)) : ""); pen=(ipen? trim($(ipen)) : ""); lac=(ilast? trim($(ilast)) : "")
+        # convidado com a flag g: NUMERAÇÃO PRÓPRIA (mesma regra de empate), em itálico (issue #25)
+        if (isguest && GNUM) {
+          gseen++
+          if (gseen>1 && tot==gprevtot && pen==gprevpen && lac==gprevlac) gplace=gprevplace
+          else gplace=gseen
+          gprevtot=tot; gprevpen=pen; gprevlac=lac; gprevplace=gplace; gnum=gplace
+        }
         if (!isguest) {
           # ranking de COMPETIÇÃO (2026-08-31): empatado compartilha a posição e CONSOME —
           # N empatados em P ⇒ o próximo é P+N (a numeração era densa: P+1)
@@ -789,7 +814,7 @@ rep_score_html(){ # <placar.txt> [genplace.tsv] [photos.tsv]
       if (MODE=="icpc" && !isguest) attrs=attrs " data-tie=\"" esc(tot "|" pen "|" lac) "\""
       gtxt=""
       if (hasgp && !isguest && (un in gpl)) gtxt="<span class=\"plg\" title=\"" esc(T_GENT) "\">" esc(gpl[un]) "</span>"
-      printf "<tr%s><td class=\"place\">%s%s</td>", attrs, (isguest?"–":pnum ""), gtxt
+      printf "<tr%s><td class=\"place\">%s%s</td>", attrs, (isguest? (gnum!="" ? "<i class=\"gplace\" title=\"" esc(T_GUESTPOS) "\">" gnum "</i>" : "–") : pnum ""), gtxt
       if (MODE=="icpc" || MODE=="obi") {
         if(iflag) printf "<td>%s</td>", flag_html(trim($(iflag)))
         printf "%s", team_html((ius?trim($(ius)):""), (iteam?trim($(iteam)):""), (iuf?trim($(iuf)):""), (iuser?trim($(iuser)):""), isguest)
@@ -1144,7 +1169,7 @@ awk -F: -v NAMES="$W/names.tsv" -v PROBS="$W/probs.tsv" "$VERDICT_CANON_AWK"'
     v=$5; for(i=6;i<=NF-2;i++) v=v":"$i
     se=$(NF-1)+0; sid=$NF
     letter=(prob in L)? L[prob] : prob
-    printf "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", se, login, letter, lang, canon(v), sid, tname[login], tus[login], tuf[login]
+    printf "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", se, login, letter, lang, canon(v), sid, tname[login], tus[login], tuf[login], canon_team(v)
   }' "$W/hist.txt" | sort -n -k1,1 > "$W/runs.tsv"
 RUNS_N="$(wc -l < "$W/runs.tsv" | tr -d '[:space:]')"
 TEAMS_N="$(awk -F'\t' '$1!~/\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$/ && $1!="admin" && $1!=""' "$W/names.tsv" | sort -u | wc -l | tr -d '[:space:]')"
@@ -1198,7 +1223,22 @@ done < "$W/probs.tsv" >> "$W/stmt.tsv"
 
 # --- placares: aberto (index) + congelado (se houver freeze) ---------------------------
 FROZEN_NOTE=""
-if (( FREEZE > 0 )) && [[ -f "$CDIR/var/placar-full.txt" || -n "$FROZEN_DIR" ]]; then
+# rodadas ARQUIVADAS com relatório PUBLICADO (symlink em relatorio-rodadas/<slug>; ver
+# report-publish.sh): linkadas na página inicial SÓ quando o relatório está sendo gerado p/
+# PUBLICAÇÃO (REPORT_PUBLISH=1) — no tar.gz offline o link não teria destino.
+ROUNDS_NOTE=""
+if [[ "${REPORT_PUBLISH:-}" == 1 && -d "$CDIR/relatorio-rodadas" ]]; then
+  _rl=""
+  for _rd in "$CDIR"/relatorio-rodadas/*; do
+    [[ -L "$_rd" && -s "$_rd/index.html" ]] || continue
+    _sl="${_rd##*/}"; [[ "$_sl" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || continue
+    _nm="$(jq -r --arg s "$_sl" 'first((.rounds // [])[] | select(.slug == $s) | .name) // $s' "$CDIR/rounds.json" 2>/dev/null)"
+    [[ -n "$_nm" ]] || _nm="$_sl"
+    _rl+="${_rl:+ · }<a href=\"rodada/$_sl/\">$(esc "$_nm")</a>"
+  done
+  [[ -n "$_rl" ]] && ROUNDS_NOTE="<p class=\"note\">$(rep_t rounds_note) $_rl</p>"
+fi
+if (( NAV_FROZEN )); then
   fmin=$(( (FREEZE - START) / 60 ))
   {
     rep_head "$(rep_t frozen_title)" frozen
@@ -1211,7 +1251,7 @@ if (( FREEZE > 0 )) && [[ -f "$CDIR/var/placar-full.txt" || -n "$FROZEN_DIR" ]];
 fi
 
 # --- classificados.html: a relação da PRÓXIMA FASE (pedido de 31/08) --------------------
-if [[ -s "$QUALF" ]]; then
+if (( NAV_QUAL )); then
   {
     rep_head "$(rep_t qual_title)" qual
     printf '<p class="note">%s</p>\n' "$(rep_t qual_note "$(esc "$QUAL_STAGE_LABEL")")"
@@ -1252,7 +1292,7 @@ fi
 # sheet e o editorial viajarem junto com o relatório. Entram só os PUBLICADOS (o que os
 # times viram) — rascunho gerado e não publicado não vaza aqui.
 DOCS_JSON="$CDIR/docs/config.json"
-if [[ -s "$DOCS_JSON" ]] && jq -e '(.published // []) | length > 0' "$DOCS_JSON" >/dev/null 2>&1; then
+if (( NAV_DOCS )); then
   mkdir -p "$OUTD/documentos"
   : > "$W/docs.tsv"
   while IFS= read -r key; do
@@ -1300,7 +1340,7 @@ fi
 # logins do roster (`teams`) e qualquer resíduo por time (`_rows`) ficam FORA do relatório —
 # só agregados, ranks e séries por sede/nó (o "editores × colocação" é contagem por recorte).
 NBC="$CDIR/var/nutella.cache.json"
-if [[ -s "$NBC" ]] && jq -e '.global' "$NBC" >/dev/null 2>&1; then
+if (( NAV_ML )); then
   rt_ml='[]'
   if [[ -s "$CDIR/regions.json" ]]; then
     # name + view (nó que agrega times já contados nas sedes; a view não o compara) — sem regex
@@ -1321,8 +1361,8 @@ if [[ -s "$NBC" ]] && jq -e '.global' "$NBC" >/dev/null 2>&1; then
       sed -E '/^import /d; s/^export (function|const|let|class) /\1 /; /^export \{/d' "$_mlf"
     done
     printf 'const NBDATA=\n'
-    jq 'del(.sedes[].machines, .sedes[].bindings, .sedes[].teams, .sedes[]._rows)' "$NBC"
-    printf ';\nconst RTREE=%s;\n' "$rt_ml"
+    jq 'del(.sedes[].machines, .sedes[].bindings, .sedes[].teams, .sedes[]._rows)' "$NBC" | rep_js_json
+    printf ';\nconst RTREE=%s;\n' "$(printf '%s' "$rt_ml" | rep_js_json)"
     cat <<'MLEOF'
 (function(){
   var host=document.getElementById('ml'), sel=document.getElementById('mlSel');
@@ -1423,6 +1463,7 @@ dur_label(){ local s=$1; (( s<=0 )) && { printf '—'; return; }; printf '%dh%02
 
   printf '<h2>%s</h2>\n' "$(rep_t final_score)"
   printf '%s\n' "$FROZEN_NOTE"
+  [[ -n "$ROUNDS_NOTE" ]] && printf '%s\n' "$ROUNDS_NOTE"
   rep_score_boards open
   rep_foot
 } > "$OUTD/index.html"
@@ -1477,7 +1518,7 @@ TREEEOF
     BEGIN{ while ((getline l < NF_) > 0) { n=split(l,a,"\t"); if(n>=6 && a[1]!="") reg[a[1]]=a[6] }
            close(NF_) }
     {
-      se=$1+0; login=$2; letter=$3; lang=$4; v=$5; sid=$6; tn=$7; us=$8; uf=$9
+      se=$1+0; login=$2; letter=$3; lang=$4; v=$5; sid=$6; tn=$7; us=$8; uf=$9; vt=(NF>=10 && $10!="")? $10 : v
       mn=(START>0)? int((se-START)/60) : ""
       hora=strftime(DTFMT, se)
       cls="v-rej"
@@ -1487,7 +1528,7 @@ TREEEOF
       lbl=esc(team) " <span class=\"u\">[" esc(login) "]</span>"
       univ=(us!="")? us : uf
       printf "<tr data-login=\"%s\" data-region=\"%s\"><td class=\"place\" title=\"%s\">%d</td><td class=\"n\">%s</td><td>%s</td><td class=\"team\">%s</td><td>%s</td><td><b>%s</b></td><td>%s</td><td class=\"%s\">%s</td></tr>\n", \
-        esc(login), esc(login in reg ? reg[login] : ""), esc(sid), NR, mn, hora, lbl, esc(univ), esc(letter), esc(lang), cls, esc(v)
+        esc(login), esc(login in reg ? reg[login] : ""), esc(sid), NR, mn, hora, lbl, esc(univ), esc(letter), esc(lang), cls, esc(vt)
     }' "$W/runs.tsv"
   printf '</tbody></table></div>\n'
   rep_tree_core_js
@@ -1540,7 +1581,7 @@ EOF
           | ((.time // 0) | strflocaltime($dtfmt)) as $h
           | (if $start>0 and (.time//0)>0 then " (min \(((.time - $start)/60)|floor))" else "" end) as $mn
           | "<div class=\"qa\"><div class=\"meta\"><b>\($p|@html)</b> · \($h)\($mn) · \($b)</div>"
-            + "<div class=\"q\">\((.question // "")|@html)</div>"
+            + (if ((.question // "")|length) > 0 then "<div class=\"q\">\(.question|@html)</div>" else "" end)
             + (if ((.answer // "")|length) > 0
                then "<div class=\"a\">\(.answer|@html)</div>"
                else "<div class=\"a\" style=\"border-left-color:#c99\">" + $t_noans + "</div>" end)
@@ -1582,13 +1623,14 @@ rep_stats_bundle(){
   printf '<div id="stats"></div>\n'
   printf '<script>\n'
   printf 'const LANG=%s;\nfunction T(pt,en){return LANG==="en"?en:pt}\n' "$([[ "${LOCALE:-pt}" == en ]] && printf '"en"' || printf '"pt"')"
-  for f in "$MOJ_WEB/shared/dom.js" "$MOJ_WEB/lib/charts.js" "$MOJ_WEB/lib/stats-view.js"; do
+  # (difficulty.js ANTES do stats-view: ele importa dali; o T global de cima substitui o i18n)
+  for f in "$MOJ_WEB/shared/dom.js" "$MOJ_WEB/shared/difficulty.js" "$MOJ_WEB/lib/charts.js" "$MOJ_WEB/lib/stats-view.js"; do
     [[ -s "$f" ]] || return 1
     sed -E '/^import /d; s/^export (function|const|let|class) /\1 /; /^export \{/d' "$f"
   done
   printf 'const STATS=\n'
-  cat "$1"
-  printf ';\nconst CNAMES=%s;\nconst RTREE=%s;\n' "$cn" "$rt"
+  rep_js_json < "$1"          # nomes de time/sede vivem aqui dentro: "</script>" num nome fechava o script
+  printf ';\nconst CNAMES=%s;\nconst RTREE=%s;\n' "$(printf '%s' "$cn" | rep_js_json)" "$(printf '%s' "$rt" | rep_js_json)"
   cat <<'STEOF'
 (function(){
   var host=document.getElementById('stats'); if(!host) return;
