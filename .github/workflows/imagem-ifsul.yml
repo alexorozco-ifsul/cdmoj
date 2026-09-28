@@ -1,0 +1,63 @@
+# Imagem do MOJ para o cluster do IFSul Sapucaia (ver ifsul/README.md).
+# Reproduz o `make image` da VM: contexto = pasta de trabalho com cdmoj,
+# mojtools e moj-cli lado a lado; CLI e docs/html gerados antes do build.
+# Cada push na branch "ifsul" publica ghcr.io/<dono>/moj-server:ifsul-<commit>.
+name: imagem-ifsul
+
+on:
+  push:
+    branches: [ifsul]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  MOJTOOLS_REPO: alexorozco-ifsul/mojtools
+  MOJTOOLS_REF: local/moj-vm # f3b4315: o mojtools que roda na VM do MOJ
+  MOJCLI_REPO: cd-moj/moj-cli
+  MOJCLI_REF: 522b81ae23e2dcd91d932d49dae3337b1cf1c599
+
+jobs:
+  imagem:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ws/cdmoj
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MOJTOOLS_REPO }}
+          ref: ${{ env.MOJTOOLS_REF }}
+          path: ws/mojtools
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MOJCLI_REPO }}
+          ref: ${{ env.MOJCLI_REF }}
+          path: ws/moj-cli
+          fetch-depth: 0 # o mkdist.sh carimba o build com o commit
+
+      - name: CLI (web/moj*) e docs/html
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq pandoc
+          make -C ws/cdmoj cli-dist docs-html
+          ls -l ws/cdmoj/web/moj ws/cdmoj/web/moj.build ws/cdmoj/docs/html/index.html
+
+      - id: tag
+        run: echo "curta=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build (podman, como o make image)
+        run: |
+          podman build --ignorefile ws/cdmoj/deploy/.containerignore -f ws/cdmoj/deploy/Containerfile \
+            --build-arg WITH_OFFICE=1 --build-arg WITH_JPLAG=1 \
+            --label org.opencontainers.image.revision=$(git -C ws/cdmoj rev-parse --short HEAD) \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            -t ghcr.io/${{ github.repository_owner }}/moj-server:ifsul-${{ steps.tag.outputs.curta }} ws
+
+      - name: Publicar
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          podman push ghcr.io/${{ github.repository_owner }}/moj-server:ifsul-${{ steps.tag.outputs.curta }}
