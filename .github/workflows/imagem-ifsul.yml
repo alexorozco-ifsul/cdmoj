@@ -49,9 +49,18 @@ jobs:
       - id: tag
         run: echo "curta=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # O upstream deixa a CLI (web/moj*) e o docs/html FORA da imagem porque o
+      # nginx da VM os serve do checkout do git. No cluster não há checkout: o
+      # nginx lê web/ e docs/ da imagem, então eles precisam entrar.
+      - name: Ignore do build sem a CLI e o docs/html
+        run: |
+          grep -vxE 'cdmoj/web/moj|cdmoj/web/moj-contest|cdmoj/web/moj-judges|cdmoj/docs/html/' \
+            ws/cdmoj/deploy/.containerignore > "$RUNNER_TEMP/containerignore"
+          diff ws/cdmoj/deploy/.containerignore "$RUNNER_TEMP/containerignore" || true
+
       - name: Build (podman, como o make image)
         run: |
-          podman build --ignorefile ws/cdmoj/deploy/.containerignore -f ws/cdmoj/deploy/Containerfile \
+          podman build --ignorefile "$RUNNER_TEMP/containerignore" -f ws/cdmoj/deploy/Containerfile \
             --build-arg WITH_OFFICE=1 --build-arg WITH_JPLAG=1 \
             --label org.opencontainers.image.revision=$(git -C ws/cdmoj rev-parse --short HEAD) \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
