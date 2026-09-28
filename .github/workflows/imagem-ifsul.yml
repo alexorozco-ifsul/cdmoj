@@ -17,7 +17,7 @@ env:
   MOJTOOLS_REPO: alexorozco-ifsul/mojtools
   MOJTOOLS_REF: local/moj-vm # f3b4315: o mojtools que roda na VM do MOJ
   MOJCLI_REPO: cd-moj/moj-cli
-  MOJCLI_REF: 522b81ae23e2dcd91d932d49dae3337b1cf1c599
+  MOJCLI_REF: 07c203495f314060f3c43506e476f541e2917bfb # o carimbo que o cdmoj espera (cli-dist)
 
 jobs:
   imagem:
@@ -26,6 +26,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: ws/cdmoj
+          fetch-depth: 0 # version-json usa o git describe
 
       - uses: actions/checkout@v4
         with:
@@ -40,11 +41,11 @@ jobs:
           path: ws/moj-cli
           fetch-depth: 0 # o mkdist.sh carimba o build com o commit
 
-      - name: CLI (web/moj*) e docs/html
+      - name: CLI (web/moj*), docs/html e web/version.json (rodapé)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq pandoc
-          make -C ws/cdmoj cli-dist docs-html
-          ls -l ws/cdmoj/web/moj ws/cdmoj/web/moj.build ws/cdmoj/docs/html/index.html
+          make -C ws/cdmoj cli-dist docs-html version-json
+          ls -l ws/cdmoj/web/moj ws/cdmoj/web/moj.build ws/cdmoj/docs/html/index.html ws/cdmoj/web/version.json
 
       - id: tag
         run: echo "curta=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
