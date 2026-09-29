@@ -56,8 +56,21 @@ const want=[['Login habilitado','Acesso'],['SUPER SECRETO','Acesso'],['Gate de l
   ['ver o log de julgamento','O que o time vê'],['Editor de código no browser','O que o time vê'],['pedidos de impressão','O que o time vê'],
   ['Veredicto manual','Julgamento'],['Nº de juízes que validam','Julgamento'],['Linguagens permitidas','Julgamento'],['Máquinas de juiz','Julgamento'],
   ['Placar anônimo','Placar'],['Penalidade','Placar'],['Placar completo','Placar'],['Balões durante o freeze','Placar'],['Célula "resolveu"','Placar'],
-  ['Fuso horário da prova','Identidade'],['Abertura do login','Identidade']];
+  ['Fuso horário da prova','Identidade'],['Abertura do login','Identidade'],
+  ['esqueleto da linguagem','O que o time vê']];
 for (const [txt, g] of want) { const got=sec(txt); ck('"'+txt+'" → '+g, got.includes(g), got); }
+// esqueleto da linguagem: some no icpc, aparece fora dele; no icpc NUNCA sai ligado
+const skel=[...kids].find(k=>k.textContent.includes('esqueleto da linguagem'));
+const findIn=(n,f)=>{ for (const c of (n.children||[])) { if (c.nodeType===1) { if (f(c)) return c; const r=findIn(c,f); if (r) return r; } } return null; };
+const skelBox=skel && findIn(skel, n=>n.tagName==='input');
+ck('esqueleto: escondido no icpc', skel && skel.style.display==='none');
+if (skelBox) skelBox.checked=true;
+ck('esqueleto: icpc marcado à força continua false no getValue', ed.getValue().editor_skeleton===false);
+ed.setContestMode('obi');
+ck('esqueleto: aparece no obi e vai true', skel.style.display==='' && ed.getValue().editor_skeleton===true);
+ed.setContestMode('icpc');
+const ed2=makeSettingsEditor({ value:{}, mode:'create', contestMode:'treino' });
+ck('esqueleto: nasce desmarcado (opt-in)', ed2.getValue().editor_skeleton===false);
 ck('o "auto-cadastro (late users)" não existe mais', !ed.el.textContent.includes('auto-cadastro') && ed.getValue().allow_late===undefined);
 print(''); print('RESULT: '+pass+' passed, '+fail+' failed');
 imports.system.exit(fail>0?1:0);

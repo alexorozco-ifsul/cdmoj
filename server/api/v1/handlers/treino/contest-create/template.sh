@@ -24,6 +24,8 @@ cat <<'JSON'
   "_toggles": "os campos abaixo espelham /contest/admin/settings; so mande o que quer MUDAR do default",
   "show_log": true,
   "show_editor": true,
+  "editor_skeleton": false,
+  "_editor_skeleton": "editor do contest comeca com o esqueleto da linguagem (fora do modo icpc; o envio igual ao esqueleto e recusado)",
   "show_tl": true,
   "allow_backup": true,
   "allow_print": true,

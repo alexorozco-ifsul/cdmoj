@@ -55,6 +55,18 @@ showlog_effective() {
   [[ "$(contest_score_mode "$1")" == icpc ]] && echo 0 || echo 1
 }
 
+# editor_skeleton_effective <contest> -> 1|0 : o editor do contest começa com o esqueleto da
+# linguagem (web/shared/languages.js). Opt-in (EDITOR_SKELETON=1 no conf) e NUNCA em modo icpc:
+# lá o time entrega o código inteiro dele e o esqueleto furaria a trava de envio vazio (um
+# clique acidental manda o `main` puro = WA com penalidade). O modo não muda depois de criado,
+# mas a regra é aplicada na LEITURA também — conf editado à mão em contest icpc não liga nada.
+editor_skeleton_effective() {
+  local raw
+  raw="$(sed -n 's/^[[:space:]]*EDITOR_SKELETON=//p' "$CONTESTSDIR/$1/conf" 2>/dev/null | tail -1)"
+  raw="${raw%\"}"; raw="${raw#\"}"; raw="${raw%\'}"; raw="${raw#\'}"
+  [[ "$raw" == 1 && "$(contest_score_mode "$1")" != icpc ]] && echo 1 || echo 0
+}
+
 # Canonização da string de display -> rótulo canônico. DUAS implementações que DEVEM
 # ficar EM SINCRONIA (awk p/ os streams TXT de history; jq p/ o /submission/summary):
 #   - pendentes ("Not Answered Yet"/"On queue"/"Running") passam INTACTOS;

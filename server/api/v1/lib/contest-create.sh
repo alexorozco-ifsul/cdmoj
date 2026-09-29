@@ -91,6 +91,9 @@ cc_settings_conf_lines(){
   v="$(jq -r '.score_anon' <<<"$spec")";     [[ "$v" == true ]] && printf 'SCORE_ANON=%q\n' 1
   v="$(jq -r '.manual_verdict' <<<"$spec")"; [[ "$v" == true ]] && printf 'MANUAL_VERDICT=%q\n' 1
   v="$(jq -r '.secret' <<<"$spec")";         [[ "$v" == true ]] && printf 'SECRET=%q\n' 1
+  # esqueleto da linguagem no editor: opt-in e nunca em icpc (modo ausente = icpc, o default)
+  v="$(jq -r '.editor_skeleton' <<<"$spec")"
+  [[ "$v" == true && "$(jq -r '.mode // "icpc"' <<<"$spec")" != icpc ]] && printf 'EDITOR_SKELETON=%q\n' 1
   # DEMO=1 é TRAVA, não modo: nada no sistema muda de comportamento por causa dele. Ele existe
   # para o `/contest/admin/seed` (dados sintéticos) poder recusar QUALQUER contest que não seja
   # de demonstração — uma prova de verdade nunca pode ser semeada, nem por engano.
@@ -876,7 +879,7 @@ cc_tpl_relativize(){
     def pick($keys): with_entries(select(.key as $k | $keys | index($k)));
     (.start|tonumber? // 0) as $st | (.end|tonumber? // 0) as $en
     | (.login_start|tonumber? // 0) as $ls | (.freeze|tonumber? // 0) as $fz
-    | pick(["mode","priority","languages","show_log","show_editor","show_tl",
+    | pick(["mode","priority","languages","show_log","show_editor","show_tl","editor_skeleton",
             "allow_backup","allow_print","score_anon","manual_verdict","secret",
             "login_ua_substring","score_full_users","locale","login_enabled",
             "penalty_minutes","penalty_verdicts",
@@ -905,13 +908,14 @@ cc_export_spec(){
     FREEZE_TIME=""; SHOWLOG=""; SHOWEDITOR=""; SHOWTL=""; SCORE_ANON=""
     BACKUP=""; PRINT=""; MANUAL_VERDICT=""; LOGIN_UA_SUBSTRING=""; SCORE_FULL_USERS=""; SECRET=""
     PENALTY_MINUTES=""; PENALTY_VERDICTS="__unset"; CONTEST_JUDGES=""; CONTEST_MODULES=""
+    EDITOR_SKELETON=""
     . "$cdir/conf" 2>/dev/null
     jq -cn \
       --arg name "$CONTEST_NAME" --arg mode "$CONTEST_TYPE" --arg prio "$CONTEST_PRIORITY" \
       --arg start "$CONTEST_START" --arg end "$CONTEST_END" --arg langs "$LANGUAGES" \
       --arg users_from "$USERS_FROM" --arg locale "$LOCALE" \
       --arg lstart "$LOGIN_START_TIME" --arg lenabled "$LOGIN_ENABLED" --arg freeze "$FREEZE_TIME" \
-      --arg showlog "$SHOWLOG" --arg showeditor "$SHOWEDITOR" \
+      --arg showlog "$SHOWLOG" --arg showeditor "$SHOWEDITOR" --arg edskel "$EDITOR_SKELETON" \
       --arg showtl "$SHOWTL" --arg anon "$SCORE_ANON" --arg backup "$BACKUP" --arg prnt "$PRINT" \
       --arg manual "$MANUAL_VERDICT" --arg ua "$LOGIN_UA_SUBSTRING" --arg sfu "$SCORE_FULL_USERS" \
       --arg secret "$SECRET" --arg pmin "$PENALTY_MINUTES" --arg pvd "$PENALTY_VERDICTS" \
@@ -928,6 +932,7 @@ cc_export_spec(){
       + (if (($freeze|tonumber?) // 0) > 0 then {freeze:($freeze|tonumber)} else {} end)
       + (if $showlog == "0" then {show_log:false} else {} end)
       + (if $showeditor == "0" then {show_editor:false} else {} end)
+      + (if $edskel == "1" then {editor_skeleton:true} else {} end)
       + (if $showtl == "0" then {show_tl:false} else {} end)
       + (if $anon == "1" then {score_anon:true} else {} end)
       + (if $backup == "0" then {allow_backup:false} else {} end)

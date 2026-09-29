@@ -5,6 +5,7 @@ import { login, logout, status, fileToBase64, textToBase64 } from '/shared/auth.
 import { el, verdictClass, isPending, fmtDate, resumoText } from '/shared/ui.js';
 import { createEditor } from '/shared/editor.js';
 import { LANGUAGES, DEFAULT_SUBMIT_LANGUAGES, langById, extCanon } from '/shared/languages.js';
+import { skeletonFor, isSkeleton, docOnLangChange } from '/shared/editor-skeleton.js';
 import { T, setLang, getLang } from '/shared/i18n.js';
 import { navLabel } from '/shared/nav-i18n.js';
 import { mountContestUserChip } from '/shared/contest-shell.js';
@@ -889,11 +890,14 @@ function renderSubmitInline(p) {
   dlg.addEventListener('cancel', (e) => { e.preventDefault(); exitFull(); });   // Esc fecha limpo
   if (EDITOR_ONLY) { expandBtn.style.display = 'none'; popBtn.style.display = 'none'; }
 
+  // esqueleto da linguagem: opção do contest (nunca em icpc) — shared/editor-skeleton.js
+  const skelOn = !!(userinfo && userinfo.editor_skeleton);
+  const funcLangs = p.function_langs || [];
   async function mountEditor() {
     if (editor) return;
-    editor = await createEditor(editorMount, { doc: '', cm: langById(sel.value).cm, tab: 'indent' });
+    editor = await createEditor(editorMount, { doc: skeletonFor(skelOn, sel.value, funcLangs), cm: langById(sel.value).cm, tab: 'indent' });
     sel.addEventListener('change', async () => {
-      const cur = editor.getValue(); editorMount.innerHTML = '';
+      const cur = docOnLangChange(editor.getValue(), skelOn, sel.value, funcLangs); editorMount.innerHTML = '';
       editor = await createEditor(editorMount, { doc: cur, cm: langById(sel.value).cm, tab: 'indent' });
     });
     setTimeout(refreshEd, 50);
@@ -916,6 +920,9 @@ function renderSubmitInline(p) {
     }
     const txt = editor ? editor.getValue() : '';
     if (!txt.trim()) { edSteps.innerHTML = `<span class="error-box">${T('Escreva código ou escolha um arquivo.', 'Write code or choose a file.', 'Escribe código o elige un archivo.')}</span>`; return; }
+    // o esqueleto intacto conta como vazio: sem isto a trava acima nunca dispararia com a opção
+    // ligada e um clique acidental mandaria o main puro
+    if (skelOn && isSkeleton(txt)) { edSteps.innerHTML = `<span class="error-box">${T('Você ainda não alterou o esqueleto: escreva a sua solução.', 'You have not changed the skeleton yet: write your solution.', 'Todavía no cambiaste el esqueleto: escribe tu solución.')}</span>`; return; }
     edSteps.textContent = T('Preparando…', 'Preparing…', 'Preparando…');
     doSubmit({ filename: 'solution.' + sel.value, code_b64: textToBase64(txt), source: 'web' }, edSteps, edBtn);
   });
@@ -1127,6 +1134,8 @@ async function bootEditorOnly() {
   document.body.classList.add('editor-only');
   show('mainView');
   document.title = 'Editor — ' + (basic.contest_name || 'Contest');
+  // o renderSubmitInline lê o userinfo (esqueleto da linguagem e a trava de envio dele)
+  if (!userinfo) userinfo = await apiGet('/contest/userinfo?contest=' + encodeURIComponent(CONTEST), { contest: CONTEST, auth: true }).catch(() => null);
   let list = [];
   try {
     const j = await apiGet('/contest/problems?contest=' + encodeURIComponent(CONTEST), { contest: CONTEST, auth: true });
