@@ -119,6 +119,9 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
     chk(T('Usuário pode ver o log de julgamento', 'User can see the judging log', 'El usuario puede ver el registro de evaluación'), showLog),
     showLogHint,
     chk(T('Editor de código no browser disponível', 'In-browser code editor available', 'Editor de código en el navegador disponible'), showEditor),
+    // no WIZARD o esqueleto fica aqui, junto do editor (onde se procura); no admin ele vai no FIM
+    // (índice 35) porque o settings-tab agrupa por índice — ver abaixo
+    ...(isCreate ? [skelSec] : []),
     chk(T('Mostrar o tempo-limite dos problemas aos usuários', "Show problems' time limit to users", "Mostrar el tiempo límite de los problemas a los usuarios"), showTL),
     chk(T('Permitir backup de arquivos pelos usuários', 'Allow file backup by users', 'Permitir el backup de archivos por los usuarios'), allowBackup),
     chk(T('Permitir pedidos de impressão pelos usuários (.staff)', 'Allow print requests by users (.staff)', 'Permitir solicitudes de impresión por los usuarios (.staff)'), allowPrint),
@@ -161,8 +164,8 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
         'By default the solved cell always looks the same (green) and the balloon colour goes in a small dot beside it — so "solved" does not depend on seeing the colour, and the WHITE balloon stops vanishing into the scoreboard background. The other option is the classic: the whole cell painted with the balloon colour (light colours then get an outline so they do not vanish). Applies to the scoreboard, the reveal ceremony and the report.',
         'Por defecto, la celda de quien resolvió siempre se ve igual (verde) y el color del globo va en un puntito al lado — así "resuelto" no depende de distinguir el color, y el globo BLANCO deja de desaparecer en el fondo del marcador. La otra opción es la clásica: toda la celda pintada con el color del globo (ahí los colores claros reciben un contorno para no desaparecer). Aplica al marcador, la ceremonia de revelación y el informe.')),
     field(T('Como pintar', 'How to paint', 'Cómo pintar'), blnStyle),
-    // idem: no FIM (índice 35, seção "O que o time vê" do settings-tab.js)
-    skelSec);
+    // idem: no FIM (índice 35, seção "O que o time vê" do settings-tab.js) — só no admin
+    ...(isCreate ? [] : [skelSec]));
 
   function getValue() {
     return {

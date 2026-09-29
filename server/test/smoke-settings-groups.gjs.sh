@@ -71,6 +71,9 @@ ck('esqueleto: aparece no obi e vai true', skel.style.display==='' && ed.getValu
 ed.setContestMode('icpc');
 const ed2=makeSettingsEditor({ value:{}, mode:'create', contestMode:'treino' });
 ck('esqueleto: nasce desmarcado (opt-in)', ed2.getValue().editor_skeleton===false);
+// no WIZARD (create) a caixa vem logo depois de "Editor de código no browser" — não no fim
+const k2=[...ed2.el.children], i2=k2.findIndex(k=>k.textContent.includes('esqueleto da linguagem'));
+ck('esqueleto: no wizard, logo abaixo do "Editor de código no browser"', i2>0 && k2[i2-1].textContent.includes('Editor de código no browser') && k2[i2].style.display!=='none', 'posição '+i2);
 ck('o "auto-cadastro (late users)" não existe mais', !ed.el.textContent.includes('auto-cadastro') && ed.getValue().allow_late===undefined);
 print(''); print('RESULT: '+pass+' passed, '+fail+' failed');
 imports.system.exit(fail>0?1:0);
