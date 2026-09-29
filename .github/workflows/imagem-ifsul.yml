@@ -16,8 +16,10 @@ permissions:
 env:
   MOJTOOLS_REPO: alexorozco-ifsul/mojtools
   MOJTOOLS_REF: local/moj-vm # f3b4315: o mojtools que roda na VM do MOJ
-  MOJCLI_REPO: cd-moj/moj-cli
-  MOJCLI_REF: 07c203495f314060f3c43506e476f541e2917bfb # o carimbo que o cdmoj espera (cli-dist)
+  # fork: upstream ab03838 (sedes pela regra única, par do cdmoj de 28/09) + --include-private
+  # (cd-moj/moj-cli#3, par do cdmoj#35). Volta ao cd-moj/moj-cli quando o PR entrar.
+  MOJCLI_REPO: alexorozco-ifsul/moj-cli
+  MOJCLI_REF: 75d2d1cc951afcf87956f0522bcdee4964f4c289
 
 jobs:
   imagem:
