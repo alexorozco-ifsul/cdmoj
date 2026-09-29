@@ -174,15 +174,30 @@ function stateBadges(p) {
   return out;
 }
 
+// Casamento da caixa de busca contra UMA linha. Existe para as abas nao divergirem: a busca por
+// tag nasceu so em filteredRows() e o Painel -- que e a aba PADRAO -- ficou sem ela, entao
+// digitar "#condicional" ali nao achava nada.
+//   "#a #b"  -> SO tags, em E logico (o # dos termos seguintes e opcional)
+//   "texto"  -> titulo + autor + id + tags
+// O '#' troca o modo porque o id TEM '#' no meio (banco_de_questoes#300metrosparaagloria):
+// sem isso "#c" casava com metade do banco e a tag sumia no ruido.
+function rowMatches(p, q) {
+  if (!q) return true;
+  const tags = (p.tags || []).map(norm);
+  if (q.startsWith('#')) {
+    const termos = q.split(/\s+/).filter(Boolean).map(s => s.replace(/^#/, '')).filter(Boolean);
+    return termos.every(term => tags.some(tg => tg.includes(term)));
+  }
+  return norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || '')
+              + ' ' + tags.join(' ')).includes(q);
+}
+
 function filteredRows() {
-  const q = norm(document.getElementById('q').value);
+  const q = norm(document.getElementById('q').value.trim());
   const onlyBroken = document.getElementById('onlybroken').checked;
   return ROWS.filter(p => {
     if (onlyBroken && p.public) return false;
-    if (q) {
-      const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || ''));
-      if (!hay.includes(q)) return false;
-    }
+    if (!rowMatches(p, q)) return false;
     return true;
   });
 }
@@ -712,13 +727,13 @@ async function loadPanel() {
 
 // filtra (#q + "só com atenção") e ordena as linhas do painel conforme PANEL_SORT
 function panelRows() {
-  const q = norm(document.getElementById('q').value);
+  const q = norm(document.getElementById('q').value.trim());
   const attn = document.getElementById('onlybroken').checked;
   const fpred = PANEL_FILTER ? PANEL_PREDS[PANEL_FILTER] : null;
   const rows = (PANEL?.problems || []).filter(p => {
     if (fpred && !fpred(p)) return false;
     if (attn && !(p.needs_review || p.needs_recalibration)) return false;
-    if (q) { const hay = norm((p.title || '') + ' ' + (p.author || '') + ' ' + (p.id || '')); if (!hay.includes(q)) return false; }
+    if (!rowMatches(p, q)) return false;
     return true;
   });
   const k = PANEL_SORT.key, d = PANEL_SORT.dir;

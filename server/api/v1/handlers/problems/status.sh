@@ -102,6 +102,7 @@ out="$(jq -c --slurpfile TL "$tlmap" --slurpfile VAL "$valmap" --slurpfile CX "$
       | ((((.title // "") == "") or ((.title // "") == (.prob // ""))) ) as $untitled
       | { id:$id, title:(.title // .prob // $id), untitled:$untitled, owner:.owner, author:.author, public:.public,
           collaborators:(.collaborators // []),
+          tags:(.tags // []),
           validated:$vstate,
           calibrated:$cal,
           sols:{state:$sstate, bad:($cs.bad // 0), note:($cs.note // 0), missing:($cs.missing // 0),
