@@ -26,7 +26,8 @@ export function makeSettingsTab(CONTEST, opts = {}) {
     // 26,27,28 = o bloco do FUSO da prova, acrescentado no fim do editor (ver a nota lá:
     // campo novo entra no fim justamente para não deslocar estes índices)
     { label: T('🕒 Identidade e janela', '🕒 Identity and window', '🕒 Identidad y ventana'), idx: [0, 1, 2, 3, 26, 27, 28], open: true },
-    { label: T('👁 O que o time vê durante a prova', '👁 What the team sees during the contest', '👁 Lo que el equipo ve durante la competencia'), idx: [5, 6, 7, 8, 9, 10] },
+    // 35 = o esqueleto da linguagem no editor (acrescentado no fim do editor; some no icpc)
+    { label: T('👁 O que o time vê durante a prova', '👁 What the team sees during the contest', '👁 Lo que el equipo ve durante la competencia'), idx: [5, 6, 7, 8, 9, 10, 35] },
     { label: T('⚖️ Julgamento (linguagens, pool, veredicto manual)', '⚖️ Judging (languages, pool, manual verdict)', '⚖️ Evaluación (lenguajes, pool, veredicto manual)'), idx: [11, 12, 17, 18, 19, 20, 21, 22] },
     // 29,30,31 = o bloco "balões durante o freeze", também acrescentado no fim do editor
     { label: T('🏅 Placar, freeze e penalidade', '🏅 Scoreboard, freeze and penalty', '🏅 Marcador, congelamiento y penalización'), idx: [13, 16, 23, 24, 25, 29, 30, 31, 32, 33, 34] },

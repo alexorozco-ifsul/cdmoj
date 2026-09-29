@@ -46,7 +46,8 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
     scoreAnon = mkBool(s.score_anon),
     showTL = mkBool(s.show_tl !== false), allowBackup = mkBool(s.allow_backup !== false),
     allowPrint = mkBool(s.allow_print !== false), manualVerdict = mkBool(s.manual_verdict === true),
-    secret = mkBool(s.secret === true), balloonsFreeze = mkBool(s.balloons_during_freeze === true);
+    secret = mkBool(s.secret === true), balloonsFreeze = mkBool(s.balloons_during_freeze === true),
+    editorSkeleton = mkBool(s.editor_skeleton === true);
   const blnStyle = el('select', {},
     el('option', { value: 'icon' }, T('Neutro + bolinha da cor (padrão)', 'Neutral + colour dot (default)', 'Neutro + punto de color (por defecto)')),
     el('option', { value: 'fill' }, T('Célula pintada com a cor do balão', 'Cell filled with the balloon colour', 'Celda pintada con el color del globo')));
@@ -94,6 +95,17 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
   };
   showLog.addEventListener('change', () => { showLogTouched = true; syncShowLog(); });
   syncShowLog();
+
+  // ESQUELETO da linguagem no editor do contest: só fora do icpc (lá o time entrega o código
+  // inteiro dele, e o esqueleto furaria a trava de envio vazio). Opt-in: nasce desmarcado.
+  const skelSec = el('div', {},
+    chk(T('Exibir o esqueleto da linguagem no campo de código', 'Show the language skeleton in the code field', 'Mostrar el esqueleto del lenguaje en el campo de código'), editorSkeleton),
+    el('p', { class: 'muted small', style: 'margin:.1rem 0 .4rem' },
+      T('O editor do contest começa com o mesmo código inicial do Treino Livre (o main de cada linguagem). Enviar o esqueleto sem alterar é recusado. Em problema de submissão de função o editor começa vazio. Indisponível no modo ICPC.',
+        'The contest editor starts with the same starter code as Free Training (each language\'s main). Submitting the untouched skeleton is refused. In function-submission problems the editor starts empty. Unavailable in ICPC mode.',
+        'El editor de la competencia empieza con el mismo código inicial del Entrenamiento libre (el main de cada lenguaje). Enviar el esqueleto sin cambios se rechaza. En problemas de envío de función el editor empieza vacío. No disponible en el modo ICPC.')));
+  const syncSkel = () => { skelSec.style.display = cmode === 'icpc' ? 'none' : ''; };
+  syncSkel();
 
   const box = el('div', {});
   if (!isCreate) {
@@ -148,7 +160,9 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
       T('No padrão, a célula de quem resolveu é sempre igual (verde) e a cor do balão vai numa bolinha ao lado — assim "resolveu" não depende de enxergar a cor, e o balão BRANCO deixa de sumir no fundo do placar. A outra opção é o clássico: a célula inteira pintada com a cor do balão (aí as cores claras ganham contorno para não sumir). Vale para o placar, a cerimônia de revelação e o relatório.',
         'By default the solved cell always looks the same (green) and the balloon colour goes in a small dot beside it — so "solved" does not depend on seeing the colour, and the WHITE balloon stops vanishing into the scoreboard background. The other option is the classic: the whole cell painted with the balloon colour (light colours then get an outline so they do not vanish). Applies to the scoreboard, the reveal ceremony and the report.',
         'Por defecto, la celda de quien resolvió siempre se ve igual (verde) y el color del globo va en un puntito al lado — así "resuelto" no depende de distinguir el color, y el globo BLANCO deja de desaparecer en el fondo del marcador. La otra opción es la clásica: toda la celda pintada con el color del globo (ahí los colores claros reciben un contorno para no desaparecer). Aplica al marcador, la ceremonia de revelación y el informe.')),
-    field(T('Como pintar', 'How to paint', 'Cómo pintar'), blnStyle));
+    field(T('Como pintar', 'How to paint', 'Cómo pintar'), blnStyle),
+    // idem: no FIM (índice 35, seção "O que o time vê" do settings-tab.js)
+    skelSec);
 
   function getValue() {
     return {
@@ -167,6 +181,7 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
       allow_backup: allowBackup.checked, allow_print: allowPrint.checked,
       manual_verdict: manualVerdict.checked, secret: secret.checked, login_ua_substring: ua.value,
       balloons_during_freeze: balloonsFreeze.checked, balloon_style: blnStyle.value,
+      editor_skeleton: cmode !== 'icpc' && editorSkeleton.checked,
       review_judges: Math.min(5, Math.max(1, parseInt(revJudges.value, 10) || 2)),
       languages: langs.get(),
       judges: judges.get(),
@@ -177,5 +192,5 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
       } : {}),
     };
   }
-  return { el: box, getValue, setContestMode: (m) => { cmode = m; syncPen(); syncShowLog(); } };
+  return { el: box, getValue, setContestMode: (m) => { cmode = m; syncPen(); syncShowLog(); syncSkel(); } };
 }

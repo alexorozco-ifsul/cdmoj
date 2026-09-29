@@ -30,7 +30,9 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
             show_tl:$stl, languages:$langs, judges:$jdg, score_full_users:$sfu, allow_backup:$ab, allow_print:$ap, manual_verdict:$mv,
             secret:$sec, mode:$mode, penalty_minutes:$pm, penalty_verdicts:$pvd, review_judges:$rj,
             balloons_during_freeze:$bdf, balloons_frozen:$bfz, balloon_style:$bsty, modules:$mods,
-            freeze_release_at:$fra, guest_numbering:$gnum, statement_langs:$slangs, statement_langs_mode:$smode, default_statement_lang:$sdef}' \
+            freeze_release_at:$fra, guest_numbering:$gnum, statement_langs:$slangs, statement_langs_mode:$smode, default_statement_lang:$sdef,
+            editor_skeleton:$esk}' \
+    --argjson esk "$([[ "$(editor_skeleton_effective "$contest")" == 1 ]] && echo true || echo false)" \
     --arg smode "$(cs_mode "$contest")" \
     --argjson slangs "$(jq -cn --arg s "$(cs_norm "$STATEMENT_LANGS")" '$s|split(" ")')" \
     --arg sdef "$(cs_default "$contest" "$(cs_norm "$STATEMENT_LANGS")")" \
@@ -134,6 +136,15 @@ bset allow_print PRINT _
 bset manual_verdict MANUAL_VERDICT 1
 bset secret      SECRET 1
 bset balloons_during_freeze BALLOONS_DURING_FREEZE 1
+# esqueleto da linguagem no editor do contest: opt-in, e IGNORADO em modo icpc (não grava nada —
+# cliente antigo manda o formulário inteiro; 422 quebraria o Salvar). Ver editor_skeleton_effective.
+if has editor_skeleton; then
+  if [[ "$(jq -r '.editor_skeleton' <<<"$body")" == true && "$(contest_score_mode "$contest")" != icpc ]]; then
+    setvar EDITOR_SKELETON 1
+  else
+    delvar EDITOR_SKELETON
+  fi
+fi
 # convidados (coorte unranked) com NUMERAÇÃO PRÓPRIA no placar (issue #25): a 1ª linha do TXT
 # ganha a flag `g` e o JS/relatório numeram os convidados na sequência deles (C1, C2…), sem
 # tocar na oficial. Muda o TXT ⇒ rebuild forçado.
