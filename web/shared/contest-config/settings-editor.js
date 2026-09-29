@@ -100,10 +100,10 @@ export function makeSettingsEditor({ value = {}, mode = 'admin', isAdmin = false
   // inteiro dele, e o esqueleto furaria a trava de envio vazio). Opt-in: nasce desmarcado.
   const skelSec = el('div', {},
     chk(T('Exibir o esqueleto da linguagem no campo de código', 'Show the language skeleton in the code field', 'Mostrar el esqueleto del lenguaje en el campo de código'), editorSkeleton),
-    el('p', { class: 'muted small', style: 'margin:.1rem 0 .4rem' },
-      T('O editor do contest começa com o mesmo código inicial do Treino Livre (o main de cada linguagem). Enviar o esqueleto sem alterar é recusado. Em problema de submissão de função o editor começa vazio. Indisponível no modo ICPC.',
-        'The contest editor starts with the same starter code as Free Training (each language\'s main). Submitting the untouched skeleton is refused. In function-submission problems the editor starts empty. Unavailable in ICPC mode.',
-        'El editor de la competencia empieza con el mismo código inicial del Entrenamiento libre (el main de cada lenguaje). Enviar el esqueleto sin cambios se rechaza. En problemas de envío de función el editor empieza vacío. No disponible en el modo ICPC.')));
+    // mesmo formato do aviso do log no icpc (showLogHint): laranja, logo abaixo da caixa
+    el('p', { class: 'muted small', style: 'margin:.1rem 0 .4rem;color:#b45309' },
+      T('⚠️ Fora do ICPC: o editor começa com o código inicial do Treino Livre (o main de cada linguagem). ', '⚠️ Outside ICPC: the editor starts with the Free Training starter code (each language\'s main). ', '⚠️ Fuera del ICPC: el editor empieza con el código inicial del Entrenamiento libre (el main de cada lenguaje). '),
+      T('Enviar o esqueleto sem alterar é recusado, e em problema de submissão de função o editor começa vazio.', 'Submitting the untouched skeleton is refused, and in function-submission problems the editor starts empty.', 'Enviar el esqueleto sin cambios se rechaza, y en problemas de envío de función el editor empieza vacío.')));
   const syncSkel = () => { skelSec.style.display = cmode === 'icpc' ? 'none' : ''; };
   syncSkel();
 
