@@ -317,7 +317,12 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   antigo (16/09: o bot de 26/08 não mandava `chat_type` e o `/relatorio aqui` respondia `not_group`). O
   Bearer `mojb_…` do bot NUNCA recebe a dica de "CLI antiga" (`cli-version.sh`). **Alertas**: `lib/alerts.sh` + `GET /ops/alerts` (a API avalia com
   histerese/cooldown e enfileira no outbox `run/alerts/`; o bot drena e entrega a `.admin` vinculados
-  + grupo). O outbox tem **TRÊS formatos**: `*.txt` = incidente (destino resolvido no claim = os
+  + grupo). Condições: sem juiz + fila, fila grande, daemon caído, bot fora do ar e **job PARADO**
+  (`queue_stuck`, 30/09/2026: job na fila há `ALERT_STUCK_AFTER`=15 min com juiz online — a mensagem diz
+  quantos, contest · problema do mais antigo, há quanto tempo e o MOTIVO provável cruzando o `.cmeta` com os
+  juízes vivos: memória, pool offline, largura, linguagem; lembrete no máx. a cada `ALERT_STUCK_COOLDOWN`=1 h.
+  A idade vem do `enq` do `.cmeta`, nunca do nome do arquivo, que a promoção de famintos renomeia. Teste
+  `smoke-alerts-stuck.sh`). Antes, 10 submissões ficaram >24 h presas e nenhuma condição as via. O outbox tem **TRÊS formatos**: `*.txt` = incidente (destino resolvido no claim = os
   `.admin`), `*-dm-*.json` = **DM dirigida** (`alert_dm`: o produtor resolve o chat; `group:false` p/ não
   copiar no grupo, `loud:true` p/ notificar) e `*-grp-*.json` = **só grupo** (`alert_group`:
   `chats:[]` + `group:true`; o claim SÓ aceita chats vazio quando `group` — DM sem destino segue
@@ -518,8 +523,19 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   completa em `judge-gw/PULL.md` ("Largura k"). Os juízes oficiais são slots de 1 CPU; um job de
   `CPUNEEDED=k` ocupa `k_slots = ceil(k/slot_cpus)` do MESMO juiz. O `conf` do pacote é lido por
   REGEX (`sched_pkg_par`; nunca sourced) e memoizado no sidecar `.cmeta` **v2** (12 campos; v1 é
-  reescrito). `q_claim` é por largura: `k_slots ≤ livres`, `SAMENUMA` ⇒ `≤ max_free_group`, memória
-  por slot; não cabe ⇒ pula (backfill). Env `QC_*` do heartbeat (slot_cpus, max_free_group,
+  reescrito; e REFEITO quando o `conf` do pacote é mais novo que ele — `_cmeta_load`, a leitura única dos
+  três leitores: sem isso corrigir o pacote não destravava o job já na fila). `q_claim` é por largura:
+  `k_slots ≤ livres`, `SAMENUMA` ⇒ `≤ max_free_group`; não cabe ⇒ pula (backfill). **MEMÓRIA É
+  LARGURA** (`_eff_width`, 30/09/2026): o job cujo `max(600, MEMLIMITMB+64)` não cabe na fatia de
+  `k_slots` slots (`(mem−4 GB)×k_slots/total_slots`) leva os slots que o comportam e o `test_cpus` sobe
+  junto (é por ele que o agente reserva — o judge não mudou); nem a máquina INTEIRA ⇒ pula, e o
+  `infeasible_sweep` fecha com Judge Error em `INFEASIBLE_AFTER` dizendo o MEMLIMITMB e o teto do maior
+  juiz. O job reivindicado leva também `cpu_needed` (o CPUNEEDED; só p/ as TELAS). O painel Máquinas e o
+  `moj judges show` escrevem a largura por extenso — `N slots = P testes por vez × K slots por teste (C
+  CPUs…)` (JQ_JOB_WIDTH no moj-cli) — e o `show` diz a POLÍTICA GERAL de testes em paralelo: "[4 slots, 4
+  cpu/teste]" parecia 4 testes em paralelo e era 1 teste com 4 CPUs juntas, com a política `"*"` OFF
+  (relato de 30/09/2026). Antes o job de memória impossível ficava na fila PARA SEMPRE (10 submissões de uma lista, 15
+  problemas com `MEMLIMITMB=262144` digitado em KB, incidente de 30/09/2026). Env `QC_*` do heartbeat (slot_cpus, max_free_group,
   total/mem, política) — juiz LEGADO (beat sem `slot_cpus`) só k=1 e sem campos novos. `par_max`
   (testes em paralelo) SÓ com política `"*".parallel=auto` (judges-config; fora do `cfg_hash`),
   fila vazia e nada pulado por porta de tempo/largura: sobra além do colchão, rodízio, teto
@@ -807,8 +823,15 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   = só públicos. A regra é `owners_visible_for <login>` (o `owners_visible` virou atalho dela; login
   vazio = só públicos) — **não copie o predicado no jq**. `cc_bank_private_json` lê do
   `jsons-private/<id>.json` só as tags, um por vez (`xargs`, sem `-s`: o arquivo traz o enunciado em
-  base64); título/coleções vêm do índice. Índice quebrado + opt-in = 503. Cada sorteado leva
-  `private`/`access` (selo 🔒); o painel confirma o "+ adicionar todos" com privado no meio. Testes:
+  base64); título/coleções vêm do índice. Arquivo CORROMPIDO: o jq do lote para no 1º erro de parse e
+  as tags de todos os seguintes sumiam (com o 1º quebrado, `#priv` dava 0 candidatos) — hoje refaz um a
+  um e avisa no error.log (`cc_bank_private_json: ilegível:`). Índice quebrado + opt-in = 503. Cada
+  sorteado leva `private`/`access` (selo 🔒) e `has_statement` (json servível existe e é legível;
+  privado sem ele sai MARCADO, não some — sem o campo o wizard dizia "enunciado em geração" p/ todo
+  privado sorteado). O `cc_bank_filter` RECONSTRÓI o objeto: campo novo do banco entra lá também. O
+  painel confirma o "+ adicionar todos" com privado no meio e avisa quando a meta dos privados falha.
+  Limitação conhecida (anterior, fora do PR): despublicado recém segue "público" p/ os outros até o
+  cache público (`var/problems.json`, TTL) se refazer. Testes:
   `smoke-draw-private.sh`, `smoke-bank-panel-private.gjs.sh`. Futuro possível: flag por org
   (`drawable`, no molde do `public_allowed`) p/ separar banco de aula de prova em elaboração.
 - **Esqueleto da linguagem no editor do CONTEST (`EDITOR_SKELETON`, 2026-09-29, retomada do PR #34)**:
@@ -1463,7 +1486,8 @@ mexa na outra. O índice separa as coleções por `\u001f` (nome é texto livre:
   donos só se refaz em background (30 min + a varredura); entre "editei + recalibrei" e o índice alcançar,
   o checksum de `run/tl` (novo) ≠ o do índice (velho) e o `/contest/problems` servia **`time_limits:{}`** —
   o TL SUMIA da prova (relato do Daniel Saad: `saad-problems#metro`; achou que era por ser rascunho, não
-  era) e o Painel seguia em "precisa recalibrar". O `/judge/tl-report` JÁ confere o checksum real do pacote,
+  era); o Painel não acusa essa janela porque a guarda de data dele (ver o Painel, abaixo) a cobre. O
+  `/judge/tl-report` JÁ confere o checksum real do pacote,
   então é ele quem carimba `treino/var/tl-checksum-fresh.json` (`{id:cks}`), ANTES do `tl_store_record` (o
   `mv` em `run/tl` invalida o cache do contest — o carimbo tem de já estar lá). O carimbo VENCE o índice em
   `tl_index_checksums` (contest) e em `owners_merged` (Painel). Morre no `problem_commit` **só se o checksum
@@ -1525,8 +1549,17 @@ mexa na outra. O índice separa as coleções por `\u001f` (nome é texto livre:
   Painel/`calib_targeted`/`moj judges show` diziam "nada" enquanto o juiz calibrava por minutos, relato
   do Ribas 20/09/2026; o marcador é DISPLAY-ONLY — não dedupa, não serializa, não volta p/ a fila e não
   é re-carimbado pelo heartbeat, e quem o apaga é o report do juiz. Teste: `smoke-calib-queue.sh`) e
+  **"🚫 não julgável"** (`judgeable`/pendência `not_judgeable:<memory|cpus|numa|langs>,<pedido>,<teto>`: a MESMA
+  regra do escalonador — `sched_judgeable`/`_eff_width` — contra os juízes vistos em 7 dias, e as linguagens
+  declaradas contra as dos juízes; o topo traz `judge_capacity` p/ o aviso AO VIVO da aba Limites do editor;
+  teste `smoke-problem-judgeable.sh`) e
   **"precisa recalibrar"** (checksum calibrado em `run/tl/<id>.json` ≠ `tl_checksum` **carimbado no
-  índice** por `mojtools/gen-problem-owners.sh`). A FRONTEIRA de acesso é **`owners_visible`** (extraído
+  índice** por `mojtools/gen-problem-owners.sh` — SALVO calibração MAIS NOVA que o índice, pelo
+  `generated_at` do `problem-owners.json`: o índice se refaz em background e o checksum de lá é
+  sabidamente velho. ⚠ O `owners_merged` monta um objeto NOVO e tem de repassar o `generated_at`: sem ele
+  a data vale 0, toda calibração parece mais nova e o card fica zerado, com o botão "Recalibrar todos"
+  sumido — foi assim de 28/07 a 30/09/2026, com 341 pacotes editados em produção e o card em 0 (PR #41).
+  Testes: `smoke-owners-index.sh` (a lib) e `smoke-status-recalibrar.sh` (a rota)). A FRONTEIRA de acesso é **`owners_visible`** (extraído
   de `owners_emit` — UMA definição do filtro público∪dono∪colaborador∪membro-da-org; o handler
   ainda estreita a dono/colaborador/membro-da-org). **Sem hash de pacote por request**: staleness é a comparação de dois checksums já
   materializados (o do índice regenera em background, ≤30 min de atraso — o gerador tem cache
@@ -1784,6 +1817,14 @@ mexa na outra. O índice separa as coleções por `\u001f` (nome é texto livre:
 
 - Commits em PT, presente, prefixados pelo componente (ex.: `problemas: …`, `score/stats: …`). O rodapé
   leva **só** `Co-Authored-By:` — **nunca** uma linha `Claude-Session:` (ruído no histórico).
+- **PULL REQUESTS: `docs/PULL-REQUESTS.md` é o padrão** (fonte única, vale p/ os 4 repos; no workspace a
+  skill `revisar-prs` aponta p/ ele):
+  - revisão ADVERSÁRIA, com as recomendações validadas;
+  - o Ribas decide PR a PR, com recomendação e racional;
+  - worktree (este checkout é o dev), com os nossos commits no branch do PR (nunca rebase nem force-push no
+    fork) e testes que falham sem eles;
+  - integração nos dois jq e no navegador;
+  - publicar (merge commit, comentários, fechamento) SÓ com o OK dele; deploy à parte.
 - **DOCS DE USUÁRIO EM pt · en · es** (`docs/i18n.sh` `DOCS_I18N`, espelho em `web/shared/i18n.js`):
   mudou um doc da lista ⇒ no MESMO commit `bash docs/i18n.sh diff <DOC>` (o que mudou no PT desde o
   carimbo), aplicar em `docs/en/` e `docs/es/` (inglês em STE; comando/código byte a byte iguais, só
