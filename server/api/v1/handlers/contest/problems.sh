@@ -242,14 +242,6 @@ for (( i=0; i<${#PROBS[@]}; i+=5 )); do
     [[ -n "$pkg" && -s "$pkg/author" ]] && au="$(grep -v '^[[:space:]]*$' "$pkg/author" 2>/dev/null | paste -sd'|' - | sed 's/|/, /g')"
     [[ -n "$au" ]] && { args+=( --arg au "$au" ); filt+=", author:\$au"; }
   fi
-  # SUBMISSÃO DE FUNÇÃO: linguagens com scripts/<lang>/compile.sh próprio (ele injeta o main —
-  # docs/PACOTE.md). O editor com esqueleto começa VAZIO nelas: o `main` do esqueleto daria CE
-  # por main duplicado. Barato (um glob no pacote) e o cache desta rota cobre.
-  fl="$(pkg_path "$PROBLEMID")"
-  if [[ -n "$fl" ]]; then
-    fl="$(find "$fl/scripts" -mindepth 2 -maxdepth 2 -name compile.sh 2>/dev/null | awk -F/ '{print $(NF-1)}' | sort -u | jq -Rcs 'split("\n")|map(select(length>0))')"
-    [[ -n "$fl" && "$fl" != '[]' ]] && { args+=( --argjson fl "$fl" ); filt+=", function_langs:\$fl"; }
-  fi
   args+=( --argjson tl "$tl" --argjson plangs "$plangs" ); filt+=", time_limits:\$tl, languages:\$plangs}"
 
   ITEMS+=( "$(jq -cn --arg id "$PROBLEMID" --arg short "$SHORTNAME" \

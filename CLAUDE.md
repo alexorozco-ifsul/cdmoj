@@ -834,17 +834,6 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   cache público (`var/problems.json`, TTL) se refazer. Testes:
   `smoke-draw-private.sh`, `smoke-bank-panel-private.gjs.sh`. Futuro possível: flag por org
   (`drawable`, no molde do `public_allowed`) p/ separar banco de aula de prova em elaboração.
-- **Esqueleto da linguagem no editor do CONTEST (`EDITOR_SKELETON`, 2026-09-29, retomada do PR #34)**:
-  opt-in (caixa desmarcada no passo 5 do wizard e na aba Configurações — índice 35 do settings-editor,
-  seção "O que o time vê") e **nunca em modo icpc**: lá o time entrega o código inteiro e o esqueleto
-  furaria a trava de envio vazio (clique acidental = `main` puro = WA com penalidade). A regra é
-  `editor_skeleton_effective` (`lib/verdict.sh`), aplicada na LEITURA também (conf editado à mão em
-  icpc não liga); o settings POST ignora a chave no icpc. O editor usa `shared/editor-skeleton.js`
-  (puro): começa com o `template` de `shared/languages.js`; troca de linguagem só troca o texto se
-  ainda é esqueleto; o envio do esqueleto intacto é recusado; em problema de SUBMISSÃO DE FUNÇÃO
-  (`function_langs` do `/contest/problems` = `scripts/<lang>/compile.sh` no pacote) começa vazio.
-  A janela "⧉ Nova janela" (editoronly) carrega o userinfo também. Testes: `smoke-editor-skeleton.sh`,
-  `smoke-editor-skeleton.gjs.sh`, `smoke-settings-groups.gjs.sh`.
 - **ENUNCIADO EM VÁRIOS IDIOMAS (2026-09-15)** — é OUTRO eixo que o `i18n.js` (interface pt|en|es):
   o eixo dos DOCUMENTOS (pt/en/es). Fonte única da descoberta de arquivo: `mojtools/statement-langs.sh`
   (`stmt_file`/`stmt_langs_of`/`stmt_note_file`/`stmt_samples_html` — o ÚNICO gerador do HTML dos
