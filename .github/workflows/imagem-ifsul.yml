@@ -15,7 +15,7 @@ permissions:
 
 env:
   MOJTOOLS_REPO: alexorozco-ifsul/mojtools
-  MOJTOOLS_REF: local/moj-vm # f3b4315: o mojtools que roda na VM do MOJ
+  MOJTOOLS_REF: local/moj-vm # 84edb77: upstream (FUNCTION_LANGS, locale do Java) + tags no índice de donos
   # moj-cli oficial: o --include-private (moj-cli#3) entrou no upstream em 30/09/2026
   MOJCLI_REPO: cd-moj/moj-cli
   MOJCLI_REF: 7cafe0c1548cac42c3d0c58c3513b08550869af3
