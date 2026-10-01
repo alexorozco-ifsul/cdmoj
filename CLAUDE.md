@@ -1057,7 +1057,7 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
 - **MÓDULOS DO CONTEST (`lib/modules.sh`, 2026-09-05)** — grupos de recursos que o admin LIGA por
   contest (`CONTEST_MODULES=a,b` no conf, `%q` escapa a vírgula ⇒ `mod_raw` tira as barras; ausente
   = nenhum). Catálogo ÚNICO `MODULES=(sedes maquinas rodadas documentos baloes coortes inscricoes
-  telao classificacao virtual)`, espelhado em `web/contest/admin/modules.js` (paridade testada em
+  telao classificacao virtual esqueletos)`, espelhado em `web/contest/admin/modules.js` (paridade testada em
   `smoke-admin-nav.sh`); `mod_on/mod_any/mod_list_json/mod_set/mod_detect`. O gate é **UX** (decide
   nav/painéis/checagens/cartões); **o acesso continua cortado em cada rota**. **Desligar nunca apaga
   dado** (o painel avisa; `detected` mostra que há arquivo). **Gravar o artefato de um módulo LIGA o
@@ -1072,9 +1072,38 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   chaves NOVAS a partir de `views`); template tira `rounds/active/time_overrides`; duplicate desloca
   o plano de rodadas pelo delta das datas. Compat: `colors/regions/teams_meta` no topo seguem
   aceitos. Contests antigos: `server/bin/contest-modules-detect.sh [--apply]` (uma vez).
-  **Classificação por catálogo**: `admin/classify.sh` despacha `config.algorithm` por allowlist
-  `CL_ENGINES` (`sbc-fase1` → `score/classify-br.sh`); a PDA = motor novo + 1 linha + smoke.
+  **Classificação por catálogo** (`docs/CLASSIFICACAO.md`): vários ESTÁGIOS por contest (`final-br`, `pda`,
+  `mundial`), cada um com o seu motor; `admin/classify.sh` só executa script da allowlist `CL_ENGINES`
+  (`lib/classify.sh`) e o catálogo `score/classify-catalog.json` dá estágio padrão, chip, rótulos pt/en/es e
+  semente (paridade testada no `smoke-contest-modules.sh`). Motor novo = script + 1 linha + entrada no catálogo +
+  smoke; contrato de rc 0/1/2 config/3 recusa, `--check`. **Override manual** (`exclude`/`withdraw`/`add`/
+  `override_undo`, motivo obrigatório e interno) fica SEPARADO do `result` do motor e sobrevive ao re-apply; a
+  composição (motor − retirados + manuais) é UMA regra jq, `CL_JQ`. Placar e relatório leem o ESTÁGIO (um chip
+  por estágio; `ext:` = time de fora do placar, só no `classificados.html`), nunca o motor. Motores: `sbc-fase1`
+  (`classify-br.sh`) e `latam-pda` (`classify-pda.sh`: região/país das capturas do LOGIN — fora do padrão = recusa
+  rc 3; geográfica do PDF em INTEIROS; lista de espera + `promote_next`; teste `smoke-classify-pda.sh`) e
+  `latam-mundial` (`classify-mundial.sh`, no contest do Campeonato; prêmios informativos; `smoke-classify-mundial.sh`) e
+  `manual` (`classify-manual.sh`, seletiva: o painel mostra o placar e cada promoção é um `add` com motivo opcional, até
+  `slots` — 409 `slots_full`; `smoke-classify-manual.sh`).
   Testes: `smoke-contest-modules.sh` (57), `smoke-preflight.sh`, `smoke-contest-create.sh`.
+- **MÓDULO `esqueletos` (esqueleto de código no editor do time, issue #40 do Alex Orozco, 30/09/2026)**:
+  no contest o editor abre VAZIO (o time escreve o código DELE por completo — o PR #34 foi recusado por isso);
+  o módulo é o opt-in. `lib/esqueletos.sh` (no prelúdio): `esq_effective` = `mod_on esqueletos` E `SHOWEDITOR != 0`,
+  por `conf_value` (zero processos) e conferido na LEITURA; `contests/<c>/esqueletos.json` guarda só o que o admin
+  TROCOU (`{langs:{<lang>:{mode:"custom",code}|{mode:"off"}}}`) — o PADRÃO mora só em `web/shared/languages.js`.
+  O módulo EXIGE o editor nas DUAS direções, em toda porta: `admin/modules` (422 `editor_required`),
+  `admin/settings` `show_editor:false` (409 `module_needs_editor`, ANTES de gravar qualquer campo), `cc_create`
+  (criar/duplicar/template, 422) e o próprio `admin/esqueletos` (gravar liga o módulo). Rotas:
+  `/contest/admin/esqueletos` (set/off/reset, 64 KB por linguagem, linguagem = `PLATFORM_LANGS` + o que o contest
+  declara) e `/contest/esqueletos` (o time; 404 `module_off` fora do efetivo); o `/contest/userinfo` diz
+  `code_templates`. Web: painel **Prova › Esqueletos** (`esqueletos-tab.js`; módulo num grupo COMUM — o
+  `panelVisible` não olha o grupo), `contest.js` usa `web/shared/editor-skeleton.js` (a regra: personalizado ›
+  padrão; `off` e `function_langs` = vazio; troca de linguagem só com o texto intacto; **trava do esqueleto intacto
+  só na TELA** — o `/submit` não a aplica). Fora do preset "Maratona"; a Central (`esqueletos`) dá fail sem editor,
+  warn em ICPC e com Java `public class` (o editor envia `solution.java`). ⚠ ARG_MAX: esqueletos somam centenas de
+  KB — o export (`cc_modules_spec`/`cc_export_spec`) e o GET de template passaram a levar módulos/templates por
+  ARQUIVO (`--slurpfile`/`ok_json_slurp`); seção nova grande em spec segue o mesmo caminho. Testes:
+  `smoke-esqueletos.sh` (36), `smoke-esqueletos.gjs.sh`. Doc: `MANUAL-ADMIN` §1½ (pt/en/es).
 - **FUSO (2026-08-06)**: a imagem é debian-slim **sem TZ** ⇒ o servidor rodava em UTC e TUDO que
   ele escrevia p/ humano saía 3 h adiantado (DM do convite, preflight, caderno, relatório). Hoje
   `lib/common.sh` faz `export TZ="$MOJ_TZ"` (default `America/Sao_Paulo`, em `etc/common.conf`) e
@@ -1630,6 +1659,18 @@ mexa na outra. O índice separa as coleções por `\u001f` (nome é texto livre:
   exemplos, prontidão "Sem exemplos"). A linha NÃO entra no tl-checksum (não recalibra). Pacotes antigos:
   `server/bin/sample-flag-migrate.sh [--apply]` (dry-run; põe a linha no COMEÇO do conf, tira o `samples`,
   commita como `moj` e reindexa). Teste: `smoke-sample-flag.sh` + seção SAMPLE=no do `smoke-statement-langs.sh`.
+- **SUBMISSÃO DE FUNÇÃO DECLARADA = `FUNCTION_LANGS=c,py` no `conf` do pacote** (2026-09-30, decisão do Ribas: chave
+  explícita, nada inferido). Ter `scripts/<lang>/compile.sh` NÃO é o sinal — o slot COMPILE também é ban e OpenMP/MPI,
+  em que o aluno escreve o programa inteiro. O `mojtools/gen-problem-json.sh` a serve como `function_langs` (ids
+  canônicos) e o editor do aluno abre VAZIO nessas linguagens: treino (`problema.js`) e o contest com o módulo
+  `esqueletos`, pelas funções puras de `web/shared/editor-skeleton.js` (fonte única da regra; teste
+  `smoke-esqueletos.gjs.sh`). O `/contest/problems` a repassa do json servível, como o `has_samples` (a rota não abre o
+  pacote). Quem grava: `moj fn`/`install-fn.sh`, o template "Submissão de função" do editor web (`function:true` no
+  `template.json`, repassado pelo `/problems/script-templates`) e o campo da aba Limites (`cf_fnlangs`). O validador
+  reprova linguagem sem driver (`conf_function_sane`); a heurística `mojtools/fn/driver-langs.sh` só avisa e alimenta a
+  migração `server/bin/function-langs-migrate.sh` (dry-run; 54 pacotes no dev). O tl-checksum ignora a linha. ⚠ Ordem
+  de deploy: mojtools (filtro do tl-checksum) no servidor E nos juízes ANTES da migração. Testes:
+  `smoke-function-langs.sh`, `mojtools/fn/test-function-langs.sh`.
 - **Pacote canônico**: o formato é descrito, por inteiro e num lugar só, em **`docs/PACOTE.md`**
   (arquivos do pacote, `.moj-meta.json`, `.moj-id`, ORG, COLEÇÃO, ciclo validar→calibrar→publicar).
   **Mudou o pacote? Atualize o `docs/PACOTE.md` no MESMO commit** — é a fonte única, e os outros

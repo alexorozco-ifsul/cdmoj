@@ -170,6 +170,12 @@ cc_create(){
     outro|custom) [[ "$creator" == *.admin ]] || fail 403 "Modo '$mode' é exclusivo de admin" "mode_forbidden";;
     *) fail 422 "Modo inválido" "mode_invalid";;
   esac
+  # módulo `esqueletos` EXIGE o editor embutido (lib/esqueletos.sh) — vale p/ criar, duplicar e template
+  # (a condição ESPELHA o cc_settings_conf_lines: `jq -r .show_editor` == "false" desliga — booleano OU string)
+  if jq -e '((.modules // {}).esqueletos) as $e | (($e == true) or ((($e | type) == "object") and ($e.on != false)))
+            and ((.show_editor | tostring) == "false")' >/dev/null 2>&1 <<<"$spec"; then
+    fail 422 "Esqueletos de código precisam do editor embutido: ligue o editor ou tire o módulo esqueletos" "editor_required"
+  fi
   case "$priority" in
     prova|lista-privada|lista-publica) ;;
     super) [[ "$creator" == *.admin ]] || fail 403 "Prioridade 'super' é exclusiva de admin" "priority_forbidden";;
@@ -437,7 +443,11 @@ cc_create(){
 #   documentos    {config:{caderno_version,cover_note,errata}}                (published: nunca)
 #   inscricoes    {enabled:bool, window:{open,close,late_minutes,team_max,teams,warmup_open}}
 #   telao         {views:[{view,label}]}   (create gera CHAVES NOVAS p/ cada view)
-#   classificacao {algorithm, config:{…regras/vagas…}}          (stage draft, sem times)
+#   classificacao {algorithm, config:{…regras/vagas…}}          (1 estágio, o padrão do motor; draft, sem times)
+#                 | {stages:[{id?, algorithm, config, name?, venue?, when?, chip?}]}   (vários; id padrão = o do
+#                 motor no catálogo). Motor pela allowlist + config pelo `--check` do motor (lib/classify.sh);
+#                 resultado, overrides e status nunca entram (é dado da prova, não configuração)
+#   esqueletos    {langs:{<lang>:{mode:"custom",code}|{mode:"off"}}}   (padrão = ausente; exige show_editor)
 # cc_apply_modules_spec <spec> <stg> <creator> — grava as seções em ARQUIVO no staging. rc 1 +
 # CC_MOD_ERR quando uma seção tem o tipo errado (o chamador vira 422 modules_spec_invalid).
 cc_apply_modules_spec(){
@@ -544,12 +554,47 @@ cc_apply_modules_spec(){
     done < <(jq -r '.[] | select(type=="object") | [(.view // "public"), (.label // "")] | @tsv' <<<"$v")
     ( umask 077; jq -cn --argjson k "$keys" '{version:1, keys:$k}' > "$stg/webcast.json" )
   fi
-  # classificacao -> classification.json com o stage final-br em RASCUNHO (config, sem times)
-  v="$(_sec '.modules.classificacao.config' object)" || return 1
+  # esqueletos.langs -> esqueletos.json (lib/esqueletos.sh: só modos válidos, código até o teto). O texto do
+  # admin anda por stdin, nunca por argv (ARG_MAX: até ESQ_MAX_BYTES por linguagem)
+  v="$(_sec '.modules.esqueletos.langs' object)" || return 1
   if [[ -n "$v" ]]; then
-    local alg; alg="$(jq -r '.modules.classificacao.algorithm // .modules.classificacao.config.algorithm // "sbc-fase1"' <<<"$spec")"
-    [[ "$alg" =~ ^[a-z0-9-]{1,32}$ ]] || { CC_MOD_ERR="classificacao.algorithm inválido"; return 1; }
-    jq -c --arg a "$alg" '{version:1, stages:[{id:"final-br", status:"draft", teams:{}, config:(. + {algorithm:$a})}]}' <<<"$v" > "$stg/classification.json"
+    jq -e --argjson max "${ESQ_MAX_BYTES:-65536}" 'to_entries | all(.[]; (.key | test("^[a-z0-9]{1,16}$"))
+        and ((.value.mode == "off") or (.value.mode == "custom" and (.value.code | type) == "string"
+             and ((.value.code | utf8bytelength) <= $max))))' >/dev/null 2>&1 <<<"$v" \
+      || { CC_MOD_ERR="esqueletos.langs: cada linguagem é {mode:\"custom\",code} ou {mode:\"off\"} (código até ${ESQ_MAX_BYTES:-65536} bytes)"; return 1; }
+    jq -c 'if length > 0 then {langs: (with_entries(.value |= (if .mode == "off" then {mode:"off"} else {mode:"custom", code:.code} end)))} else empty end' <<<"$v" > "$stg/esqueletos.json"
+    [[ -s "$stg/esqueletos.json" ]] || rm -f "$stg/esqueletos.json"
+  fi
+  # classificacao -> classification.json com os estágios em RASCUNHO (config, sem times). Formato antigo
+  # {algorithm, config} = um estágio só; {stages:[…]} = vários (o export devolve assim quando há mais de um)
+  local vc vs
+  vc="$(_sec '.modules.classificacao.config' object)" || return 1
+  vs="$(_sec '.modules.classificacao.stages' array)" || return 1
+  if [[ -n "$vc" || -n "$vs" ]]; then
+    declare -F cl_check >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/classify.sh"
+    local cst="$stg/.cl-spec.json" cf="$stg/.cl-cfg.json" sid alg i n
+    # a config da PDA traz tabelas (ciclo, aliases de escola): tudo por ARQUIVO, nunca pelo argv do jq
+    if [[ -n "$vs" ]]; then jq -c '.modules.classificacao.stages' <<<"$spec" > "$cst"
+    else jq -c '.modules.classificacao | [{algorithm:(.algorithm // .config.algorithm // "sbc-fase1"), config:.config}]' <<<"$spec" > "$cst"; fi
+    jq -e 'length > 0 and length <= 8 and all(.[]; type == "object" and ((.config // {}) | type) == "object")' "$cst" >/dev/null 2>&1 \
+      || { CC_MOD_ERR="classificacao.stages: lista (1 a 8) de {id?, algorithm, config}"; return 1; }
+    n="$(jq 'length' "$cst")"
+    printf '[]' > "$stg/.cl-stages.json"
+    for (( i=0; i<n; i++ )); do
+      alg="$(jq -r --argjson i "$i" '.[$i] | .algorithm // .config.algorithm // "sbc-fase1"' "$cst")"
+      cl_engine "$alg" >/dev/null || { CC_MOD_ERR="classificacao: algoritmo desconhecido: $alg"; return 1; }
+      sid="$(jq -r --argjson i "$i" '.[$i].id // ""' "$cst")"; [[ -n "$sid" ]] || sid="$(cl_stage_default "$alg")"
+      [[ "$sid" =~ ^[a-z0-9-]{1,32}$ ]] || { CC_MOD_ERR="classificacao: id de estágio inválido: $sid"; return 1; }
+      jq -e --arg s "$sid" 'any(.[]; .id == $s) | not' "$stg/.cl-stages.json" >/dev/null || { CC_MOD_ERR="classificacao: estágio repetido: $sid"; return 1; }
+      jq -c --argjson i "$i" --arg a "$alg" '.[$i] | (.config // {}) + {algorithm:$a} | del(.preassigned)' "$cst" > "$cf"
+      cl_check "$alg" "$cf" || { CC_MOD_ERR="classificacao ($sid): $(jq -r 'join("; ")' <<<"$CL_CHECK_ERRORS" | head -c 300)"; return 1; }
+      jq -c --argjson i "$i" --arg s "$sid" --slurpfile c "$cf" --slurpfile st "$cst" \
+        '. + [ {id:$s, status:"draft", teams:{}, config:$c[0]}
+               + ($st[0][$i] | {name, venue, when, chip} | with_entries(select((.value | type) == "string" and .value != ""))) ]' \
+        "$stg/.cl-stages.json" > "$stg/.cl-stages.tmp" && mv -f "$stg/.cl-stages.tmp" "$stg/.cl-stages.json"
+    done
+    jq -c '{version:1, stages:.}' "$stg/.cl-stages.json" > "$stg/classification.json"
+    rm -f "$cf" "$cst" "$stg/.cl-stages.json"
   fi
   return 0
 }
@@ -601,10 +646,26 @@ cc_modules_spec(){
       telao)
         [[ -s "$cdir/webcast.json" ]] && sec="$(jq -c --slurpfile w "$cdir/webcast.json" '.views=[ ($w[0].keys // [])[] | select((.revoked_at // 0) == 0 and (.key // "") != "") | {view:(.view // "public"), label:(.label // "")} ]' <<<"$sec" 2>/dev/null || printf '%s' "$sec")";;
       classificacao)
-        [[ -s "$cdir/classification.json" ]] && sec="$(jq -c --slurpfile c "$cdir/classification.json" '(first(($c[0].stages // [])[] | select(.id=="final-br")) // {}) as $st | .algorithm=($st.config.algorithm // "sbc-fase1") | .config=(($st.config // {}) | del(.algorithm))' <<<"$sec" 2>/dev/null || printf '%s' "$sec")";;
+        # um estágio no lugar padrão do motor = formato antigo {algorithm, config}; senão {stages:[…]} (só a
+        # CONFIGURAÇÃO: resultado, overrides e status são dados da prova)
+        [[ -s "$cdir/classification.json" ]] && sec="$(jq -c --slurpfile c "$cdir/classification.json" \
+          --slurpfile k "$(dirname "${BASH_SOURCE[0]}")/../../../score/classify-catalog.json" '
+          [ ($c[0].stages // [])[] | select(.config != null) ] as $S
+          | if ($S | length) == 0 then .
+            elif ($S | length) == 1 and ($S[0].id == (first($k[0].engines[] | select(.id == ($S[0].config.algorithm // "sbc-fase1")) | .stage) // "final-br"))
+            then .algorithm = ($S[0].config.algorithm // "sbc-fase1") | .config = ($S[0].config | del(.algorithm))
+            else .stages = [ $S[] | {id, algorithm:(.config.algorithm // "sbc-fase1"), config:(.config | del(.algorithm))}
+                             + ({name, venue, when, chip} | with_entries(select(.value != null))) ] end' <<<"$sec" 2>/dev/null || printf '%s' "$sec")";;
     esac
     out="$(jq -c --arg m "$m" --argjson s "$sec" '.[$m]=$s' <<<"$out")"
   done
+  # esqueletos: o código pode somar centenas de KB — entra por ARQUIVO, nunca pelo argv do jq (ARG_MAX)
+  if [[ ",$mods," == *",esqueletos,"* ]]; then
+    declare -F esq_langs_json >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/esqueletos.sh"
+    local ef; ef="$(mktemp)"; esq_langs_json "$cid" > "$ef"
+    out="$(jq -c --slurpfile l "$ef" 'if (($l[0] // {}) | length) > 0 then .esqueletos.langs = $l[0] else . end' <<<"$out")"
+    rm -f "$ef"
+  fi
   printf '%s' "$out"
 }
 
@@ -1006,8 +1067,13 @@ cc_export_spec(){
   )"
   [[ -n "$confjson" ]] || return 1
   # seção `modules` (spec unificado): só módulos ligados, dados reeditáveis, nunca segredo
-  local modsj; modsj="$(cc_modules_spec "$cid")"
-  [[ -n "$modsj" && "$modsj" != "{}" ]] && confjson="$(jq -c --argjson m "$modsj" '. + {modules:$m}' <<<"$confjson")"
+  # módulos por ARQUIVO, nunca por argv: os esqueletos de código (módulo esqueletos) podem somar centenas
+  # de KB, e o Linux limita UM argumento a 128 KiB (o jq morria com E2BIG e o export saía vazio)
+  local mf; mf="$(mktemp)" || return 1
+  cc_modules_spec "$cid" > "$mf"
+  jq -e 'type == "object" and length > 0' "$mf" >/dev/null 2>&1 \
+    && confjson="$(jq -c --slurpfile m "$mf" '. + {modules:$m[0]}' <<<"$confjson")"
+  rm -f "$mf"
 
   local plf='{}'
   [[ -f "$cdir/problem-langs.json" ]] && plf="$(jq -c . "$cdir/problem-langs.json" 2>/dev/null)"
@@ -1042,7 +1108,8 @@ cc_export_spec(){
     [[ -n "$emb_pdf" ]] && { args+=( --rawfile pp "$tmpd/p.b64" ); filt+=' | .statement_pdf_b64=($pp|rtrimstr("\n"))'; }
     jq "${args[@]}" "$filt" "$tmpd/base.json" >> "$tmpd/probs.jsonl"
   done < <(cc_probs_json "$cid" | jq -c '.[]')
-  jq -cs --argjson conf "$confjson" --arg id "$cid" '{id:$id} + $conf + {problems:.}' "$tmpd/probs.jsonl"
+  printf '%s' "$confjson" > "$tmpd/conf.json"   # idem: o conf carrega os módulos
+  jq -cs --slurpfile conf "$tmpd/conf.json" --arg id "$cid" '{id:$id} + $conf[0] + {problems:.}' "$tmpd/probs.jsonl"
   local rc=$?
   rm -rf "$tmpd"
   return $rc

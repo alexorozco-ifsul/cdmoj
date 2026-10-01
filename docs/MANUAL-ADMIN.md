@@ -28,7 +28,7 @@ painel de módulo **desligado** cai em **Central › Módulos** com um aviso diz
 | Grupo | Painéis | Aparece |
 |---|---|---|
 | **🏁 Central** | Central · **Módulos** · Regras | sempre |
-| **🧩 Prova** | Problemas · **Relatório** | sempre |
+| **🧩 Prova** | Problemas · Esqueletos (`esqueletos`) · **Relatório** | sempre (Esqueletos só com o módulo) |
 | **👥 Pessoas** | Contas · Inscrições (`inscricoes`) · Sessões | sempre (Inscrições só com o módulo) |
 | **🎛️ Operação** | Situação · Staff · Juízes · Auditoria | sempre |
 | **🏟️ Evento** | Rodadas (`rodadas`) · Documentos (`documentos`) · Balões (`baloes`) · Classificação (`classificacao`) · Times (`sedes` ou `telao`) · Coortes (`coortes`) · Sedes & escolas (`sedes`) | com o módulo entre parênteses |
@@ -97,7 +97,7 @@ painel dele) tem dois modos:
 | **Rodadas** (`rodadas`) | **Aquecimento e prova oficial no MESMO contest**: planeja cada rodada (janela + problemas), mostra o checklist e promove — arquivando tudo o que aconteceu. A seção 6 explica. |
 | **Documentos** (`documentos`) | Gera, em PDF e HTML nos três idiomas (pt/en/es), os documentos da prova: **ambiente de julgamento** (info sheet), **caderno da prova** (capa + enunciados), **folha de time limits** e o **editorial** (só publica depois do FIM da prova). A seção 5 explica. |
 | **Balões** (`baloes`) | A cor de cada letra — é o que sai desenhado na folha do balão. O default cobre A–O; com mais de 15 problemas, defina as demais (senão saem cinza). São as cores da rodada no ar. Para dar cores próprias a outra rodada, use Evento › Rodadas. |
-| **Classificação** (`classificacao`) | Quem se classifica para a próxima fase, por **algoritmo** escolhido no painel (hoje: SBC 1ª fase → Final Brasileira; a regra da PDA entra como outro algoritmo): rascunho, revisão, promoção pelo comitê e publicação (chip ↑BR no placar). `docs/CLASSIFICACAO.md` explica. |
+| **Classificação** (`classificacao`) | Quem se classifica para as próximas fases. Cada **etapa** (Final Brasileira, PDA, Mundial) tem o seu motor, escolhido no painel: prévia, rascunho, publicação (um chip 🎓 por etapa no placar) e o **override manual** — excluir do cálculo, retirar sem recalcular, promover à mão, sempre com motivo. Para contests menores (uma seletiva), o motor **Manual**: você diz quantos times sobem e qual é a próxima fase, e clica no placar em quem promover (motivo opcional). `docs/CLASSIFICACAO.md` explica. |
 | **Times** (`sedes` ou `telao`) | Identidade de cada conta no placar: nome do time, país/bandeira, sede, universidade, brasão e foto. Carga por CSV e "materializar matches". |
 | **Coortes** (`coortes`) | Times **convidados** (extra-oficiais, "CCL") separados dos oficiais: quem aparece no placar público, quem vê quem, e o **🔓 Liberar resultados** do pós-cerimônia. A seção 8 explica. |
 | **Sedes & escolas** (`sedes`) | As sedes (nome + regex no login) — que alimentam o filtro do placar, o escopo do staff, as etiquetas, **as fotos/músicas que cada chefe de sede gere no telão** e o gate por sede —, as regras de país/escola por regex e a **⏱ prorrogação por sede/grupo** (regex → novo fim; só estende, nunca encurta). Em **três modos** (Simples, Intermediário, Avançado) com prévia — seção 7¼. |
@@ -148,8 +148,9 @@ correspondentes; **desligar esconde, sem apagar nada** — religar restaura tudo
 | `coortes` | Evento › Coortes | `cohorts.json` |
 | `inscricoes` | Pessoas › Inscrições | `registrations.json` |
 | `telao` | cartões Revelação e Telão; Evento › Times (fotos) | `animeitor.json`, `webcast.json`, fotos de time |
-| `classificacao` | Evento › Classificação (seletor de algoritmo) | `classification.json` |
+| `classificacao` | Evento › Classificação (seletor de etapa e de motor) | `classification.json` |
 | `virtual` | Evento › Virtual; botão **Virtual** no card do contest encerrado; link no placar (ver §6¾) | `virtual/runs/` |
+| `esqueletos` | Prova › Esqueletos: o editor de código do time abre com o esqueleto da linguagem (abaixo) | `esqueletos.json` |
 
 Onde se liga: **Central › Módulos** (presets que só pré-marcam), o passo **7 · Módulos** do
 [criar contest](/treino/criar/), `moj-contest -c <cid> modules on|off` ou a seção `modules{}` do
@@ -160,6 +161,32 @@ Só desligar é manual. Também vale para o spec de criação — um só JSON le
 cores, coortes, gate, rodadas, documentos, janela de inscrição, telão, classificação); o `export`
 devolve a mesma seção, sem segredos. Contests criados antes dos módulos são detectados uma vez
 pelos arquivos que já têm (`server/bin/contest-modules-detect.sh`).
+
+### Esqueletos de código (módulo `esqueletos`)
+
+No contest, o editor de código do time abre **vazio**: o time escreve o código dele por completo. Com
+o módulo `esqueletos`, o editor abre com o **esqueleto** da linguagem (o `main` e as leituras de
+costume). Use em lista ou prova de disciplina, quando o esqueleto ajuda o aluno.
+
+- **Precisa do editor de código no browser ligado** (Central › Regras). Ligar o módulo com o editor
+  desligado é recusado. Desligar o editor com o módulo ligado também é recusado: desligue o módulo
+  antes.
+- Em **Prova › Esqueletos**, cada linguagem tem três escolhas:
+  - **padrão do MOJ**: o mesmo esqueleto do treino;
+  - **personalizado**: o esqueleto que você escrever para este contest;
+  - **sem esqueleto**: aquela linguagem abre vazia.
+- Ao trocar de linguagem, o texto só muda enquanto ele ainda é o esqueleto intacto. O código que o
+  time digitou fica.
+- Enviar o esqueleto sem mudar nada é recusado na tela ("Você ainda não alterou o esqueleto"). A
+  trava de editor vazio continua valendo.
+- Problema de **submissão de função** (o pacote declara `FUNCTION_LANGS`) abre vazio nas linguagens
+  do driver: o `main` do esqueleto daria Compilation Error.
+- Atenção: o editor envia o arquivo como `solution.<extensão>`. Em Java, não declare a classe como
+  `public` (o `javac` exige que uma classe pública tenha o nome do arquivo). A Central avisa.
+- O módulo fica fora do preset "Maratona / ICPC": na maratona o time espera o editor vazio. Em contest
+  ICPC a Central avisa.
+- O esqueleto personalizado vai junto no export, no template e no duplicar. Pela CLI:
+  `moj-contest -c <cid> esqueletos ls|show|set|off|reset`.
 
 ## 2. Regras (Central › Regras) — opção por opção
 

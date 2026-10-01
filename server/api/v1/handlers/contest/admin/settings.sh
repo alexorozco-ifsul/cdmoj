@@ -68,6 +68,13 @@ has(){ jq -e "has(\"$1\")" >/dev/null 2>&1 <<<"$body"; }
 setvar(){ cc_set_conf_var "$contest" "$1" "$2"; CH+=("$1=$2"); }
 delvar(){ cc_del_conf_var "$contest" "$1"; CH+=("$1=padrao"); }
 
+# o módulo `esqueletos` EXIGE o editor embutido (lib/esqueletos.sh): desligar o editor com ele ligado é
+# recusado ANTES de qualquer gravação (um 409 no meio deixaria o conf pela metade). A condição ESPELHA o
+# `bset` abaixo — qualquer valor que não seja `true` desliga (string "false", 0, null…), não só o booleano.
+if jq -e 'has("show_editor") and ((.show_editor | tostring) != "true")' >/dev/null 2>&1 <<<"$body" && mod_on "$contest" esqueletos; then
+  fail 409 "O módulo Esqueletos de código está ligado e precisa do editor embutido: desligue o módulo antes (Central › Módulos)" "module_needs_editor"
+fi
+
 # fotografia do que invalida metrics/placar (freeze e penalidade) ANTES de gravar: se mudar,
 # o rebuild no fim é FORÇADO via score_kick_rebuild — o gatilho passivo "conf mais novo que
 # var/.metrics-stamp" perde p/ um build EM VOO, que termina depois desta escrita e carimba

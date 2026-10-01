@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ADMIN.md blob:d1f563d87f58483f5be81d3a4fe8b23bb97953f1 -->
+<!-- i18n-source: MANUAL-ADMIN.md blob:27e561a21f8dba0c537439c957b577344a1bdae9 -->
 # MOJ: Manual del organizador (el panel .admin de la competencia)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -31,7 +31,7 @@ panel de un módulo **desactivado** lleva a **Central › Módulos**, con un avi
 | Grupo | Paneles | Aparece |
 |---|---|---|
 | **🏁 Central** | Central · **Módulos** · Reglas | siempre |
-| **🧩 Competencia** | Problemas · **Informe** | siempre |
+| **🧩 Competencia** | Problemas · Esqueletos (`esqueletos`) · **Informe** | siempre (Esqueletos solo con el módulo) |
 | **👥 Personas** | Cuentas · Inscripciones (`inscricoes`) · Sesiones | siempre (Inscripciones solo con el módulo) |
 | **🎛️ Operación** | Situación · Staff · Jueces · Auditoría | siempre |
 | **🏟️ Evento** | Rondas (`rodadas`) · Documentos (`documentos`) · Globos (`baloes`) · Clasificación (`classificacao`) · Equipos (`sedes` o `telao`) · Cohortes (`coortes`) · Sedes y escuelas (`sedes`) | con el módulo entre paréntesis |
@@ -100,7 +100,7 @@ su panel) tiene dos modos:
 | **Rondas** (`rodadas`) | **Calentamiento y competencia oficial en la MISMA competencia**: planifica cada ronda (ventana + problemas), muestra el checklist y promueve, archivando todo lo que pasó. La sección 6 lo explica. |
 | **Documentos** (`documentos`) | Genera, en PDF y HTML en los tres idiomas (pt/en/es), los documentos de la competencia: **Entorno de evaluación** (info sheet), **Cuadernillo de la competencia** (portada + enunciados), **Hoja de límites de tiempo** y el **editorial** (solo se publica después del FIN de la competencia). La sección 5 lo explica. |
 | **Globos** (`baloes`) | El color de cada letra: es lo que sale dibujado en la hoja del globo. El predeterminado cubre A–O; con más de 15 problemas, define los demás (si no, salen grises). Son los colores de la ronda en vivo. Para dar colores propios a otra ronda, usa Evento › Rondas. |
-| **Clasificación** (`classificacao`) | Quién se clasifica para la fase siguiente, por el **algoritmo** elegido en el panel (hoy: SBC 1.ª fase → Final Brasileña; la regla de la PDA entra como otro algoritmo): borrador, revisión, promoción por el comité y publicación (chip ↑BR en el marcador). `docs/CLASSIFICACAO.md` lo explica. |
+| **Clasificación** (`classificacao`) | Quién se clasifica para las próximas etapas. Cada **etapa** (Final Brasileña, PDA, Mundial) tiene su motor, elegido en el panel: vista previa, borrador, publicación (un chip 🎓 por etapa en el marcador) y el **override manual** — excluir del cálculo, retirar sin recalcular, promover a mano, siempre con motivo. Para competencias menores (una selectiva), el motor **Manual**: indicas cuántos equipos avanzan y cuál es la próxima etapa, y haces clic en el marcador en quién promover (motivo opcional). `docs/CLASSIFICACAO.md` lo explica. |
 | **Equipos** (`sedes` o `telao`) | Identidad de cada cuenta en el marcador: nombre del equipo, país/bandera, sede, universidad, escudo y foto. Carga por CSV y "materializar coincidencias". |
 | **Cohortes** (`coortes`) | Equipos **invitados** (extraoficiales, "CCL") separados de los oficiales: quién aparece en el marcador público, quién ve a quién, y el **🔓 Liberar resultados** de después de la ceremonia. La sección 8 lo explica. |
 | **Sedes y escuelas** (`sedes`) | Las sedes (nombre + regex sobre el login), que alimentan el filtro del marcador, el alcance del staff, las etiquetas, **las fotos/músicas que cada jefe de sede gestiona en la pantalla** y el gate por sede; las reglas de país/escuela por regex; y la **⏱ prórroga por sede/grupo** (regex → nuevo fin; solo extiende, nunca acorta). En **tres modos** (Simple, Intermedio, Avanzado) con vista previa — sección 7¼. |
@@ -151,8 +151,9 @@ correspondientes; **desactivar oculta, sin borrar nada**: reactivar restaura tod
 | `coortes` | Evento › Cohortes | `cohorts.json` |
 | `inscricoes` | Personas › Inscripciones | `registrations.json` |
 | `telao` | tarjetas Revelación y Pantalla; Evento › Equipos (fotos) | `animeitor.json`, `webcast.json`, fotos de equipo |
-| `classificacao` | Evento › Clasificación (selector de algoritmo) | `classification.json` |
+| `classificacao` | Evento › Clasificación (selector de etapa y de motor) | `classification.json` |
 | `virtual` | Evento › Virtual; botón **Virtual** en la tarjeta de la competencia terminada; enlace en el marcador (ver §6¾) | `virtual/runs/` |
+| `esqueletos` | Competencia › Esqueletos: el editor de código del equipo abre con el esqueleto del lenguaje (abajo) | `esqueletos.json` |
 
 Dónde se activa: **Central › Módulos** (ajustes predefinidos que solo marcan de antemano), el paso **7 · Módulos** de
 [crear competencia](/treino/criar/), `moj-contest -c <cid> modules on|off` o la sección `modules{}` del
@@ -163,6 +164,32 @@ Solo desactivar es manual. También vale para el spec de creación: un solo JSON
 colores, cohortes, gate, rondas, documentos, ventana de inscripción, pantalla, clasificación); el `export`
 devuelve la misma sección, sin secretos. Las competencias creadas antes de los módulos se detectan una vez
 por los archivos que ya tienen (`server/bin/contest-modules-detect.sh`).
+
+### Esqueletos de código (módulo `esqueletos`)
+
+En la competencia, el editor de código del equipo abre **vacío**: el equipo escribe su código completo.
+Con el módulo `esqueletos`, el editor abre con el **esqueleto** del lenguaje (el `main` y las lecturas
+habituales). Úsalo en una lista o un examen de curso, cuando el esqueleto ayuda al estudiante.
+
+- **Necesita el editor de código en el navegador activado** (Central › Reglas). Activar el módulo con
+  el editor desactivado se rechaza. Desactivar el editor con el módulo activado también se rechaza:
+  desactiva el módulo antes.
+- En **Competencia › Esqueletos**, cada lenguaje tiene tres opciones:
+  - **predeterminado del MOJ**: el mismo esqueleto del entrenamiento;
+  - **personalizado**: el esqueleto que escribas para esta competencia;
+  - **sin esqueleto**: ese lenguaje abre vacío.
+- Al cambiar de lenguaje, el texto solo cambia mientras todavía es el esqueleto intacto. El código que
+  el equipo escribió se queda.
+- Enviar el esqueleto sin cambios se rechaza en pantalla ("Todavía no cambiaste el esqueleto"). La
+  verificación de editor vacío sigue valiendo.
+- Un problema de **envío de función** (el paquete declara `FUNCTION_LANGS`) abre vacío en los
+  lenguajes del driver: el `main` del esqueleto daría Compilation Error.
+- Atención: el editor envía el archivo como `solution.<extensión>`. En Java, no declares la clase como
+  `public` (`javac` exige que una clase pública tenga el nombre del archivo). La Central avisa.
+- El módulo queda fuera del preset "Maratona / ICPC": en la maratón el equipo espera el editor vacío.
+  En una competencia ICPC la Central avisa.
+- El esqueleto personalizado va junto en el export, la plantilla y el duplicado. Por la CLI:
+  `moj-contest -c <cid> esqueletos ls|show|set|off|reset`.
 
 ## 2. Reglas (Central › Reglas): opción por opción
 

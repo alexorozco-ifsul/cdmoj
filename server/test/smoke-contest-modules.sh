@@ -31,7 +31,7 @@ pass=0; fail=0; ck(){ if eval "$2"; then echo "  ok: $1"; ((pass++)); else echo 
 
 echo "== catálogo e detecção =="
 call /contest/admin/modules GET '' adm-ev 'contest=ev'
-ck "GET: 10 módulos, nenhum ligado"          '[[ "$(J ".modules|length")" == 10 && "$(J ".enabled|length")" == 0 ]]'
+ck "GET: 11 módulos, nenhum ligado"          '[[ "$(J ".modules|length")" == 11 && "$(J ".enabled|length")" == 0 ]]'
 ck "detected: coortes/maquinas/rodadas/sedes true, baloes false" '[[ "$(J "[.modules[]|select(.detected)|.id]|join(\",\")")" == "sedes,maquinas,rodadas,coortes" ]]'
 ck "reason cita o artefato"                  '[[ "$(J ".modules[]|select(.id==\"maquinas\")|.reason")" == "ua-gate.json" ]]'
 call /contest/admin/modules GET '' usr-ev 'contest=ev'
@@ -137,6 +137,41 @@ call /contest/admin/classify GET '' adm-novo3 'contest=novo3'
 ck "GET classify: algorithms[] com sbc-fase1" '[[ "$(J ".algorithms[0].id")" == sbc-fase1 && "$(J ".stages[0].config.algorithm")" == sbc-fase1 ]]'
 call /contest/admin/classify POST '{"action":"preview","config":{"algorithm":"pda-2030"}}' adm-novo3 'contest=novo3'
 ck "preview com algoritmo desconhecido => 422 algorithm_invalid" '[[ "$OUT" == *"Status: 422"* && "$(J .error.code)" == algorithm_invalid ]]'
+# catálogo (score/classify-catalog.json) × allowlist (lib/classify.sh CL_ENGINES): os MESMOS ids, e cada
+# script existe — motor novo entra nos dois ou em nenhum
+cat_ids="$(jq -r '[.engines[].id] | sort | join(",")' "$ROOT/score/classify-catalog.json")"
+allow_ids="$(_DIR="$ROOT/api/v1" bash -c 'source "$_DIR/lib/classify.sh"; printf "%s\n" "${!CL_ENGINES[@]}" | sort | paste -sd,')"
+ck "catálogo × allowlist: mesmos ids ($cat_ids)" '[[ -n "$cat_ids" && "$cat_ids" == "$allow_ids" ]]'
+ck "catálogo: cada motor tem o script da allowlist" '_DIR="$ROOT/api/v1" bash -c '"'"'source "$_DIR/lib/classify.sh"; for a in "${!CL_ENGINES[@]}"; do [[ -s "$CL_SCORE_DIR/${CL_ENGINES[$a]}" && "$(jq -r --arg a "$a" ".engines[]|select(.id==\$a)|.script" "$CL_CATALOG")" == "${CL_ENGINES[$a]}" ]] || exit 1; done'"'"''
+# todo texto traduzido do catálogo e das sementes ({pt,en,es} — nome/descrição de motor, rótulo de via, short, label
+# de bloco, nome/título de região) nasce nos TRÊS idiomas: objeto com qualquer um deles tem de ter os três, não vazios
+i18n_gaps="$(for f in "$ROOT/score/classify-catalog.json" "$ROOT"/score/classify-seeds/*.json; do
+  jq -r --arg f "${f##*/}" '[paths(objects) as $p | getpath($p) as $o | select($o | has("pt") or has("en") or has("es"))
+    | select(any(("pt", "en", "es"); ($o[.] // "") | (type != "string" or length == 0))) | ($p | map(tostring) | join("."))]
+    | .[] | "\($f): \(.)"' "$f"; done)"
+ck "catálogo e sementes: todo texto em pt/en/es${i18n_gaps:+ (faltam: ${i18n_gaps//$'\n'/; })}" '[[ -z "$i18n_gaps" ]]'
+echo "== classificação no spec: {stages:[…]} =="
+SPEC4="$(jq -cn --argjson s "$((NOW+600))" --argjson e "$((NOW+4200))" '{id:"novo4", name:"Novo 4", mode:"icpc", start:$s, end:$e, allow_empty:true,
+  modules:{classificacao:{stages:[{algorithm:"sbc-fase1", config:{r1:3}, name:"Final"}, {id:"outra", algorithm:"sbc-fase1", config:{r1:1}, chip:"Outra"}]}}}')"
+call /treino/contest-create/create POST "$SPEC4" tadm ''
+ck "create com stages[]: sucesso"            '[[ "$(J .success)" == true ]]'
+ck "stages[]: final-br (padrão do motor) + outra, em rascunho" '[[ "$(jq -r "[.stages[]|.id+\":\"+.status]|join(\",\")" "$FIX/novo4/classification.json")" == "final-br:draft,outra:draft" && "$(jq -r ".stages[1].chip" "$FIX/novo4/classification.json")" == Outra && "$(jq -r ".stages[0].name" "$FIX/novo4/classification.json")" == Final ]]'
+ck "stages[]: nada de lixo de staging"       '[[ -z "$(ls -A "$FIX/novo4" | grep "^\.cl-")" ]]'
+call /treino/contest-create/export GET '' tadm 'id=novo4'
+ck "export com 2 estágios => stages[]"       '[[ "$(J ".modules.classificacao.stages|length")" == 2 && "$(J ".modules.classificacao.stages[1].id")" == outra && "$(J ".modules.classificacao.stages[1].config.r1")" == 1 && "$(J ".modules.classificacao|has(\"config\")")" == false ]]'
+call /treino/contest-create/create POST "$(jq -cn '{id:"ruim2", name:"R", mode:"icpc", end:9999999999, allow_empty:true, modules:{classificacao:{stages:[{algorithm:"pda-2030", config:{}}]}}}')" tadm ''
+ck "spec: algoritmo desconhecido => 422"     '[[ "$(J .error.code)" == modules_spec_invalid && "$(J .error.message)" == *pda-2030* ]]'
+call /treino/contest-create/create POST "$(jq -cn '{id:"ruim3", name:"R", mode:"icpc", end:9999999999, allow_empty:true, modules:{classificacao:{config:{r1:-2}}}}')" tadm ''
+ck "spec: config reprovada pelo --check do motor => 422" '[[ "$(J .error.code)" == modules_spec_invalid && "$(J .error.message)" == *r1* ]]'
+call /treino/contest-create/create POST "$(jq -cn '{id:"ruim4", name:"R", mode:"icpc", end:9999999999, allow_empty:true, modules:{classificacao:{stages:[{config:{}},{config:{}}]}}}')" tadm ''
+ck "spec: estágio repetido => 422"           '[[ "$(J .error.code)" == modules_spec_invalid && "$(J .error.message)" == *repetido* ]]'
+call /treino/contest-create/create POST "$(jq -cn --slurpfile s "$ROOT/score/classify-seeds/latam-pda-2027.json" '{id:"novo6", name:"N6", mode:"icpc", end:9999999999, allow_empty:true,
+  modules:{classificacao:{stages:[{algorithm:"latam-pda", config:$s[0]}, {algorithm:"latam-mundial", config:{N_WF:12, regions:[{code:"br", name:"Brasil"}]}}]}}}')" tadm ''
+ck "spec: PDA (semente oficial) + Mundial => estágios pda e mundial" '[[ "$(J .success)" == true && "$(jq -r "[.stages[].id] | join(\",\")" "$FIX/novo6/classification.json")" == "pda,mundial" && "$(jq -r ".stages[0].config.N" "$FIX/novo6/classification.json")" == 40 ]]'
+call /treino/contest-create/create POST "$(jq -cn '{id:"ruim5", name:"R", mode:"icpc", end:9999999999, allow_empty:true, modules:{classificacao:{stages:[{algorithm:"latam-pda", config:{N:10}}]}}}')" tadm ''
+ck "spec: config da PDA reprovada pelo --check (N múltiplo de 4)" '[[ "$(J .error.code)" == modules_spec_invalid && "$(J .error.message)" == *"múltiplo de 4"* ]]'
+call /treino/contest-create/create POST "$(jq -cn '{id:"novo5", name:"N5", mode:"icpc", end:9999999999, allow_empty:true, modules:{classificacao:true}}')" tadm ''
+ck "spec: classificacao:true só liga o módulo" '[[ "$(J .success)" == true && ! -e "$FIX/novo5/classification.json" && "$(confmods "$FIX/novo5")" == classificacao ]]'
 
 echo "== detector =="
 D="$ROOT/bin/contest-modules-detect.sh"
@@ -172,6 +207,8 @@ ck "docs config => documentos"               'has_mod "$L" documentos'
 call /contest/admin/registrations POST '{"action":"enable"}' adm-lista 'contest=lista'
 ck "registrations enable => inscricoes"      'has_mod "$L" inscricoes'
 call /contest/admin/classify POST '{"action":"add","login":"alice"}' adm-lista 'contest=lista'
+ck "classify add sem motivo => 422, não liga" '[[ "$(J .error.code)" == reason_required ]] && ! has_mod "$L" classificacao'
+call /contest/admin/classify POST '{"action":"add","login":"alice","reason":"comitê"}' adm-lista 'contest=lista'
 ck "classify add => classificacao"           'has_mod "$L" classificacao'
 call /contest/animeitor/webcast POST '{"action":"create","view":"public","label":"telão"}' adm-lista 'contest=lista'
 ck "webcast create => telao"                 'has_mod "$L" telao'
