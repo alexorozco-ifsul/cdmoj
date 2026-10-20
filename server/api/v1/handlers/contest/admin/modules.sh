@@ -18,33 +18,33 @@ jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "JSON inválido" "bad_json"
 mapfile -t ON  < <(jq -r '(.on  // [])[] | tostring' <<<"$body" 2>/dev/null)
 mapfile -t OFF < <(jq -r '(.off // [])[] | tostring' <<<"$body" 2>/dev/null)
 for m in "${ON[@]}" "${OFF[@]}"; do mod_valid "$m" || fail 422 "Módulo desconhecido: $m" "module_invalid"; done
-# `virtual` só LIGA em contest que PODE virar virtual: não-secreto, ICPC, janela definida e TODOS os
-# problemas públicos no treino (o que o tempo resolve — ainda rodando, placar congelado — não barra:
-# o módulo fica inerte até o portão abrir). A garantia de verdade é o portão por requisição de
-# lib/virtual.sh; esta recusa é p/ o dono saber NA HORA por que não vai funcionar. Problema
-# não-público sai só em CONTAGEM (o dono do contest pode não ser dono do problema).
+# PRÉ-REQUISITOS (lib/modules.sh mod_requires_ok): `inscricoes` exige as contas do treino (USERS_FROM);
+# `esqueletos` exige o editor embutido (o sentido inverso — desligar o editor com o módulo ligado — é recusado no
+# admin/settings); `virtual` exige um contest que PODE virar virtual (o portão de lib/virtual.sh menos o que o tempo
+# resolve). Só p/ quem LIGA agora: módulo que já estava ligado sem o pré-requisito não trava o POST (a Central
+# avisa; desligar sempre pode). O `reason` (motivo do virtual) vai DENTRO do error p/ a tela traduzir.
+_curm=",$(mod_raw "$contest"),"
 for m in "${ON[@]}"; do
-  [[ "$m" == virtual ]] || continue
-  source "$_LIBDIR/virtual.sh"
-  VR_IGNORE="module_off running frozen" vr_load "$contest" && continue
-  case "$VR_REASON" in
-    problems_not_public) _vmsg="há problema(s) NÃO público(s) no treino (${VR_NPRIV/#-1/?}) — a participação virtual só existe para prova com todos os problemas públicos" ;;
-    secret)  _vmsg="contest secreto não pode ter participação virtual" ;;
-    type)    _vmsg="por ora só contests no modo ICPC" ;;
-    window)  _vmsg="o contest precisa de início e fim definidos" ;;
-    *)       _vmsg="contest não elegível ($VR_REASON)" ;;
-  esac
-  fail 422 "Participação virtual indisponível: $_vmsg" "virtual_not_eligible"
-done
-# `esqueletos` EXIGE o editor embutido (lib/esqueletos.sh): sem ele o esqueleto não tem onde aparecer.
-# O sentido inverso (desligar o editor com o módulo ligado) é recusado no admin/settings.
-for m in "${ON[@]}"; do
-  [[ "$m" == esqueletos ]] || continue
-  esq_editor_on "$contest" || fail 422 "Esqueletos de código precisam do editor embutido: ligue \"Editor de código no browser\" nas Regras antes" "editor_required"
+  [[ "$_curm" == *",$m,"* ]] && continue
+  if ! mod_requires_ok "$contest" "$m"; then
+    [[ -n "$MOD_REQ_REASON" ]] && FAIL_EXTRA="$(jq -cn --arg r "$MOD_REQ_REASON" '{reason:$r}')"
+    fail 422 "$MOD_REQ_MSG" "$MOD_REQ_CODE"
+  fi
 done
 cur=",$(mod_raw "$contest"),"
 for m in "${ON[@]}";  do [[ "$cur" == *",$m,"* ]] || cur="$cur$m,"; done
 for m in "${OFF[@]}"; do cur="${cur//,$m,/,}"; done
 mod_set "$contest" "$cur"
+# DESLIGAR DESLIGA A REGRA (03/10/2026): efeitos que o arquivo sozinho não dá conta
+_was=",$(IFS=,; echo "${ON[*]:-}"),"; _off=",$(IFS=,; echo "${OFF[*]:-}"),"
+_rel=0
+if [[ "$_off" == *",maquinas,"* ]]; then   # a trava no disco seguiria barrando no router (que só olha o arquivo)
+  source "$_LIBDIR/site-lock.sh"; _rel="$(sl_release_contest "$contest")"
+fi
+if [[ "$_was$_off" == *",coortes,"* || "$_was$_off" == *",sedes,"* || "$_was$_off" == *",baloes,"* ]]; then
+  mkdir -p "$CONTESTSDIR/$contest/var"; touch "$CONTESTSDIR/$contest/var/.score-dirty" 2>/dev/null   # placar/visões mudam
+fi
+# religar os balões: varredura COMPLETA (o carimbo andou com o módulo desligado; o id da tarefa é determinístico)
+[[ "$_was" == *",baloes,"* ]] && rm -f "$CONTESTSDIR/$contest/print-requests/.balloon-stamp" "$CONTESTSDIR/$contest/print-requests/.balloon-prev" 2>/dev/null
 audit_log_to "$contest" modules-set "on=$(IFS=,; echo "${ON[*]:-}") off=$(IFS=,; echo "${OFF[*]:-}") agora=$(mod_raw "$contest")"
 _mods_body

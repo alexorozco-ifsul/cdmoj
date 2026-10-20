@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ANIMEITOR.md blob:cc164fe430e20209a05f71d7e2a12ed0dc81e3a0 -->
+<!-- i18n-source: MANUAL-ANIMEITOR.md blob:683e095b4d33ed3f92a48c9e5b0d4bac0812fa56 -->
 # MOJ: Manual de la pantalla (`.animeitor`)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -54,9 +54,15 @@ remontada y mantiene el congelamiento hasta la hora de la revelación.
    "eliminarla y usar la clave del MOJ" deshace el cambio. La clave del MOJ solo vale en el servidor predeterminado.
 2. **URL pública del MOJ.** Es de donde la pantalla obtiene la foto y la música de cada equipo; revísala.
 3. **Marcadores y sedes.** El MOJ propone el general, uno por cohorte y uno por país, con las sedes; ajusta nombres y
-   medallas y guarda. Una competencia de una sola sede recibe la sede `Geral` (sin sede no hay enlace de revelación).
+   medallas y guarda. El marcador general siempre trae la sede **`Geral`**, con todos los equipos: es la que da el enlace del
+   **resultado general** (sin sede no hay enlace de revelación). Si desapareció de una configuración guardada, usa
+   **+ sede General (todos los equipos)** en el marcador. Su enlace es solo tuyo y del admin: ningún jefe de sede lo recibe.
+   La Central del admin avisa cuando el marcador general no la tiene o cuando una sede quedó sin equipos.
 4. **📡 publicar en la pantalla** e **▶ iniciar el alimentador** (reloj cada segundo y envíos cada 2 s). El nombre
    del evento es el id de la competencia; un nombre que ya pertenece a otra competencia del MOJ se rechaza.
+   Con la clave del MOJ, el evento nuevo empieza con `moj-` (`moj-<competencia>`): es una regla del Animeitor
+   para la clave compartida, y el MOJ agrega el prefijo solo — también al nombre que escribas. Con una clave
+   tuya, el nombre es libre. Un evento ya creado mantiene su nombre (los enlaces de revelación siguen valiendo).
 5. **Verificación.** El MOJ le pregunta al Animeitor, sede por sede, si tiene **todos** los envíos, con la respuesta
    correcta — automáticamente, cada 5 minutos durante la competencia y, después del final, hasta la **verificación final**. Lo que falte
    o no coincida se reenvía automáticamente. La línea "Verificación" del estado muestra el último resultado; **🔎 verificar ahora**
@@ -65,6 +71,12 @@ remontada y mantiene el congelamiento hasta la hora de la revelación.
 6. **🎬 liberar los enlaces de revelación a las sedes.** Antes de liberar, la mesa verifica y muestra el resultado en la
    pregunta de confirmación. Cada jefe de sede (y cada miembro del staff) pasa a ver el enlace de su sede, **con el sello de la verificación**
    ("✓ Validado", "Verificado" o "⚠"). El enlace muestra las respuestas después del congelamiento: trátalo como una contraseña.
+   **Antes de liberar**, "mostrar los enlaces de la pantalla" ya te lista todos los enlaces, con **abrir**, **copiar** y la
+   columna **Lo recibe al liberar** (qué jefe de sede o staff recibirá cada uno). Úsalo para revisar los marcadores y las
+   sedes sin entregar nada a las sedes. Quien ve los enlaces queda registrado.
+   El mismo botón libera también la **Revelación** integrada del MOJ (`/contest/score/reveal.html`) para los jefes
+   de sede: con el evento publicado en el Animeitor, solo se abre para ellos después de esta liberación (y del fin
+   de la competencia para todas las sedes). **recoger los enlaces de las sedes** cierra las dos de nuevo.
 
 ## 🎥 Claves de streaming (legado)
 

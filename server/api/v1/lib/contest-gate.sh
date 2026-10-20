@@ -16,9 +16,13 @@
 # times ganham minutos). Formato: [{regex, end, reason?}, …] — 1ª que casa vence.
 # ATENÇÃO jq: `.regex` PRECISA ser bindado ANTES do test ($l|test(.regex) leria .regex
 # de $l — ver a armadilha de contexto de args do jq); try/catch protege de regex inválido.
+# A prorrogação por sede é do módulo `sedes`: DESLIGADO, o arquivo não vale (decisão do Ribas, 03/10/2026). O teste
+# do módulo vem DEPOIS do do arquivo (custo zero p/ quem não tem prorrogação).
+_tov_on(){ declare -F mod_on >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/modules.sh"; mod_on "$1" sedes; }
 time_override_end() {
   local f="$CONTESTSDIR/$1/time-overrides.json"
   [[ -s "$f" && -n "${2:-}" ]] || return 0
+  _tov_on "$1" || return 0
   jq -r --arg l "$2" '
     first(.[]? | (.regex // "") as $rr | (.end) as $e
           | select($rr != "" and ($e|type=="number") and (try ($l | test($rr)) catch false))
@@ -47,7 +51,7 @@ contest_end_all() {
   local CONTEST_START=0 CONTEST_END=0 mx f="$CONTESTSDIR/$1/time-overrides.json"
   source "$CONTESTSDIR/$1/conf" 2>/dev/null
   [[ "$CONTEST_END" =~ ^[0-9]+$ ]] || CONTEST_END=0
-  if [[ -s "$f" ]] && (( CONTEST_END > 0 )); then
+  if [[ -s "$f" ]] && (( CONTEST_END > 0 )) && _tov_on "$1"; then
     mx="$(jq -r '[.[]? | select((.regex//"") != "" and (.end|type=="number")) | .end] | max // empty' "$f" 2>/dev/null)"
     [[ "$mx" =~ ^[0-9]+$ ]] && (( mx > CONTEST_END )) && CONTEST_END=$mx
   fi
@@ -59,6 +63,26 @@ contest_end_all() {
 contest_over_for_all() {
   local e; e="$(contest_end_all "$1")"
   [[ "$e" =~ ^[0-9]+$ ]] && (( e > 0 && EPOCHSECONDS > e ))
+}
+
+# site_reveal_open <contest> : 0 se a REVELAÇÃO POR SEDE (a cerimônia embutida do .cstaff — placar
+# full com `scope=mine` + o botão Revelação) pode abrir. Duas condições:
+#   1. a prova acabou p/ TODAS as sedes (contest_over_for_all);
+#   2. se o telão do Animeitor está EM USO — este contest publicou um evento lá
+#      (var/animeitor-managed.json com `event`) —, o `.animeitor` já LIBEROU a revelação às sedes
+#      (var/animeitor-reveal.released: o MESMO interruptor do Reveleitor). Sem isso a sede abria a
+#      cerimônia embutida antes de a organização liberar o Reveleitor (TCP 2026, 03/10/2026).
+# "Em uso" é o evento PUBLICADO, não o módulo nem a URL gravada: o interruptor só liga com evento
+# publicado (409 not_published), então módulo ligado sem Animeitor trancaria a sede p/ sempre.
+# Leitura por builtins (navbuttons e score são rotas quentes; animeitor.sh não é sourceado aqui).
+site_reveal_open() {
+  contest_over_for_all "$1" || return 1
+  local d="$CONTESTSDIR/$1/var" m=""
+  [[ -e "$d/animeitor-reveal.released" ]] && return 0
+  [[ -s "$d/animeitor-managed.json" ]] || return 0
+  IFS= read -r -d '' m < "$d/animeitor-managed.json" || true
+  [[ "$m" =~ \"event\"[[:space:]]*:[[:space:]]*\"[^\"] ]] && return 1
+  return 0
 }
 
 # --- DESCONGELAR o placar: só a partir do fim geral + 1 min (pedido do Ribas, 2026-09-14) ---
@@ -91,12 +115,15 @@ freeze_release_guard() {
 # freeze_change_guard <contest> <novo-FREEZE_TIME> — p/ handlers que EDITAM o freeze: barra
 # (409 freeze_locked) toda mudança que DESCONGELA antes da hora — novo = 0 (apagar) ou, com o
 # freeze JÁ EM VIGOR (0 < atual <= agora), novo no futuro/no fim (o placar voltaria a mostrar o
-# que estava escondido). Mover o freeze ANTES de ele entrar em vigor segue livre. Comparação
+# que estava escondido). Mover — ou APAGAR — o freeze ANTES de ele entrar em vigor segue livre. Comparação
 # numérica ("00" é zero). Sem freeze no conf: passa.
 freeze_change_guard() {
   local cur new="${2:-0}"; cur="$(conf_value "$1" FREEZE_TIME)"; cur="${cur//[^0-9]/}"; new="${new//[^0-9]/}"
   [[ -n "$cur" ]] && (( cur > 0 )) || return 0
   [[ -n "$new" ]] || new=0
+  # APAGAR um freeze que ainda NÃO entrou em vigor (atual no futuro) não descongela nada: livre (decisão do Ribas,
+  # 03/10/2026 — o campo diz "vazio = sem congelamento" e o servidor recusava até o fim da prova). Em vigor: fim + 1 min.
+  (( new == 0 && cur > EPOCHSECONDS )) && return 0
   (( new == 0 )) && { freeze_release_guard "$1"; return 0; }
   (( cur <= EPOCHSECONDS && new > EPOCHSECONDS )) || return 0     # não descongela: livre
   freeze_release_ok "$1" && return 0

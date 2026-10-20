@@ -24,7 +24,7 @@
 # caches do virtual daquele contest são APAGADOS. Nada aqui lê jsons-private/ nem MOJ_PROBLEMS_DIR:
 # virtual de problema privado não existe.
 
-source "$_LIBDIR/modules.sh"
+declare -F mod_on >/dev/null || source "$_LIBDIR/modules.sh"   # o mod_requires_ok (virtual) carrega ESTA lib
 source "$_LIBDIR/contest-gate.sh"
 source "$_LIBDIR/verdict.sh"
 
@@ -71,6 +71,8 @@ vr_load(){
   mapfile -t _vr_lines <<<"$dump"
   IFS=$'\001' read -r VR_START VR_END type fz secret VR_PEN VR_TITLE <<<"${_vr_lines[0]}"
   [[ "$secret" == 1 ]] && { _vr_reject secret || return 1; }
+  # placar ANÔNIMO: o feed do virtual são as linhas do placar oficial (login, nome, notas) — 03/10/2026
+  [[ "$(conf_value "$cid" SCORE_ANON)" == 1 ]] && { _vr_reject score_anon || return 1; }
   [[ "${type:-icpc}" == icpc ]] || { _vr_reject type || return 1; }
   [[ "$VR_START" =~ ^[0-9]+$ && "$VR_END" =~ ^[0-9]+$ ]] && (( VR_START > 0 && VR_END > VR_START )) \
     || { _vr_reject window || return 1; }

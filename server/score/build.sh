@@ -91,9 +91,13 @@ FREEZE_RAW="$(sed -n 's/^[[:space:]]*FREEZE_TIME=//p' "$CONF" | tail -1)"
 FREEZE_RAW="$(printf '%s' "$FREEZE_RAW" | tr -cd '0-9')"
 
 # --- metrics freshness ------------------------------------------------------
-# Os geradores leem users/*/metrics.json (mantidos incrementais pelo daemon). Se o CONF
-# mudou depois do último recompute em massa (ex.: FREEZE_TIME editado — a visão frozen
-# vive DENTRO do metrics), recomputa todo mundo uma vez e carimba var/.metrics-stamp.
+# Os geradores leem users/*/metrics.json (mantidos incrementais pelo daemon). Se o que as
+# métricas usam do CONF mudou depois do último recompute em massa (FREEZE_TIME — a visão
+# frozen vive DENTRO do metrics — ou PENALTY_VERDICTS), recomputa todo mundo uma vez e
+# carimba var/.metrics-stamp com a ASSINATURA desses dois (metrics_conf_sig). Até 15/10/2026
+# qualquer edição do conf (nome, horário de login, linguagens…) refazia o contest inteiro; agora
+# conf mais novo com a MESMA assinatura só anda o carimbo. Quem muda freeze/penalidade pela API
+# ainda apaga o carimbo (settings, rodadas, score_kick_rebuild) — o rm continua forçando.
 # Também cobre o 1º build de um contest importado/backfill (stamp ausente).
 #
 # ⚠ E cobre o DEPLOY que muda o FORMATO do metrics: a `lib/users.sh` entra como entrada, do mesmo
@@ -106,18 +110,22 @@ source "$HERE/../api/v1/lib/users.sh"
 STAMP="$CONTESTDIR/var/.metrics-stamp"
 _ULIB="$HERE/../api/v1/lib/users.sh"
 # (pré-início não lê métricas — 0 colunas de problema; pula o recompute em massa)
-if (( ! PRESTART )) && [[ ! -f "$STAMP" || "$CONF" -nt "$STAMP" || "$_ULIB" -nt "$STAMP" ]]; then
-  # ⚠ quem tem METRICS é quem tem HISTORY neste contest, NÃO quem tem account.json local: em
-  # contest com `USERS_FROM` o participante compartilhado tem dir local SEM account.json (de
-  # propósito), então o `list_users` devolvia 12 de 79 no ensaio-times-2026 e o recompute em
-  # massa passava longe justamente de quem compete. Era bug silencioso e antigo — editar o
-  # FREEZE_TIME não refazia a visão congelada desses times —, que só apareceu quando o
-  # `pending_min_epoch` novo ficou ausente para eles. Mesma enumeração do `sc_cells`.
-  while IFS= read -r _h; do
-    _u="${_h%/history}"; _u="${_u##*/}"
-    [[ -n "$_u" ]] && metrics_recompute "$CONTEST" "$_u"
-  done < <(find "$CONTESTDIR/users" -mindepth 2 -maxdepth 2 -name history 2>/dev/null)
-  touch "$STAMP"
+if (( ! PRESTART )); then
+  _SIG="$(metrics_conf_sig "$CONTEST")"; _OSIG=""
+  [[ -f "$STAMP" ]] && read -r _OSIG < "$STAMP" 2>/dev/null
+  if [[ ! -f "$STAMP" || "$_ULIB" -nt "$STAMP" ]] || { [[ "$CONF" -nt "$STAMP" ]] && [[ "$_OSIG" != "$_SIG" ]]; }; then
+    # ⚠ quem tem METRICS é quem tem HISTORY neste contest, NÃO quem tem account.json local: em
+    # contest com `USERS_FROM` o participante compartilhado tem dir local SEM account.json (de
+    # propósito), então o `list_users` devolvia 12 de 79 no ensaio-times-2026 e o recompute em
+    # massa passava longe justamente de quem compete. Era bug silencioso e antigo — editar o
+    # FREEZE_TIME não refazia a visão congelada desses times —, que só apareceu quando o
+    # `pending_min_epoch` novo ficou ausente para eles. Mesma enumeração do `sc_cells` (o
+    # metrics_recompute_all varre users/*/history). UM jq p/ o contest todo (ver lib/users.sh).
+    metrics_recompute_all "$CONTEST"
+    printf '%s\n' "$_SIG" > "$STAMP"
+  elif [[ "$CONF" -nt "$STAMP" ]]; then
+    touch "$STAMP"     # o conf mudou, mas não no que as métricas usam: nada a recomputar
+  fi
 fi
 
 # memo do sc_users POR CHAVE DE VISÃO, compartilhado entre as gerações deste build (frozen+full
@@ -162,6 +170,51 @@ gen_pair() {
   fi
 }
 
+# PLACAR ANÔNIMO (SCORE_ANON=1; 03/10/2026, decisão do Ribas: cortar na API). Quem não é da organização recebe SÓ
+# o agregado — nenhum login, nome nem linha de time: var/placar-anon.json (do placar PÚBLICO congelado) e, antes do
+# início, var/placar-prestart-anon.json (só quantos). Mesmo parser do sc_board_rows: problemas = colunas entre
+# "univ full" e "Total"; ICPC resolvido = `N/T` (o `N/-?` do freeze NÃO é resolvido); OBI = nota > 0. Os quartis
+# saem prontos (uma lista de notas por time, ordenada, ainda seria nota individual numa turma de 8).
+ANON=0; [[ "$(sed -n 's/^[[:space:]]*SCORE_ANON=//p' "$CONF" | tail -1 | tr -cd '0-9')" == 1 ]] && ANON=1
+gen_anon() { # <placar.txt> <out.json> <frozen 0|1>
+  local in="$1" out="$2" fz="${3:-0}" tmp
+  [[ -f "$in" ]] || return 0
+  tmp="$(mktemp "$out.XXXXXX")" || return 0
+  awk -F: -v FZ="$fz" '
+    function trim(s){ gsub(/^[ \t]+|[ \t]+$/,"",s); return s }
+    NR==1{ split($0, M, " "); mode=M[1]; next }
+    NR==2{ n=split($0,H,":"); s=1
+      while (s<=n) { h=trim(tolower(H[s])); if (h=="desc"||h=="asc") s++; else break }
+      for(i=s;i<=n;i++){ h=trim(tolower(H[i]))
+        if(h=="univ full")iuf=i-s+1; else if(h=="total")itot=i-s+1; else if(h=="guest")ig=i-s+1 }
+      off=s-1; pf=(iuf?iuf+1:0); pl=(itot?itot-1:0)
+      for(i=pf;pl>=pf && i<=pl;i++){ np++; P[np]=trim(H[i+off]) }
+      next }
+    NF==0{ next }
+    { g=(ig ? trim($(ig)) : ""); if (g!="" && g!="0" && tolower(g)!="false" && tolower(g)!="no") { guests++; next }
+      teams++; k=0
+      for(j=1;j<=np;j++){ c=trim($(pf+j-1))
+        ok=(mode=="obi") ? (c!="" && c+0>0) : (c ~ /^[0-9]+\/[0-9]+\/?\*?$/)
+        if (ok) { k++; PC[j]++ } }
+      S[teams]=k }
+    END{
+      printf "M\t%s\t%d\t%d\t%s\n", mode, teams+0, guests+0, FZ
+      for(j=1;j<=np;j++) printf "P\t%s\t%d\n", P[j], PC[j]+0
+      for(t=1;t<=teams;t++) printf "S\t%d\n", S[t] }' "$in" 2>/dev/null \
+  | jq -Rn '[inputs | split("\t")] as $L
+      | ($L | map(select(.[0]=="M")) | first) as $m
+      | ([$L[] | select(.[0]=="S") | .[1] | tonumber] | sort | reverse) as $s
+      | ($s | length) as $n
+      | def at($q): if $n == 0 then 0 else $s[[($n - 1), (($q * $n) | floor)] | min] end;
+      { anon: true, mode: ($m[1] // ""), n: $n, guests: (($m[3] // "0") | tonumber), frozen: (($m[4] // "0") == "1"),
+        supported: (($m[1] // "") == "icpc" or ($m[1] // "") == "obi"),
+        problems: [$L[] | select(.[0]=="P") | .[1]],
+        per_problem: ([$L[] | select(.[0]=="P") | {key: .[1], value: (.[2] | tonumber)}] | from_entries),
+        dist: ($s | group_by(.) | map({key: (.[0] | tostring), value: length}) | from_entries),
+        q: {p25: at(0.25), median: at(0.5), p75: at(0.75), max: ($s[0] // 0)} }' > "$tmp" 2>/dev/null
+  if [[ -s "$tmp" ]]; then mv -f "$tmp" "$out"; else rm -f "$tmp"; fi
+}
+
 # COORTES (times oficiais × convidados): quando o contest tem coorte NÃO-pública, cada VISÃO
 # ganha o seu par de placares — `var/placar[-full].txt` continua sendo a visão pública (nada
 # mudou de nome para quem já lia), e cada visão extra vira `var/placar-view-<id>[-full].txt`.
@@ -173,6 +226,8 @@ if [[ -s "$CONTESTDIR/cohorts.json" && -r "$CH_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$CH_LIB"
   export CONTESTSDIR
+  # módulo `coortes` desligado: as coortes não valem (03/10/2026) — nada de visão, convidado nem coluna guest
+  _ch_mod_on "$CONTEST" || unset -f ch_enabled ch_unranked_of_view 2>/dev/null
 fi
 
 # --prestart: uma passada só, com os envs da VISÃO PÚBLICA das coortes (coorte privada não
@@ -184,6 +239,7 @@ if (( PRESTART )); then
     VIEW_UNRANKED="$(ch_unranked_of_view "$CONTEST" public | tr '\n' ' ' | sed 's/ *$//')"
   fi
   MOJ_PRESTART=1 gen_one "$PRE" 1
+  if (( ANON )); then gen_anon "$PRE" "$CONTESTDIR/var/placar-prestart-anon.json" 0; else rm -f "$CONTESTDIR/var/placar-prestart-anon.json"; fi
   echo "$PRE"
   exit 0
 fi
@@ -205,7 +261,17 @@ if declare -F ch_enabled >/dev/null && ch_enabled "$CONTEST"; then
     done )
 else
   rm -f "$CONTESTDIR"/var/placar-view-*.txt "$CONTESTDIR"/var/placar-view-*.txt.gz 2>/dev/null
+  # coorte PÚBLICA extra-oficial (unranked) sem coorte privada/ranking: o placar público ainda leva a coluna guest
+  # (o time aparece sem consumir posição) — sem isto a marca não tinha efeito nenhum (auditoria, 03/10/2026)
+  if declare -F ch_unranked_of_view >/dev/null && [[ -s "$CONTESTDIR/cohorts.json" ]]; then
+    VIEW_UNRANKED="$(ch_unranked_of_view "$CONTEST" public | tr '\n' ' ' | sed 's/ *$//')"
+  fi
   gen_pair "$OUT" "$FULL"
 fi
+# o agregado do anônimo vem do placar PÚBLICO (o congelado, quando há freeze valendo)
+if (( ANON )); then
+  _afz=0; [[ -n "$FREEZE_RAW" ]] && (( FREEZE_RAW > 0 && EPOCHSECONDS >= FREEZE_RAW )) && _afz=1
+  gen_anon "$OUT" "$CONTESTDIR/var/placar-anon.json" "$_afz"
+else rm -f "$CONTESTDIR/var/placar-anon.json"; fi
 
 echo "$OUT"

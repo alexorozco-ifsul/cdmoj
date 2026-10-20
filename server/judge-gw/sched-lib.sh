@@ -128,14 +128,18 @@ reg_get() { local f="$REGISTRYDIR/$1.json"; [[ -f "$f" ]] && cat "$f"; }
 # `parallel_max`, que são do SERVIDOR), e hashear tudo fazia QUALQUER edição da entrada DRENAR
 # o juiz p/ reaplicar a mesma partição (bug (d)).
 judges_config_for() {
-  local host="$1" jconf entry norm srv_hash
+  # UM jq (eram três a CADA heartbeat de cada juiz — TCP 2026, 03/10/2026): a 1ª linha diz se há entrada p/ o host,
+  # a 2ª é o objeto normalizado (-S: chaves ordenadas, é ele que vira o hash). O `cfg_hash` entra por texto no fim
+  # — byte a byte o que o `. + {cfg_hash}` do jq escrevia (smoke-judge-config.sh).
+  local host="$1" jconf out has="" norm="" srv_hash=""
   jconf="${JUDGES_CONFIG_FILE:-$CONTESTSDIR/treino/var/judges-config.json}"
-  entry="$(jq -c --arg h "$host" '.[$h] // empty' "$jconf" 2>/dev/null)"
-  norm="$(jq -cS '{partition:(.partition // "off"), reserve:((.reserve // 0) | tonumber? // 0),
-                   disabled:((.disabled // false) == true)}' <<<"${entry:-null}" 2>/dev/null)"
-  [[ -n "$norm" ]] || norm='{"disabled":false,"partition":"off","reserve":0}'
-  if [[ -n "$entry" ]]; then srv_hash="$(printf '%s' "$norm" | md5sum | cut -c1-16)"; else srv_hash=""; fi
-  jq -c --arg hh "$srv_hash" '. + {cfg_hash:$hh}' <<<"$norm"
+  out="$(jq -cS --arg h "$host" '(.[$h] // null) as $e | ($e != null),
+          ({partition:($e.partition // "off"), reserve:(($e.reserve // 0) | tonumber? // 0),
+            disabled:(($e.disabled // false) == true)})' "$jconf" 2>/dev/null)"
+  { IFS= read -r has; IFS= read -r norm; } <<<"$out"
+  [[ "$norm" == '{'*'}' ]] || { norm='{"disabled":false,"partition":"off","reserve":0}'; has=false; }
+  [[ "$has" == true ]] && srv_hash="$(printf '%s' "$norm" | md5sum | cut -c1-16)"
+  printf '%s\n' "${norm%\}},\"cfg_hash\":\"$srv_hash\"}"
 }
 
 # sched_requeue_host <host> : devolve à fila TUDO que estava atribuído ao host — jobs
@@ -361,12 +365,17 @@ _cmeta_load() {
 _hardmem() { local m="$1"; [[ "$m" =~ ^[0-9]+$ ]] || m=0; local h=$(( m + 64 )); (( h < 600 )) && h=600; printf '%s' "$h"; }
 
 # ------------------------------------------------------------------- fila de jobs
-# q_enqueue <id> <priority> <job-json> : enfileira na banda da prioridade.
+# q_enqueue <id> <priority> <job-json> [atraso-s] : enfileira na banda da prioridade. A banda é FIFO
+# pelo NOME (`<epoch>_<id>.json`); com ATRASO o nome leva `agora+atraso` — o job entra na MESMA banda
+# como se tivesse chegado depois (menos prioridade p/ o time da prova com muitas pendentes, judged.sh
+# intake_enqueue). Atraso NÃO é idade: as carências do q_claim usam o `enq` real do `.cmeta`
+# (`enqueued_at` do job); só a ordem da fila e a promoção de famintos leem o nome.
 q_enqueue() {
-  local id="$1" prio="$2" json="$3" band
+  local id="$1" prio="$2" json="$3" delay="${4:-0}" band
+  [[ "$delay" =~ ^[0-9]+$ ]] || delay=0
   band="$(sched_band_of "$prio")"
   sched_init_dirs
-  local base="${EPOCHSECONDS}_${id}.json"
+  local base="$(( EPOCHSECONDS + delay ))_${id}.json"
   local tmp="$QUEUEDIR/$band/.${base}.tmp"
   printf '%s' "$json" > "$tmp" && mv -f "$tmp" "$QUEUEDIR/$band/$base"
 }
@@ -445,8 +454,11 @@ q_claim() {
         base="${f##*/}"
         # pool de juízes (allowed_hosts): ESTRITO por default (POOL_GRACE=0) — pool
         # offline segura a fila de propósito; POOL_GRACE>0 libera como fallback.
+        # As carências contam a idade REAL (`enq` do .cmeta = enqueued_at do job, o relógio do
+        # _wide_jobs e do queue_stuck), nunca o prefixo do nome: o nome é ordem de fila — vem
+        # adiantado no job com atraso (q_enqueue) e é refeito na promoção/devolução.
         if [[ -n "$hosts" && ",$hosts," != *",$host,"* ]]; then
-          ts="${base%%_*}"
+          ts="$enq"
           { (( POOL_GRACE > 0 )) && [[ "$ts" =~ ^[0-9]+$ ]] \
               && (( now - ts > POOL_GRACE )); } || continue
         fi
@@ -454,7 +466,7 @@ q_claim() {
         if [[ -n "$LSET" ]]; then
           case "$jl" in py2|py3) jl=py;; esac
           if [[ -n "$jl" && "$LSET" != *" $jl "* ]]; then
-            ts="${base%%_*}"
+            ts="$enq"
             [[ "$ts" =~ ^[0-9]+$ ]] && (( now - ts <= LANG_GRACE )) && { skipped_time=1; continue; }
           fi
         fi
@@ -466,7 +478,7 @@ q_claim() {
         v="${prob//\//#}"
         [[ -n "${PH[$v]:-}" ]] && probhot=1
         if (( probhot == 0 )); then
-          ts="${base%%_*}"
+          ts="$enq"
           [[ "$ts" =~ ^[0-9]+$ ]] && (( now - ts <= COLD_GRACE )) && { skipped_time=1; continue; }
         fi
         # recusa recente DESTE host (decline): pula por DECLINE_BACKOFF

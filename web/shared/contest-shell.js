@@ -6,6 +6,7 @@ import { el, avatarEl, fmtCountdown } from '/shared/ui.js';
 import { T, setLang } from '/shared/i18n.js';
 import { navLabel } from '/shared/nav-i18n.js';
 import { mountSiteFooter } from '/shared/site-footer.js';
+import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 // chip do usuário logado do contest no topbar (avatar + nome) — consistência com o
 // site principal. Inserido à esquerda do botão "Contest"/countdown; idempotente.
@@ -18,7 +19,8 @@ export function mountContestUserChip(st) {
     // NOME · login, sempre (issue #29): várias telas não mostravam quem está logado, e o login é
     // o que a sede/o juiz precisam ler — o nome sozinho não identifica a conta.
     el('span', { id: 'contestUserChip', class: 'user-chip small', style: 'margin-right:.3rem', title: (st.name ? st.name + ' · ' : '') + st.login },
-      avatarEl(st.login, st.name, 22, st.has_photo), el('span', {}, st.name || st.login),
+      // a foto do TIME neste contest (photo_url do /auth/status); sem ela, as iniciais — nunca a foto do treino
+      avatarEl(st.login, st.name, 22, !!(st.has_photo && st.photo_url), st.photo_url), el('span', {}, st.name || st.login),
       (st.name && st.name !== st.login) ? el('span', { class: 'muted', style: 'margin-left:.3rem' }, st.login) : null),
     anchor);
 }
@@ -34,7 +36,7 @@ export function navHref(url, contest) {
 
 function startCountdown(basic) {
   const eln = document.getElementById('contestCountdown'); if (!eln) return;
-  const tick = () => { const left = (basic.end_time || 0) - Math.floor(Date.now() / 1000); if (left > 0) { eln.textContent = T('Termina em: ', 'Ends in: ', 'Termina en: ') + fmtCountdown(left); setTimeout(tick, 1000); } else eln.textContent = T('Competição encerrada', 'Contest ended', 'Competencia terminada'); };
+  const tick = () => { const left = (basic.end_time || 0) - serverNow(); if (left > 0) { eln.textContent = T('Termina em: ', 'Ends in: ', 'Termina en: ') + fmtCountdown(left); setTimeout(tick, 1000); } else eln.textContent = T('Competição encerrada', 'Contest ended', 'Competencia terminada'); };
   tick();
 }
 
@@ -53,8 +55,9 @@ function renderNav(buttons, contest) {
 }
 document.addEventListener('moj:lang', () => { if (lastNav) renderNav(lastNav.buttons, lastNav.contest); });
 
-// initContestShell(contest) -> {basic, isAuth, st}. Preenche título, countdown, nav.
-export async function initContestShell(contest) {
+// initContestShell(contest, opts) -> {basic, isAuth, st}. Preenche título, countdown, nav.
+// opts.alerts:false = sem o alerta global da organização (página projetada — ver auth.js status).
+export async function initContestShell(contest, opts = {}) {
   let basic = null;
   try { basic = await apiGet('/contest/basic?contest=' + encodeURIComponent(contest), {}); } catch { /* segue */ }
   if (basic && basic.locale) setLang(basic.locale, { persist: false });  // LOCALE do contest impõe o idioma
@@ -63,7 +66,7 @@ export async function initContestShell(contest) {
   document.title = ((basic && basic.contest_name) || 'Contest') + ' — MOJ';
   const back = document.getElementById('backBtn'); if (back) back.href = '/contest/?c=' + encodeURIComponent(contest);
   if (basic) startCountdown(basic);
-  const st = await status(contest);
+  const st = await status(contest, opts);
   const isAuth = !!st.logged_in;
   mountContestUserChip(st);
   try {

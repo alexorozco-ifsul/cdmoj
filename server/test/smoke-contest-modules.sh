@@ -17,7 +17,7 @@ mkc(){ # <id> [extra conf lines]
   printf 'CONTEST=%s\nLOGIN=%s.admin\nLOGINAT=1\n' "$1" "$1" > "$SESS/adm-$1"
   printf 'CONTEST=%s\nLOGIN=alice\nLOGINAT=1\n' "$1" > "$SESS/usr-$1"
 }
-mkc ev; mkc lista
+mkc ev; mkc lista "USERS_FROM=treino"   # lista: contas do treino (a inscrição só liga com elas — 07/10/2026)
 E="$FIX/ev"
 printf '{"cohorts":[{"id":"oficial","name":"Oficiais","default":true,"public":true}]}' > "$E/cohorts.json"
 printf '{"mode":"enforce","from_login":{"regex":"^team([a-z]{6})","expect":"\\\\1"}}' > "$E/ua-gate.json"
@@ -82,11 +82,16 @@ SPEC2="$(jq -cn --argjson s "$((NOW+600))" --argjson e "$((NOW+4200))" '{id:"nov
   regions:[{name:"X", regex:"^x"}], colors:{A:"#f00"}}')"
 call /treino/contest-create/create POST "$SPEC2" tadm ''
 ck "compat: regions/colors no topo ligam sedes,baloes" '[[ "$(confmods "$FIX/novo2")" == "sedes,baloes" ]]'
+# o gate LEGADO (login_ua_substring) é do módulo `maquinas`: criar com ele LIGA o módulo (03/10/2026: desligado, a regra não vale)
+SPEC4="$(jq -cn --argjson s "$((NOW+600))" --argjson e "$((NOW+4200))" '{id:"novo9", name:"Novo 9", mode:"icpc", start:$s, end:$e, allow_empty:true, login_ua_substring:"KIOSK"}')"
+call /treino/contest-create/create POST "$SPEC4" tadm ''
+ck "create com login_ua_substring liga maquinas" '[[ "$(confmods "$FIX/novo9")" == "maquinas" ]] && grep -q "^LOGIN_UA_SUBSTRING=KIOSK" "$FIX/novo9/conf"'
 call /treino/contest-create/export GET '' tadm 'id=novo1'
 ck "export traz modules{maquinas,documentos}" '[[ "$(J ".modules|keys|join(\",\")")" == "documentos,maquinas" ]]'
 
 echo "== spec UNIFICADO: todas as seções gravam arquivo/conf e voltam no export (sem segredo) =="
-SPEC3="$(jq -cn --argjson s "$((NOW+600))" --argjson e "$((NOW+4200))" '{id:"novo3", name:"Novo 3", mode:"icpc", start:$s, end:$e, allow_empty:true,
+# users_from: a inscrição só liga com as contas do treino (pré-requisito do módulo, 07/10/2026)
+SPEC3="$(jq -cn --argjson s "$((NOW+600))" --argjson e "$((NOW+4200))" '{id:"novo3", name:"Novo 3", mode:"icpc", start:$s, end:$e, allow_empty:true, users_from:"treino",
   modules:{
     sedes:{regions:[{name:"Sorocaba",regex:"^teambrspso"}], teams_meta:[{regex:"^teambr",country:"BR"}], time_overrides:[{regex:"^teambrspso",end:($e+600),reason:"queda"}]},
     baloes:{colors:{A:"FF0000"}, during_freeze:true},
@@ -118,7 +123,11 @@ ck "export: classificacao algorithm+config"  '[[ "$(J ".modules.classificacao.al
 ck "export: nada de regions/colors no TOPO"  '[[ "$(J "has(\"regions\") or has(\"colors\") or has(\"teams_meta\")")" == false ]]'
 EXP3="$BODY"
 echo "== duplicate desloca rodadas; template tira o que é preso a data =="
-call /treino/contest-create/duplicate POST "$(jq -cn --argjson s "$((NOW+90000))" '{from:"novo3", id:"novo3b", start:$s}')" tadm ''
+# o duplicate NUNCA herda users_from (28/09/2026) e a inscrição só liga com as contas do treino (07/10/2026): sem pedir
+# as contas do treino, a cópia de um contest com inscrição é recusada e diz como resolver
+call /treino/contest-create/duplicate POST "$(jq -cn --argjson s "$((NOW+90000))" '{from:"novo3", id:"novo3x", start:$s}')" tadm ''
+ck "duplicate com inscrição SEM as contas do treino: 422 requires_shared_users, nada criado" '[[ "$(J .error.code)" == requires_shared_users && "$(J .error.message)" == *"cópia fiel"* && ! -e "$FIX/novo3x" ]]'
+call /treino/contest-create/duplicate POST "$(jq -cn --argjson s "$((NOW+90000))" '{from:"novo3", id:"novo3b", start:$s, users_from:"treino"}')" tadm ''
 ck "duplicate: sucesso"                      '[[ "$(J .success)" == true ]]'
 ck "duplicate: rounds deslocadas pelo delta (+89400)" '[[ "$(jq -r ".rounds[0].start" "$FIX/novo3b/rounds.json")" == "$((NOW+90000))" && "$(jq -r ".rounds[1].start" "$FIX/novo3b/rounds.json")" == "$((NOW+90000+3600+3600))" ]]'
 ck "duplicate: sem time-overrides; módulos iguais" '[[ ! -e "$FIX/novo3b/time-overrides.json" && "$(confmods "$FIX/novo3b")" == "$(confmods "$N3")" ]]'
@@ -194,10 +203,15 @@ call /contest/admin/rounds POST "$(jq -cn --argjson s "$((NOW+100))" --argjson e
 ck "rounds add => rodadas"                   'has_mod "$L" rodadas'
 call /contest/admin/cohorts POST '{"action":"add","id":"ccl","name":"CCL","regex":"^ccl","public":false}' adm-lista 'contest=lista'
 ck "cohorts add => coortes"                  'has_mod "$L" coortes'
+call /contest/admin/cohorts GET '' adm-lista 'contest=lista'
+ck "GET cohorts: \"Placares gerados\" traz o geral (public), a coorte e o completo" '[[ "$(jq -c .views <<<"$BODY")" == "[\"public\",\"ccl\",\"all\"]" ]]'
 call /contest/admin/ua-gate POST '{"action":"set","mode":"off"}' adm-lista 'contest=lista'
 ck "ua-gate mode=off NÃO liga maquinas"      '! has_mod "$L" maquinas'
 call /contest/admin/ua-gate POST '{"action":"set","mode":"enforce","from_login":{"regex":"^team([a-z]{6})","expect":"\\1"}}' adm-lista 'contest=lista'
 ck "ua-gate enforce => maquinas"             'has_mod "$L" maquinas'
+call /contest/admin/modules POST '{"off":["maquinas"]}' adm-lista 'contest=lista'
+call /contest/admin/settings POST '{"login_ua_substring":"KIOSK"}' adm-lista 'contest=lista'
+ck "settings login_ua_substring => maquinas (o gate legado é do módulo)" 'has_mod "$L" maquinas'
 call /contest/admin/time-overrides POST "$(jq -cn --argjson e "$((FUT+600))" '{rules:[{regex:"^alice",end:$e,reason:"x"}]}')" adm-lista 'contest=lista'
 ck "time-overrides => sedes"                 'has_mod "$L" sedes'
 call /contest/admin/config POST '{"colors":{"A":"FF0000"}}' adm-lista 'contest=lista'

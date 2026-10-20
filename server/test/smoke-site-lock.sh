@@ -9,10 +9,10 @@ FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; RUN="$(mktemp -d)"; trap 'rm -rf "$FIX"
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 NOW=$EPOCHSECONDS
 C="$FIX/sl"; mkdir -p "$C/var"
-printf 'CONTEST_ID=sl\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nSITE_LOCK=1\nUSER_STORE=v2\n' "$((NOW-3600))" "$((NOW+3600))" > "$C/conf"
+printf 'CONTEST_ID=sl\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nSITE_LOCK=1\nUSER_STORE=v2\n' "$((NOW-3600))" "$((NOW+3600))" > "$C/conf"
 printf "PROBS=( x col#pa Alfa A col#pa )\n" >> "$C/conf"
-T="$FIX/treino"; mkdir -p "$T/var"; printf 'CONTEST_ID=treino\nCONTEST_TYPE=treino\nUSER_STORE=v2\n' > "$T/conf"
-O="$FIX/outro"; mkdir -p "$O/var"; printf 'CONTEST_ID=outro\nCONTEST_TYPE=icpc\nUSER_STORE=v2\n' > "$O/conf"
+T="$FIX/treino"; mkdir -p "$T/var"; printf 'CONTEST_ID=treino\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=treino\nUSER_STORE=v2\n' > "$T/conf"
+O="$FIX/outro"; mkdir -p "$O/var"; printf 'CONTEST_ID=outro\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nUSER_STORE=v2\n' > "$O/conf"
 fx_user "$C" sl.admin p "Admin"; fx_user "$C" alice a "Alice"; fx_user "$C" bob b "Bob"
 fx_user "$T" alice a "Alice"; fx_user "$T" tr.admin p "Admin T"; fx_user "$O" alice a "Alice O"
 # sessão do treino aberta ANTES da prova (não expira) e sessão de admin do treino
@@ -52,6 +52,12 @@ call /auth/login POST '{"username":"alice","password":"a"}' none 'contest=outro'
 ck "login em OUTRO contest → 403"        '[[ "$(J .error.code)" == site_locked ]]'
 call /index/status GET '' tralice '' 5.5.5.5
 ck "índice → 403"                        '[[ "$(J .error.code)" == site_locked ]]'
+# o IP é o da CONEXÃO: X-Forwarded-For/X-Real-IP vêm do cliente (não há proxy na frente) — forjá-los não solta a
+# trava (auditoria do painel, 03/10/2026: antes o 1º hop do X-Forwarded-For valia e a trava se furava)
+OUT="$(PATH_INFO=/index/status REQUEST_METHOD=GET HTTP_AUTHORIZATION="Bearer tralice" REMOTE_ADDR=5.5.5.5 \
+  HTTP_X_FORWARDED_FOR=203.0.113.9 HTTP_X_REAL_IP=203.0.113.9 CONTESTSDIR="$FIX" SESSIONDIR="$SESS" RUNDIR="$RUN" bash "$ROUTER" 2>/dev/null)"
+BODY="$(printf '%s' "$OUT" | awk 'f{print} /^\r?$/{f=1}')"
+ck "X-Forwarded-For/X-Real-IP forjados NÃO soltam a trava" '[[ "$(J .error.code)" == site_locked ]]'
 call /contest/basic GET '' adm 'contest=sl' 5.5.5.5
 ck "rota do contest dono passa"          '[[ "$OUT" != *"site_locked"* ]]'
 call /auth/login POST '{"username":"alice","password":"a"}' none 'contest=sl' 5.5.5.5
@@ -78,14 +84,23 @@ call /treino/problems GET '' tradm 'q=x' 5.5.5.5
 call /auth/login POST '{"username":"alice","password":"a"}' none 'contest=treino' 5.5.5.5
 ck "solto: treino volta a entrar"        '[[ "$(J .logged_in)" == true ]]'
 # access.log tem 5.5.5.5 (alice/bob) e 7.7.7.7 (papel): claim-seen prende só o de competidor
+# NAT da sede: o staff e o time saem pelo MESMO IP (13.13.13.13); a linha do staff vem antes — o IP não pode ser pulado
+printf '%s\tapoio.staff\t13.13.13.13\tx\n%s\tbob\t13.13.13.13\tx\n' "$((NOW-200))" "$((NOW-100))" >> "$C/var/access.log"
 call /contest/admin/site-lock POST '{"action":"claim-seen"}' adm 'contest=sl'
-ck "claim-seen prende os IPs de competidor vistos (1 novo; papel fora)" '[[ "$(J .claimed)" == 1 && -f "$RUN/site-lock/5.5.5.5" && ! -f "$RUN/site-lock/7.7.7.7" ]]'
+ck "claim-seen prende os IPs de competidor vistos (papel fora)" '[[ -f "$RUN/site-lock/5.5.5.5" && ! -f "$RUN/site-lock/7.7.7.7" ]]'
+ck "claim-seen: IP de NAT com staff e time é preso (2 novos)" '[[ "$(J .claimed)" == 2 && -f "$RUN/site-lock/13.13.13.13" ]]'
 call /contest/admin/site-lock POST '{"action":"set","enabled":false}' adm 'contest=sl'
 ck "set enabled:false grava SITE_LOCK=0"  'grep -q "^SITE_LOCK=0$" "$C/conf"'
 call /auth/login POST '{"username":"alice","password":"a"}' none 'contest=sl' 8.8.8.8
 ck "trava desligada: login não reivindica" '[[ "$(J .logged_in)" == true && ! -f "$RUN/site-lock/8.8.8.8" ]]'
 call /contest/admin/site-lock POST '{"action":"set","enabled":true,"grace":600}' adm 'contest=sl'
 ck "set enabled+grace"                    '[[ "$(J .enabled)" == true && "$(J .grace)" == 600 ]]'
+
+echo "== rodadas: a reivindicação do aquecimento vale até o fim da ÚLTIMA rodada planejada =="
+printf '{"rounds":[{"slug":"w","state":"active","end":%s},{"slug":"oficial","state":"pending","end":%s}]}' "$((NOW+3600))" "$((NOW+20000))" > "$C/rounds.json"
+call /auth/login POST '{"username":"alice","password":"a"}' none 'contest=sl' 2.2.2.2
+ck "until = fim da oficial + folga (não o do aquecimento)" '[[ "$(awk -F"\t" "\$2==\"sl\"{print \$3}" "$RUN/site-lock/2.2.2.2")" == "$((NOW+20000+600))" ]]'
+rm -f "$C/rounds.json"
 
 echo "== expiração =="
 printf '4.4.4.4\tsl\t%s\t1\t1\t1\t0\t0\t\n' "$((NOW-10))" > "$RUN/site-lock/4.4.4.4"

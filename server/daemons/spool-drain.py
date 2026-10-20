@@ -36,10 +36,36 @@ QUEUE = os.environ.get("QUEUEDIR", os.path.join(RUNDIR, "queue"))
 BANDS = {"super": "000-super", "prova": "020-prova",
          "lista-privada": "040-lista-privada", "rejulgar": "060-rejulgar"}
 VALID = re.compile(r"^[A-Za-z0-9._-]+$")
+PENDING = re.compile(r":(Not Answered Yet|On queue|on queue|Running|running):")
+
+
+def _env_int(name, dflt):
+    v = re.sub(r"[^0-9]", "", os.environ.get(name, ""))
+    return int(v) if v else dflt
+
+
+# menos prioridade p/ o time da prova com muitas pendentes — espelho do deprio_delay do judged.sh
+DEPRIO_PENDING = _env_int("SUBMIT_DEPRIO_PENDING", 5)
+DEPRIO_DELAY = _env_int("SUBMIT_DEPRIO_DELAY", 120)
 BUFFER_OLDEST = 5
 IDLE_EXIT_S = 120
 
 _conf_cache = {}
+
+
+def q_unescape(v):
+    """Desfaz o escape do `printf %q` (`\\X` -> `X`), como o conf_value do bash (lib/common.sh)."""
+    if "\\" not in v or v.startswith("$"):
+        return v
+    out, i = [], 0
+    while i < len(v):
+        c = v[i]
+        if c == "\\":
+            i += 1
+            c = v[i] if i < len(v) else ""
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def conf(contest):
@@ -53,7 +79,9 @@ def conf(contest):
                 if s.startswith("CONTEST_PRIORITY="):
                     prio = s.split("=", 1)[1].strip().strip("'\"") or prio
                 elif s.startswith("CONTEST_JUDGES="):
-                    judges = s.split("=", 1)[1].strip().strip("'\"")
+                    # o conf é gravado com %q: `j1\\ j2` — sem desfazer o escape só o último host julgava
+                    # (o judged.sh usa `source` e acertava; auditoria 03/10/2026)
+                    judges = q_unescape(s.split("=", 1)[1].strip().replace("'", "").replace('"', ""))
     except OSError:
         pass
     pj = {}
@@ -111,6 +139,48 @@ def spool_names():
     return out
 
 
+def queue_pending(contest, login, upto=""):
+    """user_queue_pending (lib/users.sh): pendentes do history menos os segurados em review/<id>.json,
+    contando só até a linha do envio `upto` (ordem do history = ordem de envio)."""
+    hf = os.path.join(CONTESTS, contest, "users", login, "history")
+    rd = os.path.join(CONTESTS, contest, "review")
+    has_rd = os.path.isdir(rd)
+    n = 0
+    try:
+        with open(hf, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                if not PENDING.search(ln):
+                    continue
+                sid = ln.rstrip("\n").rsplit(":", 1)[-1]
+                if not (has_rd and sid and os.path.isfile(os.path.join(rd, sid + ".json"))):
+                    n += 1
+                if upto and sid == upto:
+                    break
+    except OSError:
+        return 0
+    return n
+
+
+def deprio_delay(contest, sid, login, prio):
+    """deprio_delay (judged.sh): prova/super com mais de DEPRIO_PENDING esperando => nome adiantado."""
+    if prio not in ("prova", "super") or DEPRIO_PENDING <= 0 or DEPRIO_DELAY <= 0:
+        return 0
+    n = queue_pending(contest, login, sid)
+    if n > DEPRIO_PENDING:
+        print("spool-drain: deprio id=%s contest=%s login=%s pendentes=%d atraso=%ds"
+              % (sid, contest, login, n, DEPRIO_DELAY), flush=True)
+        try:
+            d = os.path.join(CONTESTS, contest, "var")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "admin-audit.log"), "a") as o:
+                o.write("%d\tjudged\tenvio-deprio\tid=%s login=%s pendentes=%d atraso=%ds\n"
+                        % (int(time.time()), sid, login, n, DEPRIO_DELAY))
+        except OSError:
+            pass
+        return DEPRIO_DELAY
+    return 0
+
+
 def process(base):
     orig = os.path.join(SPOOL, base)
     claim = os.path.join(SPOOL, os.path.dirname(base), ".pydrain-" + os.path.basename(base))
@@ -154,7 +224,8 @@ def process(base):
         band = BANDS.get(prio, "080-lista-publica")
         bdir = os.path.join(QUEUE, band)
         os.makedirs(bdir, exist_ok=True)
-        qbase = "%d_%s.json" % (int(time.time()), sid)
+        # atraso = nome adiantado na MESMA banda (q_enqueue do sched-lib.sh); enqueued_at segue real
+        qbase = "%d_%s.json" % (int(time.time()) + deprio_delay(contest, sid, login, prio), sid)
         qtmp = os.path.join(bdir, "." + qbase + ".tmp")
         with open(qtmp, "w") as o:
             o.write(json.dumps(job, separators=(",", ":")))

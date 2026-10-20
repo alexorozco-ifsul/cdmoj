@@ -1,5 +1,6 @@
 // shared/contest-config/judge-picker.js — seletor de MÁQUINAS de juiz (pool), a partir do
-// registro vivo (GET /problems/judges). Compartilhado: aba Configurações/Problemas do admin
+// registro vivo (GET /problems/judges; dentro de um contest, GET /contest/admin/judges — a mesma lista).
+// Compartilhado: aba Configurações/Problemas do admin
 // e o wizard de criação. Nenhuma marcada = sem pool (qualquer juiz online julga).
 // Host selecionado que sumiu do registro continua marcado (com aviso) — não se perde a
 // escolha por um agente reiniciando. Se a API falhar, degrada p/ input de texto livre.
@@ -14,6 +15,7 @@ export function makeJudgePicker(selectedHosts, apiCtx) {
   const box = el('div', { class: 'lang-grid' }, el('span', { class: 'muted small' }, T('carregando juízes…', 'loading judges…', 'cargando jueces…')));
   const boxes = [];           // { host, c }
   let fallback = null;        // input texto (se a API falhar)
+  let loaded = false;         // a lista chega DEPOIS da tela: salvar antes disso não pode apagar o pool
 
   const addBox = (host, note) => {
     const c = el('input', { type: 'checkbox' }); c.checked = sel.has(host);
@@ -23,7 +25,11 @@ export function makeJudgePicker(selectedHosts, apiCtx) {
 
   (async () => {
     try {
-      const js = (await apiGet('/problems/judges', apiCtx || {})).judges || [];
+      // dentro de um contest a rota é a DELE: no subdomínio do contest o roteador barra /problems/* (403
+      // contest_isolated) e o seletor caía no texto livre a cada abertura de Regras (TCP 2026, 03/10/2026)
+      const c = (apiCtx && apiCtx.contest) || '';
+      const path = c && c !== 'treino' ? '/contest/admin/judges?contest=' + encodeURIComponent(c) : '/problems/judges';
+      const js = (await apiGet(path, apiCtx || {})).judges || [];
       box.replaceChildren();
       js.forEach((j) => box.append(addBox(j.host,
         (j.cpu ? '(' + j.cpu + ')' : '') + (j.online ? '' : ' 🔴 offline'))));
@@ -31,16 +37,20 @@ export function makeJudgePicker(selectedHosts, apiCtx) {
       [...sel].filter((h) => !js.some((j) => j.host === h))
         .forEach((h) => box.append(addBox(h, T('⚠️ não registrado', '⚠️ not registered', '⚠️ no registrado'))));
       if (!boxes.length) box.append(el('span', { class: 'muted small' }, T('nenhum juiz registrado', 'no judge registered', 'ningún juez registrado')));
+      loaded = true;
     } catch {
       // degrada p/ texto livre — não bloqueia a criação/edição do contest
       fallback = el('input', { value: [...sel].join(' '), placeholder: T('hosts separados por espaço (vazio = todos)', 'hosts separated by space (empty = all)', 'hosts separados por espacio (vacío = todos)'), style: 'width:100%' });
       box.replaceChildren(el('span', { class: 'muted small' }, T('não deu para listar os juízes — informe os hosts:', "couldn't list the judges — enter the hosts:", "no se pudo listar los jueces — indica los hosts:")), fallback);
+      loaded = true;
     }
   })();
 
   return {
     el: box,
-    get: () => (fallback
+    // antes de a lista chegar devolve a seleção de PARTIDA (salvar a Regras nesse instante mandava [] e apagava o
+    // pool — auditoria do painel, 03/10/2026)
+    get: () => (!loaded ? [...sel] : fallback
       ? fallback.value.trim().split(/\s+/).filter(Boolean)
       : boxes.filter((b) => b.c.checked).map((b) => b.host)),
   };

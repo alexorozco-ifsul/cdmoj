@@ -19,7 +19,7 @@ sentido: **o juiz empurra**. Este documento é a fonte única da integração.
 |---|---|
 | **evento** (`/internal/events/{e}`): problemas, roster `{login, escola, nome}`, `score_freeze_time_seconds`, `penalty_seconds`, `time_seconds`, `photo_url_format`/`sound_url_format` com `{team_login}` (os templates de mídia, compartilhados por todos os placares), runs | o **contest**. Nome = id do contest (editável); com **rodadas**, o padrão é `<contest>-<rodada ativa>` — a promoção zera os `history` e a API não limpa o histórico do stream, então rodada nova é EVENTO novo (publicar num evento novo zera o `sent`: as runs da rodada anterior não vão p/ ele como `X`). Problemas = letras do `PROBS`. Roster = times do placar da visão `all` (conta de papel nunca está lá); `escola` = sigla. Freeze = `FREEZE_TIME − início` (sem freeze = duração). Penalidade = `PENALTY_MINUTES × 60`. |
 | **contest** (`/internal/contests/{e}/{c}`): um PLACAR. `codes` = regex de login (OR), `ouro/prata/bronze` (última colocação de cada medalha), `style` — só isso: o contest é ESTRITO (campo desconhecido = 400 `invalid_json`) | proposta: **Geral** + um por **visão de coorte** (`ch_views`) + um por **nó de `regions.json` com subregiões** (um "país"). Editável. |
-| **site** (`/internal/sites/{e}/{c}/{s}`): uma SEDE, com regex e **link secreto de revelação** | as **folhas** de `regions.json` (no Geral, todas as que não são recorte `view`; no país, as dele). Os times de cada sede/placar são os que **estão** no nó pela regra única de sedes (`lib/regions.sh`: sede gravada ou regex mais funda; pai = soma dos filhos) — até 28/09/2026 era a regex do nó (diferenciando maiúsculas) OU a sede gravada, e a folha de recorte repetia a sede no Geral. **Sem `regions.json`** (prova de sede única): o Geral leva UMA sede "Geral" com os mesmos times — o link de revelação é POR SEDE e sem sede nenhuma não há link (XIV Maratona UnB, 25/09/2026: "0 links de revelação" depois de liberar). Configuração já salva sem sede não muda sozinha: a tela avisa e aponta o "+ sede" |
+| **site** (`/internal/sites/{e}/{c}/{s}`): uma SEDE, com regex e **link secreto de revelação** | as **folhas** de `regions.json` (no Geral, todas as que não são recorte `view`; no país, as dele). Os times de cada sede/placar são os que **estão** no nó pela regra única de sedes (`lib/regions.sh`: sede gravada ou regex mais funda; pai = soma dos filhos) — até 28/09/2026 era a regex do nó (diferenciando maiúsculas) OU a sede gravada, e a folha de recorte repetia a sede no Geral. O Geral (e o "Geral com convidados") leva SEMPRE, antes das folhas, a sede **"Geral"** (`source.kind:"whole"`, todos os times do placar; "Geral (todos)" se uma folha já se chama Geral) — o link de revelação é POR SEDE: sem ela não há link nenhum numa prova de sede única (XIV Maratona UnB, 25/09/2026) e não há **resultado geral** numa prova com sedes (TCP 2026, 03/10/2026: o organizador tinha de lembrar do "+ sede" e esqueceu). O link dela é só da organização central (admin/`.animeitor`): **nunca** vai a `.cstaff`/`.staff`, nem com `region:Geral`. Configuração já salva sem ela não muda sozinha: a tela mostra "+ sede Geral (todos os times)" no placar e a Central avisa (`telao_sites`) |
 | **run** `{id:int, team_login, prob, time_seconds, answer}` — reenviar o `id` CORRIGE | `id` = inteiro ESTÁVEL por submissão (`var/animeitor-ids.tsv`); `time_seconds` = `sub_epoch − início`; `answer`: `Y` aceito · `N` penaliza · `X` não conta (CE e o que estiver fora do `PENALTY_VERDICTS`, Judge Error, `(Ignored)`) · `?` pendente |
 | `time_seconds` do evento | `agora − início`: **negativo** antes (contagem regressiva), com **teto** na duração. **Prorrogação por sede** (`time-overrides.json`): o evento tem um relógio só, então p/ o telão a prova acaba quando acaba p/ a ÚLTIMA sede — o teto é o `contest_end_all` (o mesmo portão da cerimônia e do descongelar) e o relógio segue andando até lá. O freeze não muda de lugar. Vale SÓ p/ o Animeitor: placar, aceite de submissão e relógio das outras sedes não mudam; prorrogação criada no meio da prova vale em até 5 s |
 
@@ -88,6 +88,27 @@ registro `$RUNDIR/animeitor/events.json` (`{url: {evento: contest}}`, sob flock)
   credencial do MOJ, no evento de outra pessoa — o `regional-2026` de exemplo do Emilio). Com chave própria pode,
   como antes (a credencial é do operador);
 - o `reset` libera o nome.
+
+### Prefixo `moj-` (04/10/2026)
+
+Regra do Emilio p/ a chave compartilhada: **evento que o MOJ cria com a chave do MOJ começa com `moj-`**. Com a
+chave PRÓPRIA do contest o nome é livre. Quem aplica é o `an_cfg` — um lugar só, herdado por publicar, links,
+conferência, alimentador, `GET` (o `event` é o nome EFETIVO; o `event_set` gravado continua sendo o digitado):
+
+- chave do MOJ (sem chave própria, URL = a padrão) e nome sem o prefixo ⇒ `moj-<nome>` — o padrão (`moj-<contest>`,
+  `moj-<contest>-<rodada>`) e o digitado;
+- **evento que já existe não muda de nome** (decisão do Ribas): se o `managed` diz que este contest criou `x` ou
+  `moj-x`, o nome segue sendo esse — o contest que publicou antes da regra continua no evento dele (links de
+  revelação valendo), e trocar de chave no meio do caminho não abandona o evento lá. O `reset` apaga o evento e
+  o próximo nasce com o prefixo;
+- o `config` confere o nome que o evento TERÁ (URL + nome + chave do mesmo pedido) antes de gravar qualquer coisa:
+  passou de 64 com o prefixo = `422 event_invalid`; mudar o nome efetivo com o alimentador ligado = `409 feeding`
+  (trocar só a chave, sem mudar o nome, passa);
+- o `an_publish` barra o que escapar disso (chave do MOJ, evento novo sem o prefixo) com `409
+  event_prefix_required`, antes de qualquer request.
+
+`config {event}` com o MESMO nome que já vale = sem mudança (04/10/2026): a mesa manda de volta o nome RESOLVIDO a cada
+"gravar", e gravá-lo congelava o padrão `<contest>-<rodada>` no `event_set` — a rodada nova deixava de criar evento novo.
 
 ## Publicar (`an_publish`)
 
@@ -219,6 +240,29 @@ chega ao `.cstaff`/`.staff` assim (decisões do Ribas, 21/09/2026):
 - **Fail-closed**: conta sem sede definida recebe `scoped:false` e ZERO links (nas telas de leitura "sem filtro =
   vê tudo"; aqui seria a revelação do evento inteiro). Antes da liberação: `released:false`, sem nem consultar
   o servidor do telão. Cada leitura atendida vai ao audit (`animeitor-reveal-read`).
+- **O MESMO interruptor tranca a revelação EMBUTIDA da sede** (`/contest/score/reveal.html` do `.cstaff`, TCP
+  2026, 03/10/2026 — a sede abriu a cerimônia do MOJ antes de o Reveleitor ser liberado): com o telão em uso
+  (evento publicado = `var/animeitor-managed.json` com `event`), o placar full com `scope=mine` e o botão
+  **Revelação** esperam `var/animeitor-reveal.released` além do `contest_over_for_all` — `site_reveal_open`
+  (`lib/contest-gate.sh`, por builtins). "Em uso" é o evento PUBLICADO, não o módulo nem a URL: o interruptor só
+  liga com evento publicado, então módulo ligado sem Animeitor não tranca a sede p/ sempre. Sem a liberação o
+  `/contest/score` serve o congelado (`X-MOJ-Frozen: 1`) e a página diz que a revelação ainda não foi liberada.
+- **A sede de todos os times (`whole`, a AUTOMÁTICA) nunca vai ao staff** (decisão do Ribas, 03/10/2026): é o
+  resultado do evento inteiro, da cerimônia principal — o `an_reveal_links` a pula mesmo p/ quem tem
+  `region:Geral`. Uma sede MANUAL com `.*` segue a regra de sempre (casa pelo nome). Consequência: numa prova de
+  sede única (sem árvore) nenhum `.cstaff`/`.staff` recebe link; se um chefe de sede deve conduzir a revelação,
+  crie uma sede manual para ele (a prévia mostra quem a recebe).
+- **Prévia da organização, sem liberar** (03/10/2026): admin/`.animeitor` veem todos os links liberado ou não
+  (no `/reveal` e no `?links=1` da mesa), e o `?links=1` traz `links.sites:[{contest, site, whole, recipients}]`
+  = **quem receberá** cada link quando liberar (`an_link_recipients`: a mesma regra do `an_reveal_links` sobre
+  o `staff-filters.json`). A mesa mostra a tabela placar × sede × "recebe quando liberar" × abrir/copiar. Toda
+  leitura dos links pela organização também vai ao audit (`animeitor-links-read`).
+- **Central** (`preflight.sh`, módulo `telao`, sem rede): `telao_sites` confere a configuração × o que o MOJ
+  publicou (`var/animeitor-managed.json`) — placar geral sem a sede de todos os times, publicado antes dela
+  ("publique de novo"), placar/sede com regex vazia; ok mostra quantos placares e sedes estão no reveleitor. O
+  item `telao` passa a avisar a conferência `no_sites` (antes ficava verde). O botão leva à mesa do telão.
+- Regex VAZIA (`codes:[]`, o "+ sede" deixado em branco) é recusada no `save` (422 `codes_empty`): a sede ia ao
+  telão sem time nenhum e o link revelava um placar vazio.
 - Na tela: botão **Reveleitor** na barra do `.cstaff`/`.staff` (só depois da liberação) → mesa do telão, com o
   cartão **🎬 Reveleitor da sua sede** no topo (abrir / copiar).
 
@@ -238,19 +282,22 @@ chega ao `.cstaff`/`.staff` assim (decisões do Ribas, 21/09/2026):
 
 - `server/test/animeitor-mock.py` — mock **estrito**, escrito do OpenAPI e conferido no serviço real
   (401 sem Basic, 409, 404 sem pai, `PUT` zera o omitido, `PATCH` vazio/campo desconhecido = 400,
-  `invalid_regex`, `unknown_team` com o texto real, problema desconhecido = 400 no lote, `keep_runs`).
+  `invalid_regex`, `unknown_team` com o texto real, problema desconhecido = 400 no lote, `keep_runs`;
+  `AN_MOCK_PREFIX` = o usuário do MOJ só cria evento com o prefixo, `AN_MOCK_USER2` = a chave própria de alguém).
 - `server/test/smoke-animeitor-api.sh` (96, com a prorrogação por sede): gates, token write-only, proposta (regex × lista),
   publicação idempotente SEM `PUT` e com os salts preservados, evento alheio intocado, delta de runs
   com id estável, relógio negativo/teto, alimentador (`--once`: relógio, só-o-que-mudou, time tardio,
   serviço fora do ar, instância única, desliga em 24 h), rodada nova = evento novo, links, reveleitor nas sedes (antes/depois da liberação, region:, escopo por regex, sem sede, sede renomeada, recolher, botão na barra), reset. `smoke-animeitor.sh` prende
   a paridade do pacote BOCA e o mapa de ids. `admin-inplace.gjs.sh`: o estado ao vivo atualiza EM
   LUGAR sem reconstruir a tabela em edição.
-- `server/test/smoke-animeitor-verify.sh` (37): chave do MOJ (padrão invisível, própria vence, apagar volta, nunca
+- `server/test/smoke-animeitor-verify.sh` (56): chave do MOJ (padrão invisível, própria vence, apagar volta, nunca
   vai a outra URL), registro de posse (`event_taken` sem request, `adopt_forbidden`, própria pode, reset libera),
+  prefixo `moj-` (padrão e digitado ganham, própria livre, trocar de chave não renomeia, evento anterior à regra
+  segue, reset ⇒ prefixo, 422 acima de 64, `feeding` pelo nome efetivo sem meia troca, `event_prefix_required`),
   conferência (antes do início, ok, perdida/diferente/a mais/removida reparadas e 2ª conferência ok, mesmo regex =
   1 consulta, final × pendente, `final_at` estável, reveleitor da sede, alimentador destacado, nada secreto em disco).
   `smoke-animeitor-key-verify.gjs.sh`: a mesa (chave do MOJ × própria × URL fora do padrão, estado da conferência,
-  "conferir agora", conferência antes de liberar) e o selo da sede. `smoke-preflight.sh`: o item `telao`.
+  aviso do prefixo, "conferir agora", conferência antes de liberar) e o selo da sede. `smoke-preflight.sh`: o item `telao`.
 - Servidor real: só num evento de teste próprio, apagado no fim. **Nunca** tocar evento alheio.
 
 ## O que o Emilio respondeu (21/09/2026) — e o que ainda está aberto

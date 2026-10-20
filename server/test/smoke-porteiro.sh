@@ -36,7 +36,9 @@ printf 'icpc\n' > "$S/var/placar.txt"
 # ── porteiro no ar ────────────────────────────────────────────────────────────
 SOCK="$T/p.sock"
 # orçamentos PINADOS (o deploy pode alargá-los por env; o teste fixa o contrato base)
-SCORE_SERVE_FLOOR_S=8 BASIC_CACHE_TTL=20 NAV_CACHE_TTL=20 ROUNDS_CACHE_TTL=30 \
+# TEAM_HOST_LOCK=1 (o padrão de produção): o cliente abaixo manda CONTEST_HOST = o contest da query (o pedido chegou
+# pelo subdomínio certo); CH= simula o site principal/IP e CH=<outro> outro subdomínio
+SCORE_SERVE_FLOOR_S=8 BASIC_CACHE_TTL=20 NAV_CACHE_TTL=20 ROUNDS_CACHE_TTL=30 TEAM_HOST_LOCK=1 \
 python3 porteiro/moj-porteiro.py -s "$SOCK" -c 2 -b 8 2> "$T/p.err" &
 PPID_P=$!
 for i in $(seq 40); do [[ -S "$SOCK" ]] && break; sleep 0.1; done
@@ -45,7 +47,7 @@ for i in $(seq 40); do [[ -S "$SOCK" ]] && break; sleep 0.1; done
 # cliente FCGI: fala uma requisição e ecoa a resposta crua (vazio = DECLINE)
 req(){ # req PATH QS [AUTH] [METHOD] [ACCEPT_ENC]
   python3 - "$SOCK" "$1" "$2" "${3:-}" "${4:-GET}" "${5:-}" <<'PY'
-import socket, struct, sys
+import socket, struct, sys, os
 sock, path, qs, auth, method, ae = sys.argv[1:7]
 def nv(n, v):
     n, v = n.encode(), v.encode()
@@ -55,6 +57,11 @@ def rec(t, c): return struct.pack(">BBHHBB", 1, t, 1, len(c), 0, 0) + c
 params = nv("PATH_INFO", path) + nv("QUERY_STRING", qs) + nv("REQUEST_METHOD", method)
 if auth: params += nv("HTTP_AUTHORIZATION", auth)
 if ae:   params += nv("HTTP_ACCEPT_ENCODING", ae)
+if os.environ.get("RADDR"): params += nv("REMOTE_ADDR", os.environ["RADDR"])
+import urllib.parse
+ch = os.environ.get("CH")
+if ch is None: ch = urllib.parse.parse_qs(qs).get("contest", [""])[0]
+if ch: params += nv("CONTEST_HOST", ch)
 s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sock)
 s.sendall(rec(1, struct.pack(">HB5x", 1, 0)) + rec(4, params) + rec(4, b"") + rec(5, b""))
 out = b""
@@ -87,6 +94,15 @@ r="$(req /contest/score contest=fx)"
 [[ "$r" == *linha-frozen* && "$r" == *'X-MOJ-Frozen: 1'* ]] && ok "anônimo: congelado + header 1" || bad "score anon: ${r:0:120}"
 r="$(req /contest/score contest=fx "Bearer tk-adm")"
 [[ "$r" == *linha-full* && "$r" == *'X-MOJ-Frozen: 0'* ]] && ok "admin: full + header 0" || bad "score adm: ${r:0:120}"
+# SCORE_FULL_USERS com DOIS logins, gravado como o settings grava (%q ⇒ `livre1\ livre2`): os dois recebem o full
+# — com o escape cru o .split() dava ['livre1\\', 'livre2'] e só o último valia (auditoria do painel, 03/10/2026)
+for u in livre1 livre2; do mkdir -p "$C/users/$u"; printf '{"login":"%s"}' "$u" > "$C/users/$u/account.json"
+  printf 'CONTEST=fx\nLOGIN=%s\n' "$u" > "$SESSIONDIR/tk-$u"; done
+printf 'SCORE_FULL_USERS=%q\n' "livre1 livre2" >> "$C/conf"
+r="$(req /contest/score contest=fx "Bearer tk-livre1")"
+[[ "$r" == *linha-full* && "$r" == *'X-MOJ-Frozen: 0'* ]] && ok "SCORE_FULL_USERS: o 1º de dois logins recebe o full" || bad "score livre1: ${r:0:120}"
+r="$(req /contest/score contest=fx "Bearer tk-livre2")"
+[[ "$r" == *linha-full* ]] && ok "SCORE_FULL_USERS: o 2º também" || bad "score livre2: ${r:0:120}"
 r="$(req /contest/score contest=fx "" GET gzip)"
 [[ "$r" == *'Content-Encoding: gzip'* ]] && ok "gz servido com Accept-Encoding" || bad "score gz: ${r:0:120}"
 
@@ -98,6 +114,32 @@ d "POST"                     "$(req /contest/score contest=fx "" POST)"
 d "traversal"                "$(req /contest/score "contest=../../etc")"
 d "scope=mine"               "$(req /contest/score "contest=fx&scope=mine" "Bearer tk-adm")"
 d "cache frio (basic sem cache)" "$(req /contest/basic contest=fx "Bearer tk-eq1")"
+# trava de sede: IP preso ⇒ o bash decide (403 site_locked / papel isento) — auditoria 03/10/2026
+mkdir -p "$RUNDIR/site-lock"; printf 'outro\t9999999999\n' > "$RUNDIR/site-lock/9.8.7.6"
+d "IP preso pela trava de sede" "$(RADDR=9.8.7.6 req /contest/rounds contest=fx "Bearer tk-eq1")"
+touch "$C/var/rounds-cache.pub.json" "$C/var/rounds-cache.priv.json"   # o conf mudou acima (SCORE_FULL_USERS)
+r="$(RADDR=9.8.7.7 req /contest/rounds contest=fx "Bearer tk-eq1")"
+[[ "$r" == *'"r":"pub"'* ]] && ok "IP livre segue servido" || bad "ip livre: ${r:0:80}"
+# TIME SÓ PELO SUBDOMÍNIO DO CONTEST (lib/team-host.sh): fora dele o bash responde 403 host_required ⇒ declina
+d "time pelo site principal/IP (sem CONTEST_HOST)" "$(CH= req /contest/rounds contest=fx "Bearer tk-eq1")"
+r="$(CH= req /contest/rounds contest=fx "Bearer tk-adm")"
+[[ "$r" == *'"r":"priv"'* ]] && ok "papel pelo site principal segue servido" || bad "papel sem host: ${r:0:80}"
+printf '0\n' > "$RUNDIR/team-host-lock"
+r="$(CH= req /contest/rounds contest=fx "Bearer tk-eq1")"
+[[ "$r" == *'"r":"pub"'* ]] && ok "override 0 em run/team-host-lock: time servido" || bad "override 0: ${r:0:80}"
+rm -f "$RUNDIR/team-host-lock"
+mkdir -p "$CONTESTSDIR/a.b/var" "$CONTESTSDIR/a.b/users/eq9"; printf '{"login":"eq9"}' > "$CONTESTSDIR/a.b/users/eq9/account.json"
+printf 'CONTEST_NAME=Ponto\nCONTEST_START=1\nCONTEST_END=99999999999\n' > "$CONTESTSDIR/a.b/conf"
+printf '{"success":true,"r":"pub"}' > "$CONTESTSDIR/a.b/var/rounds-cache.pub.json"; printf '{"success":true,"r":"priv"}' > "$CONTESTSDIR/a.b/var/rounds-cache.priv.json"
+printf 'CONTEST=a.b\nLOGIN=eq9\n' > "$SESSIONDIR/tk-eq9"
+r="$(CH= req /contest/rounds contest=a.b "Bearer tk-eq9")"
+[[ "$r" == *'"r":"pub"'* ]] && ok "id que não vira subdomínio (a.b) fica isento" || bad "id com ponto: ${r:0:80}"
+# papel de conta SÓ da fonte (USERS_FROM): o _shared_role_ok é do bash ⇒ declina
+mkdir -p "$CONTESTSDIR/fonte/users/sx.judge" "$CONTESTSDIR/sh/var"; printf '{"login":"sx.judge"}' > "$CONTESTSDIR/fonte/users/sx.judge/account.json"
+printf 'CONTEST_NAME=Sh\nCONTEST_START=1\nCONTEST_END=99999999999\nUSERS_FROM=fonte\n' > "$CONTESTSDIR/sh/conf"
+printf '{"success":true,"r":"pub"}' > "$CONTESTSDIR/sh/var/rounds-cache.pub.json"; printf '{"success":true,"r":"priv"}' > "$CONTESTSDIR/sh/var/rounds-cache.priv.json"
+printf 'CONTEST=sh\nLOGIN=sx.judge\n' > "$SESSIONDIR/tk-sxj"
+d "papel de conta só da fonte" "$(req /contest/rounds contest=sh "Bearer tk-sxj")"
 rm "$C/var/rounds-cache.pub.json"
 d "cache ausente"            "$(req /contest/rounds contest=fx "Bearer tk-eq1")"
 touch "$C/conf"
@@ -139,6 +181,24 @@ printf 'eq1\n' > "$C/print-requests/.scope-cache/s1.staff"
 touch "$C/print-requests/staff-filters.json" -d "-1 hour"   # cache mais novo que filters
 r="$(req /contest/staff/queue contest=fx "Bearer tk-stf")"
 [[ "$r" == *'"id":"t1"'* && "$r" != *'"id":"t3"'* ]] && ok "escopo recorta (vê eq1, não vê outro)" || bad "escopo: ${r:0:200}"
+echo "== staff/queue: o memo POR WORKER relê só o que mudou — TODA consulta vê a mudança (2 workers: 4 consultas)"
+P="$C/print-requests"
+st_of(){ printf '%s' "$1" | sed -n '/^{/,$p' | jq -r --arg i "$2" '[.requests[] | select(.id == $i) | .status] | first // "AUSENTE"' 2>/dev/null; }
+quatro(){ local id="$1" want="$2" i r got bad4=0; for i in 1 2 3 4; do r="$(req /contest/staff/queue contest=fx "Bearer tk-adm")"
+  got="$(st_of "$r" "$id")"; [[ "$got" == "$want" ]] || { bad4=1; echo "    consulta $i: $id=$got (queria $want)"; }; done; (( bad4 == 0 )); }
+quatro t1 pending && ok "memo quente: t1 pending nas 4" || bad "memo quente"
+jq -c '.status = "printed"' "$P/t1.json" > "$P/t1.json.tmp" && mv "$P/t1.json.tmp" "$P/t1.json"
+quatro t1 printed && ok "tmp+mv (inode novo): as 4 consultas veem printed" || bad "memo tmp+mv"
+sed -i 's/"printed"/"Printed"/' "$P/t1.json"        # NO LUGAR e do MESMO tamanho: só mtime/ctime mudam
+quatro t1 Printed && ok "gravação no lugar, mesmo tamanho: as 4 veem a mudança" || bad "memo no lugar"
+printf '{"id":"t4","seq":9,"login":"eq1","status":"pending"}' > "$P/t4.json"
+quatro t4 pending && ok "tarefa nova aparece nas 4" || bad "memo nova"
+rm -f "$P/t4.json"
+quatro t4 AUSENTE && ok "tarefa apagada some das 4" || bad "memo apagada"
+cp "$P/t2.json" "$T/t2.bak"; printf 'lixo{' > "$P/t2.json"
+d "tarefa corrompida declina mesmo com o memo quente" "$(req /contest/staff/queue contest=fx "Bearer tk-adm")"
+mv "$T/t2.bak" "$P/t2.json"
+quatro t2 delivered && ok "consertada, volta a servir" || bad "memo pós-conserto"
 touch "$C/var/.score-dirty"
 d "reconcile devido (dirty > stamp fora do piso)" "$(touch -d '-30 seconds' "$C/print-requests/.balloon-stamp"; req /contest/staff/queue contest=fx "Bearer tk-adm")"
 rm -f "$C/var/.score-dirty" "$C/print-requests/staff-filters.json"; touch "$C/print-requests/.balloon-stamp"
@@ -151,6 +211,43 @@ d "summary sem ids"           "$(req /submission/summary contest=fx "Bearer tk-e
 printf 'SHOWLOG=1\n' >> "$C/conf"
 d "SHOWLOG=1 ⇒ resumo real é do bash" "$(req /submission/summary "contest=fx&ids=0123456789abcdef0123456789abcdef" "Bearer tk-eq1")"
 sed -i '/^SHOWLOG=1$/d' "$C/conf"
+
+echo "== módulo desligado desliga a regra (03/10/2026): coortes e prorrogação por sede, igual ao bash"
+M="$CONTESTSDIR/mf"; mkdir -p "$M/var" "$M/users/eq1" "$M/users/conv1"
+printf '{"login":"eq1"}' > "$M/users/eq1/account.json"; printf '{"login":"conv1"}' > "$M/users/conv1/account.json"
+printf 'CONTEST=mf\nLOGIN=eq1\n' > "$SESSIONDIR/tk-mfe"; printf 'CONTEST=mf\nLOGIN=conv1\n' > "$SESSIONDIR/tk-mfc"
+printf '{"cohorts":[{"id":"oficial","default":true,"public":true},{"id":"conv","regex":"^conv","public":false}]}' > "$M/cohorts.json"
+printf '[{"regex":"^eq","end":4100000000}]' > "$M/time-overrides.json"
+mfconf(){ printf 'CONTEST_NAME=Mf\nCONTEST_START=1\nCONTEST_END=4000000000\nFREEZE_TIME=2\nCONTEST_MODULES=%s\n' "$1" > "$M/conf"
+  sleep 1
+  for f in placar placar-full placar-view-conv placar-view-conv-full; do printf 'icpc\nlinha-%s\n' "$f" > "$M/var/$f.txt"; done
+  printf '{"v":"prorrogado"}' > "$M/var/basic-cache.u.4100000000.oficial.public.json"
+  printf '{"v":"conf"}' > "$M/var/basic-cache.u.4000000000._.public.json"; }
+mfconf coortes,sedes
+r="$(req /contest/score contest=mf "Bearer tk-mfc")"
+[[ "$r" == *linha-placar-view-conv* ]] && ok "coortes ligado: o convidado recebe o placar da coorte" || bad "mf conv on: ${r:0:120}"
+r="$(req /contest/basic contest=mf "Bearer tk-mfe")"
+[[ "$r" == *prorrogado* ]] && ok "sedes ligado: a variante do basic leva o fim prorrogado" || bad "mf basic on: ${r:0:120}"
+mfconf ""
+r="$(req /contest/score contest=mf "Bearer tk-mfc")"
+[[ "$r" == *linha-placar* && "$r" != *conv* ]] && ok "coortes desligado: o convidado recebe o placar PÚBLICO" || bad "mf conv off: ${r:0:120}"
+r="$(req /contest/basic contest=mf "Bearer tk-mfe")"
+[[ "$r" == *'"v":"conf"'* ]] && ok "sedes desligado: a variante do basic volta ao fim do conf" || bad "mf basic off: ${r:0:120}"
+
+echo "== placar ANÔNIMO (SCORE_ANON=1): fora da organização só o agregado, igual ao bash (03/10/2026)"
+A="$CONTESTSDIR/an"; mkdir -p "$A/var" "$A/users/eqa" "$A/users/ma.mon"
+printf '{"login":"eqa"}' > "$A/users/eqa/account.json"; printf '{"login":"ma.mon"}' > "$A/users/ma.mon/account.json"
+printf 'CONTEST=an\nLOGIN=eqa\n' > "$SESSIONDIR/tk-ana"; printf 'CONTEST=an\nLOGIN=ma.mon\n' > "$SESSIONDIR/tk-anm"
+printf 'CONTEST_NAME=An\nCONTEST_START=1\nCONTEST_END=99999999999\nSCORE_ANON=1\nSCORE_FULL_USERS=eqa\n' > "$A/conf"
+sleep 1; printf 'icpc\nlinha-com-eqa\n' > "$A/var/placar.txt"; printf '{"anon":true,"n":7}' > "$A/var/placar-anon.json"
+r="$(req /contest/score contest=an "Bearer tk-ana")"
+[[ "$r" == *'X-MOJ-Anon: 1'* && "$r" == *'"n":7'* && "$r" != *linha-com-eqa* ]] && ok "anônimo: o time (mesmo na SCORE_FULL_USERS) recebe só o agregado" || bad "anon time: ${r:0:120}"
+r="$(req /contest/score contest=an)"
+[[ "$r" == *'X-MOJ-Anon: 1'* && "$r" != *linha-com-eqa* ]] && ok "anônimo: sem sessão, agregado" || bad "anon anon: ${r:0:120}"
+r="$(req /contest/score contest=an "Bearer tk-anm")"
+[[ "$r" == *linha-com-eqa* && "$r" != *X-MOJ-Anon* ]] && ok "anônimo: .mon (organização) recebe o TXT" || bad "anon mon: ${r:0:120}"
+touch -d "+2 seconds" "$A/var/placar.txt"
+d "anônimo: agregado mais velho que o placar declina (o bash refaz)" "$(req /contest/score contest=an "Bearer tk-ana")"
 
 echo "== placar velho fora do piso declina"
 touch -d "-30 seconds" "$C/var/placar.txt" "$C/var/placar.txt.gz" "$C/var/placar-full.txt"

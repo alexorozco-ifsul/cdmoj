@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/
 FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; trap 'rm -rf "$FIX" "$SESS"' EXIT
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 C="$FIX/uc"; mkdir -p "$C/var"
-printf 'CONTEST_ID=uc\nCONTEST_TYPE=icpc\nLOGIN_UA_SUBSTRING=MOJBOX\nUSER_STORE=v2\n' > "$C/conf"
+printf 'CONTEST_ID=uc\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nLOGIN_UA_SUBSTRING=MOJBOX\nUSER_STORE=v2\n' > "$C/conf"
 fx_user "$C" uc.admin p "Admin"
 fx_user "$C" alice a "Alice"
 fx_user "$C" bob b "Bob"
@@ -92,7 +92,7 @@ ck "nova1 com senha gerada"    '[[ -n "$(jq -r ".created[]|select(.login==\"nova
 ck "nova2 mantém senha dada"   '[[ "$(jq -r ".created[]|select(.login==\"nova2\").password" <<<"$BODY")" == "pw2" ]]'
 ck "passwd tem nova1 e nova2"  '[[ -f "$C/users/nova1/account.json" && "$(jq -r .password "$C/users/nova2/account.json")" == "pw2" && "$(jq -r .email "$C/users/nova2/account.json")" == "n2@x.com" ]]'
 ck "skip: alice existe"        '[[ "$(jq -r ".skipped[]|select(.login==\"alice\").reason" <<<"$BODY")" == exists ]]'
-ck "skip: login inválido"      '[[ "$(jq -r ".skipped[]|select(.login==\"inv@lido!\").reason" <<<"$BODY")" == invalid ]]'
+ck "skip: login inválido"      '[[ "$(jq -r ".skipped[]|select(.login==\"inv@lido!\").reason" <<<"$BODY")" == login_invalid ]]'
 ck "skip: duplicado no lote"   '[[ "$(jq -r "[.skipped[]|select(.reason==\"duplicate\")]|length" <<<"$BODY")" == 1 ]]'
 call /contest/admin/users-bulk POST '{"on_existing":"update","users":[{"login":"alice","password":"alnova","fullname":"Alice Nova"},{"login":"jx.judge","password":"hack"}]}' adm 'contest=uc'
 ck "update troca a alice"      '[[ "$(jq -r .counts.updated <<<"$BODY")" == 1 ]] && [[ "$(jq -r .password "$C/users/alice/account.json")" == "alnova" && "$(jq -r .fullname "$C/users/alice/account.json")" == "Alice Nova" ]]'

@@ -2,11 +2,13 @@
 # Padrão: header `Authorization: Bearer <token>` (HTTP_AUTHORIZATION).
 # Compat: aceita header não-padrão `Bearer: <token>` (HTTP_BEARER) do sistema antigo.
 
-_bearer_token() {
-  local a="${HTTP_AUTHORIZATION:-}"
-  if [[ "$a" == "Bearer "* ]]; then printf '%s' "${a#Bearer }"; return; fi
-  printf '%s' "${HTTP_BEARER:-}"
+# _bearer_token_to <var> — o token da requisição numa variável, SEM processo (nameref). O `$(_bearer_token)` custava um
+# fork por requisição autenticada; o _bearer_token segue como atalho p/ quem precisa do valor no stdout.
+_bearer_token_to() {
+  local -n _btv="$1"; local a="${HTTP_AUTHORIZATION:-}"
+  if [[ "$a" == "Bearer "* ]]; then _btv="${a#Bearer }"; else _btv="${HTTP_BEARER:-}"; fi
 }
+_bearer_token() { local t=""; _bearer_token_to t; printf '%s' "$t"; }
 
 SESSION_TOKEN=""; SESSION_CONTEST=""; SESSION_LOGIN=""; SESSION_NAME=""; SESSION_AT=""
 # SESSION_ACTOR = a PESSOA por trás da sessão quando ela não é o próprio login: num contest
@@ -62,7 +64,7 @@ _shared_role_ok() {
 
 # load_session -> 0 se autenticado (popula SESSION_*), 1 caso contrário.
 load_session() {
-  SESSION_TOKEN="$(_bearer_token)"
+  _bearer_token_to SESSION_TOKEN
   [[ -n "$SESSION_TOKEN" ]] || return 1
   valid_id "$SESSION_TOKEN" || return 1
   local f="$SESSIONDIR/$SESSION_TOKEN"
@@ -116,7 +118,22 @@ is_animeitor(){ [[ "$SESSION_LOGIN" == *.animeitor ]]; }
 # legitimamente). Mantém a lista em UM lugar (awk não enxerga a função — ao replicar em regex,
 # lembre do .cjudge/.cstaff/.animeitor: \.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$).
 is_reserved_role_login(){ case "$1" in *.admin|*.judge|*.cjudge|*.staff|*.cstaff|*.mon|*.animeitor) return 0;; *) return 1;; esac; }
+# require_admin = SÓ o sufixo `.admin`, de QUALQUER contest: serve às rotas /contest/admin/*, em que o contest
+# alvo é o da própria sessão. Rota de PLATAFORMA (juízes, fila geral, /ops) NUNCA usa isto — todo criador de
+# contest ganha um `<criador>.admin` LOCAL, e até 16/10/2026 esse admin local configurava/desligava juízes,
+# matava slot e cancelava calibração pelas /ops. Plataforma = require_treino_admin / require_treino_superadmin.
 require_admin(){ require_auth; is_admin || fail 403 "Admin only" "admin_required"; }
+# require_treino_admin — sessão DO TREINO de um `.admin` (o portão do painel /treino/admin e da leitura das /ops).
+require_treino_admin(){
+  require_auth_contest treino
+  is_admin || fail 403 "Apenas administradores do treino" "admin_required"
+}
+# require_treino_superadmin — o mesmo + SUPERADMINS do conf do treino. Só vale com sessão do TREINO: numa sessão de
+# contest o `.admin` é conta LOCAL e o nome não prova nada (o superadmin_login olha só o nome).
+require_treino_superadmin(){
+  require_treino_admin
+  is_superadmin || fail 403 "Só o super-admin da plataforma pode fazer isto" "superadmin_required"
+}
 require_judge(){ require_auth; is_judge || fail 403 "Judge only" "judge_required"; }
 require_chief(){ require_auth; is_chief || fail 403 "Chief judge only" "chief_required"; }
 
@@ -156,11 +173,14 @@ user_fullname() {  # <contest> <login> — account.json próprio primeiro, depoi
   [[ "$src" != "$1" ]] && jq -r '.fullname // empty' "$CONTESTSDIR/$src/users/$2/account.json" 2>/dev/null
 }
 
-# IP do cliente: 1º hop de X-Forwarded-For, senão X-Real-IP/REMOTE_ADDR.
+# IP do cliente = o da CONEXÃO (REMOTE_ADDR, que o nginx preenche com $remote_addr). NUNCA o X-Forwarded-For
+# nem o X-Real-IP: não há proxy na frente do nginx de produção (decisão do Ribas, 03/10/2026), então esses
+# cabeçalhos vêm do PRÓPRIO cliente — com eles a trava de sede se furava com um `X-Forwarded-For` forjado, e a
+# chave de máquina `ip:`, o access.log e as anomalias gravavam o IP que o cliente quisesse (auditoria do painel).
+# Se um dia houver proxy, a confiança é no nginx (`set_real_ip_from` + `real_ip_header`), nunca aqui.
 # Sanitizado (só chars de IP) — o arquivo de sessão é "sourced", então nada de metachars.
 client_ip(){
-  local ip="${HTTP_X_FORWARDED_FOR:-}"; ip="${ip%%,*}"
-  [[ -z "$ip" ]] && ip="${HTTP_X_REAL_IP:-${REMOTE_ADDR:-}}"
+  local ip="${REMOTE_ADDR:-}"
   printf '%s' "$ip" | tr -cd '0-9a-fA-F.:'
 }
 

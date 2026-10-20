@@ -2,11 +2,13 @@
 // do catálogo (modules.js) com nome, descrição, painéis que ele abre, pill "dados presentes"
 // (detectado pelo servidor: GET /contest/admin/modules) e a caixa de ligar. Presets só pré-marcam.
 // Salvar → POST {on, off} → evento `moj:modules` (o shell re-renderiza a nav na hora).
-// Desligar NUNCA apaga dado: o aviso diz isso e a API preserva os arquivos.
+// Desligar NUNCA apaga dado, mas DESLIGA A REGRA (03/10/2026): gate/trava (Máquinas), prorrogação (Sedes), "só inscrito"
+// (Inscrições), corte do placar (Coortes) e tarefas de balão (Balões) param de valer. Os avisos dizem as duas coisas.
 import { el } from '/shared/ui.js';
 import { apiGet, apiPost } from '/shared/api.js';
 import { T } from '/shared/i18n.js';
 import { MODULES, PRESETS, esqErrorText } from './modules.js';
+import { requiresText } from '/shared/module-requires.js';
 
 const enc = encodeURIComponent;
 
@@ -31,6 +33,11 @@ export function makeModulesTab(CONTEST) {
   function card(m) {
     const r = rowOf(m.id);
     const cb = el('input', { type: 'checkbox' }); cb.checked = !!r.on; checks[m.id] = cb;
+    // PRÉ-REQUISITO (lib/modules.sh mod_requires_ok, 07/10/2026): desligado e sem o que precisa = não liga (a API recusa
+    // com 422); a tela diz por quê. Ligado sem ele: o checkbox fica (desligar sempre pode) e o aviso aparece.
+    const req = r.requires || { ok: true };
+    const reqMsg = req.ok ? '' : requiresText(req);
+    if (!req.ok && !r.on) cb.disabled = true;
     const dataPill = r.detected
       ? el('span', { class: 'pill ok', title: r.reason || '' }, T('dados presentes', 'data present', 'datos presentes'))
       : el('span', { class: 'pill', title: T('nenhum arquivo deste módulo no contest', 'no file of this module in the contest', 'ningún archivo de este módulo en la competencia') }, T('sem dados', 'no data', 'sin datos'));
@@ -40,8 +47,9 @@ export function makeModulesTab(CONTEST) {
           el('h4', { style: 'margin:0' }, m.icon + ' ' + m.name, ' ', dataPill),
           el('div', { class: 'small muted', style: 'margin:.2rem 0' }, m.desc),
           el('div', { class: 'small' }, T('Abre: ', 'Opens: ', 'Abre: '), m.panels.join(' · ')),
-          r.detected && !r.on ? el('div', { class: 'small', style: 'color:#7a5c00;margin-top:.2rem' },
-            T('Desligado com dados existentes: os painéis não aparecem, mas nada foi apagado.', 'Off with existing data: the panels are hidden, but nothing was deleted.', 'Apagado con datos existentes: los paneles se ocultan, pero nada fue eliminado.')) : null)));
+          !req.ok ? el('div', { class: 'small', style: 'color:var(--err,#b3261e);margin-top:.2rem' }, (r.on ? '⚠ ' : '🔒 ') + reqMsg) : null,
+          req.ok && r.detected && !r.on ? el('div', { class: 'small', style: 'color:#7a5c00;margin-top:.2rem' },
+            T('Desligado com dados existentes: a regra NÃO vale (e os painéis não aparecem); nada foi apagado — religar volta a valer.', 'Off with existing data: the rule does NOT apply (and the panels are hidden); nothing was deleted — turning it back on makes it apply again.', 'Apagado con datos existentes: la regla NO se aplica (y los paneles se ocultan); nada fue eliminado — volver a activarlo hace que se aplique de nuevo.')) : null)));
   }
   function renderCards() { grid.innerHTML = ''; MODULES().forEach((m) => grid.append(card(m))); }
 
@@ -49,8 +57,10 @@ export function makeModulesTab(CONTEST) {
     return el('div', { class: 'row', style: 'gap:.4rem;flex-wrap:wrap;align-items:center;margin:.4rem 0' },
       el('span', { class: 'small muted' }, T('Pré-marcar:', 'Pre-select:', 'Preseleccionar:')),
       ...PRESETS().map((p) => el('button', { class: 'btn ghost small', title: p.hint, onclick: () => {
-        Object.entries(checks).forEach(([id, cb]) => { cb.checked = p.mods.includes(id); });
-        msg.className = 'small muted'; msg.textContent = T(`preset «${p.name}» marcado — confira e salve`, `preset "${p.name}" selected — check and save`, `preset "${p.name}" seleccionado — revisa y guarda`);
+        const skipped = [];
+        Object.entries(checks).forEach(([id, cb]) => { if (cb.disabled) { if (p.mods.includes(id)) skipped.push(id); return; } cb.checked = p.mods.includes(id); });
+        msg.className = 'small muted'; msg.textContent = T(`preset «${p.name}» marcado — confira e salve`, `preset "${p.name}" selected — check and save`, `preset "${p.name}" seleccionado — revisa y guarda`)
+          + (skipped.length ? T(` (fora: ${skipped.join(', ')} — falta o pré-requisito)`, ` (left out: ${skipped.join(', ')} — prerequisite missing)`, ` (fuera: ${skipped.join(', ')} — falta el requisito)`) : '');
       } }, p.name)));
   }
 
@@ -61,9 +71,9 @@ export function makeModulesTab(CONTEST) {
     const offWithData = off.filter((id) => rowOf(id).detected);
     if (offWithData.length) {
       const names = offWithData.map((id) => (MODULES().find((m) => m.id === id) || {}).name || id).join(', ');
-      if (!confirm(T(`Desligar ${names}? Os painéis somem da nav, mas NENHUM dado é apagado — religar restaura tudo.`,
-        `Turn off ${names}? The panels leave the nav, but NO data is deleted — turning it back on restores everything.`,
-        `¿Apagar ${names}? Los paneles salen de la nav, pero NINGÚN dato se elimina — volver a activarlo restaura todo.`))) return;
+      if (!confirm(T(`Desligar ${names}? A regra deixa de valer NA HORA (ex.: Máquinas solta o gate e a trava; Sedes, a prorrogação; Inscrições, o "só inscrito entra"; Coortes, o corte do placar; Balões, as tarefas). Os painéis somem da nav, mas NENHUM dado é apagado — religar volta a valer.`,
+        `Turn off ${names}? The rule stops applying RIGHT AWAY (e.g.: Machines drops the gate and the lock; Sites, the extension; Registration, the "only registered may enter"; Cohorts, the scoreboard split; Balloons, the tasks). The panels leave the nav, but NO data is deleted — turning it back on makes it apply again.`,
+        `¿Apagar ${names}? La regla deja de aplicarse DE INMEDIATO (ej.: Máquinas suelta el gate y el bloqueo; Sedes, la prórroga; Inscripciones, el "solo entra quien se inscribió"; Cohortes, la división del marcador; Globos, las tareas). Los paneles salen de la nav, pero NINGÚN dato se elimina — volver a activarlo hace que se aplique de nuevo.`))) return;
     }
     msg.className = 'small muted'; msg.textContent = T('Salvando…', 'Saving…', 'Guardando…');
     try {
@@ -81,9 +91,9 @@ export function makeModulesTab(CONTEST) {
       panel.innerHTML = '';
       panel.append(el('h2', {}, T('🧩 Módulos do contest', '🧩 Contest modules', '🧩 Módulos de la competencia')),
         el('p', { class: 'muted small' },
-          T('Um módulo é um grupo de recursos que este contest usa. Ligar mostra os painéis, as checagens da Central e os cartões correspondentes; desligar esconde, sem apagar nada. Uma prova de disciplina costuma não ligar nenhum; uma prova com Maratona Linux liga Máquinas; a Maratona liga todos.',
-            'A module is a group of features this contest uses. Turning it on shows the matching panels, Home checks and cards; turning it off hides them without deleting anything. A course exam usually enables none; an exam on Maratona Linux enables Machines; the Maratona enables all.',
-            'Un módulo es un grupo de funciones que esta competencia usa. Activarlo muestra los paneles, las revisiones de la Central y las tarjetas correspondientes; desactivarlo los oculta sin eliminar nada. Un examen de curso normalmente no activa ninguno; un examen con Maratona Linux activa Máquinas; la Maratona activa todos.')),
+          T('Um módulo é um grupo de recursos que este contest usa. Ligar mostra os painéis, as checagens da Central e os cartões correspondentes e faz a regra valer; desligar esconde e a regra deixa de valer, sem apagar nada. Uma prova de disciplina costuma não ligar nenhum; uma prova com Maratona Linux liga Máquinas; a Maratona liga todos.',
+            'A module is a group of features this contest uses. Turning it on shows the matching panels, Home checks and cards and makes the rule apply; turning it off hides them and the rule stops applying, without deleting anything. A course exam usually enables none; an exam on Maratona Linux enables Machines; the Maratona enables all.',
+            'Un módulo es un grupo de funciones que esta competencia usa. Activarlo muestra los paneles, las revisiones de la Central y las tarjetas correspondientes y hace que la regla se aplique; desactivarlo los oculta y la regla deja de aplicarse, sin eliminar nada. Un examen de curso normalmente no activa ninguno; un examen con Maratona Linux activa Máquinas; la Maratona activa todos.')),
         noticeBox, presetsRow(), grid,
         el('div', { class: 'row', style: 'gap:.6rem;align-items:center;margin-top:.6rem' },
           el('button', { class: 'btn', onclick: save }, T('💾 Salvar módulos', '💾 Save modules', '💾 Guardar módulos')), msg));

@@ -9,7 +9,7 @@ FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; [[ -n "${KEEP:-}" ]] && echo "FIX=$FIX 
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 C="$FIX/an"; mkdir -p "$C/var"
 NOW=$EPOCHSECONDS; CS=$((NOW-3600)); CE=$((NOW+3600))
-printf 'CONTEST_ID=an\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nUSER_STORE=v2\n' "$CS" "$CE" > "$C/conf"
+printf 'CONTEST_ID=an\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nUSER_STORE=v2\n' "$CS" "$CE" > "$C/conf"
 printf "PROBS=( x col#pa Alfa A col#pa )\n" >> "$C/conf"
 fx_user "$C" an.admin p "Admin"; fx_user "$C" cj.cjudge p "Chefe"
 for u in teamaa001 teamaa002 teamaa003 teamaa004 teamaa005; do fx_user "$C" $u x "Time $u"; done
@@ -57,6 +57,9 @@ printf '%s\tteamaa001\trevoke\tm:%s/1001\tm:%s/2002\tdeadbeef\n' "$((CS+600))" "
 # trava de sede: 1 reivindicação e 1 bloqueio no audit (formato do lib/site-lock.sh)
 printf '%s\t?\tsite-lock-claim\tip=10.0.0.1 login=teamaa001 until=%s\n' "$((CS+65))" "$((CE+3600))" >> "$C/var/admin-audit.log"
 printf '%s\t?\tsite-lock-block\tip=10.0.0.1 target=treino route=/auth/login login=-\n' "$((CS+1200))" >> "$C/var/admin-audit.log"
+# time fora do subdomínio do contest (lib/team-host.sh): 1 recusa (bad) + 1 observação (info)
+printf '%s\tteamaa001\tteam-host-block\tvia=login host=177.70.23.195 ip=10.0.0.9 route=/auth/login login=teamaa001\n' "$((CS+1300))" >> "$C/var/admin-audit.log"
+printf '%s\tteamaa001\tteam-host-observe\tvia=session host=- ip=10.0.0.9 route=/contest/basic login=teamaa001\n' "$((CS+1310))" >> "$C/var/admin-audit.log"
 jq -n '{collected_at:1, sedes:[{name:"Sede A", machines_total:2, seen:1, teams:["teamaa001","teamaa002","teamaa003"], pop:{teams:3, present:3}},
                                 {name:"Sede B", machines_total:9, seen:9, teams:["teamaa004"], pop:{teams:1, present:1}}]}' > "$C/var/nutella.cache.json"
 
@@ -90,6 +93,7 @@ ck "site_short: Sede A (1 máquina vista p/ 3 presentes)" '[[ "$(K site_short .n
 ck "switched: 001 (M1 → M2)"          '[[ "$(K switched .login)" == teamaa001 && "$(K switched ".detail.machines|length")" == 2 ]]'
 ck "evento de revogação na trilha"    '[[ "$(J ".events[]|select(.kind==\"session_event\")|.detail.event")" == revoke ]]'
 ck "trava de sede na trilha: 1 reivindicação (info) + 1 bloqueio (bad), contados" '[[ "$(J ".events[]|select(.kind==\"site_lock\" and .severity==\"bad\")|.detail.target")" == treino && "$(J ".counts.site_lock_blocks")" == 1 && "$(J ".counts.site_lock_claims")" == 1 ]]'
+ck "time fora do subdomínio na trilha: recusa (bad) + observação (info), só a recusa conta; a trava de sede não muda" '[[ "$(J "[.events[]|select(.kind==\"team_host\")]|length")" == 2 && "$(J ".events[]|select(.kind==\"team_host\" and .severity==\"bad\")|.detail.host")" == 177.70.23.195 && "$(J ".counts.team_host_blocks")" == 1 && "$(J ".counts.site_lock_blocks")" == 1 ]]'
 ck "teams: 001 com flags multi_session+switched+sub_other_machine" '[[ "$(J ".teams[]|select(.login==\"teamaa001\")|.flags|join(\",\")")" == *multi_session* && "$(J ".teams[]|select(.login==\"teamaa001\")|.flags|join(\",\")")" == *switched* && "$(J ".teams[]|select(.login==\"teamaa001\")|.flags|join(\",\")")" == *sub_other_machine* ]]'
 ck "teams: 001 tem 2 sessões e 2 máquinas; última sub NÃO da sessão" '[[ "$(J ".teams[]|select(.login==\"teamaa001\")|.sessions|length")" == 2 && "$(J ".teams[]|select(.login==\"teamaa001\")|.last_sub.same_as_session")" == false ]]'
 ck "teams: 004 só de manhã, sem troca"  '[[ "$(J ".teams[]|select(.login==\"teamaa004\")|.flags|join(\",\")")" == ua_mismatch ]]'
@@ -107,11 +111,53 @@ sleep 1; touch "$C/var/access.log"    # invalida o cache (entrada mais nova)
 call /contest/admin/anomalies GET '' adm 'contest=an'
 ck "2ª chamada (pelo índice) dá o mesmo" '[[ "$(J .counts.multi_session)" == 1 && "$(J .counts.sessions)" == 6 ]]'
 
-echo "== gate desligado ⇒ nada vale =="
+# TCP 2026 (03/10/2026): sem gate o painel ficava VAZIO com times em 2–3 máquinas. Quem identifica a máquina é o
+# UA do mlinux: as anomalias de MÁQUINA valem sem gate; só o ua_mismatch (esperado por time) precisa dele.
+echo "== gate DESLIGADO: as anomalias de máquina continuam (o UA do mlinux identifica); ua_mismatch some =="
 jq -c '.mode="off"' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"
 call /contest/admin/anomalies GET '' adm 'contest=an'
-ck "gate.active=false, sem anomalias, contagens zeradas, sessões contadas" '[[ "$(J .gate.active)" == false && "$(J ".anomalies|length")" == 0 && "$(J .counts.multi_session)" == 0 && "$(J .counts.sessions)" == 6 ]]'
+ck "gate.active=false mas machines_identified=true" '[[ "$(J .gate.active)" == false && "$(J .machines_identified)" == true ]]'
+ck "sem gate: multi-sessão, compartilhada, troca e sub de outra máquina SEGUEM" \
+   '[[ "$(J ".counts|[.multi_session,.machine_shared,.sub_other_machine,.switched]|join(\",\")")" == "1,1,1,1" ]]'
+ck "sem gate: ua_mismatch zera (não há esperado)"   '[[ "$(J .counts.ua_mismatch)" == 0 && "$(J .counts.sessions)" == 6 ]]'
+ck "sem gate: tabela de times vem (máquinas identificadas)" '[[ "$(J ".teams|length")" -gt 0 ]]'
+
+echo "== modo OBSERVAR: o esperado vale p/ ver (ua_mismatch volta), sem barrar =="
+jq -c '.mode="observe"' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"
+call /contest/admin/anomalies GET '' adm 'contest=an'
+ck "observe: active=true, enforcing=false, ua_mismatch=1" '[[ "$(J .gate.active)" == true && "$(J .gate.enforcing)" == false && "$(J .counts.ua_mismatch)" == 1 ]]'
 jq -c '.mode="enforce"' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"
+
+echo "== marcar como EXPLICADA (sai das contagens, fica na lista) =="
+call /contest/admin/anomalies GET '' adm 'contest=an'
+SWID="$(J 'first(.anomalies[]|select(.kind=="switched"))|.id')"
+ck "anomalia tem id kind|login|machine"            '[[ "$SWID" == switched\|teamaa001\|* ]]'
+call /contest/admin/anomalies POST "$(jq -cn --arg id "$SWID" '{action:"explain", id:$id}')" adm 'contest=an'
+ck "explicar sem motivo → 422 note_required"      '[[ "$OUT" == *"Status: 422"* && "$(J .error.code)" == note_required ]]'
+call /contest/admin/anomalies POST "$(jq -cn --arg id "$SWID" '{action:"explain", id:$id, note:"trocou por defeito, confirmado pela sede"}')" chief 'contest=an'
+ck "juiz-chefe explica"                            '[[ "$(J .saved)" == true ]] && grep -q "anomaly-explain" "$C/var/admin-audit.log"'
+call /contest/admin/anomalies GET '' adm 'contest=an'
+ck "explicada: sai da contagem (switched 0, explained 1)" '[[ "$(J .counts.switched)" == 0 && "$(J .counts.explained)" == 1 ]]'
+ck "…e fica na lista com quem e o motivo"          '[[ "$(J "first(.anomalies[]|select(.id==\"$SWID\"))|.explained.note")" == "trocou por defeito, confirmado pela sede" && "$(J "first(.anomalies[]|select(.id==\"$SWID\"))|.explained.by")" == cj.cjudge ]]'
+ck "flag do time não leva a explicada"             '[[ "$(J ".teams[]|select(.login==\"teamaa001\")|.flags|index(\"switched\")")" == null ]]'
+call /contest/admin/anomalies POST "$(jq -cn --arg id "$SWID" '{action:"unexplain", id:$id}')" adm 'contest=an'
+call /contest/admin/anomalies GET '' adm 'contest=an'
+ck "desfazer: volta à contagem"                    '[[ "$(J .counts.switched)" == 1 && "$(J .counts.explained)" == 0 ]]'
+# site_short não tem login nem máquina: explicar a de UMA sede não pode explicar as outras (auditoria, 03/10/2026)
+cp "$C/var/nutella.cache.json" "$C/var/nutella.cache.json.bak"
+jq '.sedes += [{name:"Sede C", machines_total:1, seen:1, teams:["teamaa001","teamaa002"], pop:{teams:2, present:2}}]' \
+  "$C/var/nutella.cache.json.bak" > "$C/var/nutella.cache.json"
+call /contest/admin/anomalies GET '' adm 'contest=an'
+NSS="$(J .counts.site_short)"; SSID="$(J 'first(.anomalies[]|select(.kind=="site_short" and .name=="Sede A"))|.id')"
+call /contest/admin/anomalies POST "$(jq -cn --arg id "$SSID" '{action:"explain", id:$id, note:"sede A conferida"}')" adm 'contest=an'
+call /contest/admin/anomalies GET '' adm 'contest=an'
+ck "site_short: explicar a Sede A deixa a Sede C contada" '[[ "$NSS" -ge 2 && "$(J .counts.site_short)" == $((NSS - 1)) && "$(J "first(.anomalies[]|select(.kind==\"site_short\" and .name==\"Sede C\"))|has(\"explained\")")" == false ]]'
+call /contest/admin/anomalies POST "$(jq -cn --arg id "$SSID" '{action:"unexplain", id:$id}')" adm 'contest=an'
+mv -f "$C/var/nutella.cache.json.bak" "$C/var/nutella.cache.json"
+call /contest/admin/anomalies POST '{"action":"explain","id":"x"}' adm 'contest=an'
+ck "id fora do formato → 422"                      '[[ "$OUT" == *"Status: 422"* && "$(J .error.code)" == id_invalid ]]'
+call /contest/admin/anomalies POST '{"action":"explain","id":"switched|a|b","note":"x"}' comp 'contest=an'
+ck "competidor não explica (403)"                  '[[ "$OUT" == *"Status: 403"* ]]'
 
 echo "== rodada inválida / ARG_MAX =="
 call /contest/admin/anomalies GET '' adm 'contest=an&round=Nao%20Existe'

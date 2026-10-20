@@ -1,4 +1,5 @@
-# GET /contest/score?contest=<id>  -> TXT
+# GET /contest/score?contest=<id>  -> TXT (ou, com SCORE_ANON=1 p/ quem não é da organização, o agregado JSON com
+# X-MOJ-Anon: 1)
 # Serve o placar pré-gerado (var/placar.txt, gerado por server/score/), cuja
 # 1ª linha é o MODO (icpc/obi/treino/...). Se ausente, emite só a linha do modo.
 contest="$(param contest)"
@@ -18,6 +19,21 @@ require_not_secret_or_auth "$contest"
 sess=0; SLOGIN=""
 load_session 2>/dev/null && [[ "$SESSION_CONTEST" == "$contest" ]] && { sess=1; SLOGIN="$SESSION_LOGIN"; }
 
+# PLACAR ANÔNIMO (SCORE_ANON=1; 03/10/2026, decisão do Ribas: CORTAR NA API). Quem não é da ORGANIZAÇÃO — o mesmo
+# conjunto da estatística: admin, chefe, juiz, .mon e .animeitor — recebe SÓ o agregado (var/placar-anon.json, gerado
+# pelo build.sh: quantos, distribuição, resolvedores por problema, quartis), nunca o TXT com logins e nomes. Antes o
+# anônimo era só a TELA: o TXT inteiro ia a todos e o navegador escondia. `SCORE_FULL_USERS` NÃO fura o anonimato
+# (ele troca congelado por completo, não anônimo por nominal); coorte e `scope=mine` colapsam no agregado público.
+ANON=0; ORG=0
+if [[ "$(conf_value "$contest" SCORE_ANON)" == 1 ]]; then
+  ANON=1; (( sess )) && { is_admin || is_judge || is_mon || is_animeitor; } && ORG=1
+fi
+_anon_serve(){ # <arquivo-json> <frozen 0|1>
+  printf 'Status: 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nX-MOJ-Anon: 1\r\nX-MOJ-Frozen: %s\r\n\r\n' "$2"
+  if [[ -s "$1" ]]; then cat "$1"; else printf '{"anon":true,"n":0,"supported":false,"problems":[],"per_problem":{},"dist":{},"q":{}}\n'; fi
+  exit 0
+}
+
 source "$_LIBDIR/contest-gate.sh"
 if [[ "$(contest_phase "$contest")" == before ]]; then
   pre_priv=0
@@ -33,6 +49,14 @@ if [[ "$(contest_phase "$contest")" == before ]]; then
      fi
     fi
     [[ -f "$pf" ]] || bash "$SCOREDIR/build.sh" "$contest" --prestart >/dev/null 2>&1
+    # o placar COMPLETO ainda não existe: monta agora, destacado, p/ a largada não esperar o 1º build
+    # com todos os times pedindo o placar no mesmo segundo (ver score_build_bg na common.sh)
+    [[ -s "$CONTESTSDIR/$contest/var/placar.txt" ]] || score_build_bg "$contest"
+    if (( ANON && ! ORG )); then   # anônimo: nem a vitrine com os nomes — só quantos
+      _paf="$CONTESTSDIR/$contest/var/placar-prestart-anon.json"
+      [[ -s "$_paf" && ! "$pf" -nt "$_paf" ]] || bash "$SCOREDIR/build.sh" "$contest" --prestart >/dev/null 2>&1
+      _anon_serve "$_paf" 0
+    fi
     # antes do início não há freeze possível — o cabeçalho vai em 0 p/ o front não ter de
     # adivinhar a ausência dele.
     if [[ -f "$pf" && -s "$pf.gz" && ! "$pf" -nt "$pf.gz" && "${HTTP_ACCEPT_ENCODING:-}" == *gzip* ]]; then
@@ -74,6 +98,7 @@ if [[ "$CH_ON" == 1 ]]; then
     [[ "$vparam" == geral && "$CH_VIEW" == all ]] && CH_VIEW=all
   fi
 fi
+(( ANON && ! ORG )) && CH_VIEW=public    # anônimo: o agregado é sempre o do placar público
 f="$(ch_view_file "$contest" "$CH_VIEW")"
 # Cache preguiçoso: (re)gera o placar se a fonte mudou (var/.score-dirty, tocado a cada
 # escrita de history; + conf) ou se ele nunca foi montado. O daemon já reconstrói a cada
@@ -100,6 +125,14 @@ fi
 # uma passada de build gera TODAS as visões, então o gatilho acima (no arquivo da visão pedida)
 # basta — mas a visão pedida pode não existir ainda num contest que acabou de ganhar coortes.
 [[ -f "$f" ]] || bash "$SCOREDIR/build.sh" "$contest" >/dev/null 2>&1
+if (( ANON && ! ORG )); then
+  _af="$CONTESTSDIR/$contest/var/placar-anon.json"
+  # o mesmo build gera o TXT e o agregado; agregado ausente/mais velho que o TXT (o anônimo acabou de ser ligado) = refaz
+  [[ -s "$_af" && ! "$f" -nt "$_af" ]] || bash "$SCOREDIR/build.sh" "$contest" >/dev/null 2>&1
+  _afz=0; _fz0="$(conf_value "$contest" FREEZE_TIME)"
+  [[ "$_fz0" =~ ^[0-9]+$ ]] && (( _fz0 > 0 && EPOCHSECONDS >= _fz0 )) && _afz=1
+  _anon_serve "$_af" "$_afz"
+fi
 
 # Privilegiados veem o placar COMPLETO (sem freeze): .admin/.judge SEMPRE + os logins na
 # allowlist do conf (SCORE_FULL_USERS, espaço-separados, configurável pelo .admin — vale
@@ -110,7 +143,9 @@ fi
 # `scope=mine` (honrado SÓ p/ .cstaff): recorta o placar servido (frozen E full) aos
 # usuários que o cstaff enxerga (staff-filters) — é a cerimônia POR SEDE. Fora da
 # allowlist, o cstaff só recebe o full quando o contest terminou PARA TODOS
-# (contest_over_for_all: fim base + a prorrogação mais tardia de time-overrides.json).
+# (contest_over_for_all: fim base + a prorrogação mais tardia de time-overrides.json) E,
+# com o telão do Animeitor em uso, depois que o .animeitor LIBERA a revelação às sedes
+# (site_reveal_open, lib/contest-gate.sh — o mesmo interruptor do Reveleitor).
 ff="$(ch_view_file "$contest" "$CH_VIEW" full)"
 if [[ "$(param view)" != public && -f "$ff" && "$sess" == 1 ]]; then
   # .animeitor SEMPRE recebe o descongelado: é a conta do TELÃO, que conduz a revelação
@@ -122,7 +157,7 @@ if [[ "$(param view)" != public && -f "$ff" && "$sess" == 1 ]]; then
   fi
   if [[ "$priv" == 0 && "$(param scope)" == mine ]] && is_cstaff; then
     source "$_LIBDIR/contest-gate.sh"
-    contest_over_for_all "$contest" && priv=1
+    site_reveal_open "$contest" && priv=1
   fi
   [[ "$priv" == 1 ]] && f="$ff"
 fi

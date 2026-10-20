@@ -28,10 +28,11 @@
         <span class="em">⚖️</span>
         <div>
           <code>alguem.judge</code>
-          <div class="d" data-en="You decide the verdicts. In contests with manual verdict, nothing reaches the competitor before two judges agree — and you are one of them. You judge blind: you do not see who submitted, and you do not see the other judge's vote before you cast yours." data-es="Decides los veredictos. En competencias con veredicto manual, nada le llega al competidor antes de que dos jueces estén de acuerdo — y tú eres uno de ellos. Evalúas a ciegas: no ves quién envió, y no ves el voto del otro juez antes de emitir el tuyo.">
+          <div class="d" data-en="You decide the verdicts. In contests with manual verdict, nothing reaches the competitor before the judges of the review agree (2 by default; the organization sets 1 to 5 in Rules) — and you are one of them. You judge blind: you do not see who submitted, and you do not see the votes of the other judges before you cast yours." data-es="Decides los veredictos. En competencias con veredicto manual, nada le llega al competidor antes de que los jueces de la revisión estén de acuerdo (2 por defecto; la organización define de 1 a 5 en Reglas) — y tú eres uno de ellos. Evalúas a ciegas: no ves quién envió, y no ves los votos de los otros jueces antes de emitir el tuyo.">
             Você decide os veredictos. Em provas com veredicto manual, nada chega ao competidor
-            antes de dois juízes concordarem — e você é um deles. Você julga às cegas: não vê quem
-            submeteu, nem o voto do outro juiz antes de dar o seu.
+            antes de os juízes da revisão concordarem (2 por padrão; a organização define de 1 a 5 nas
+            Regras) — e você é um deles. Você julga às cegas: não vê quem submeteu, nem os votos dos
+            outros juízes antes de dar o seu.
           </div>
         </div>
       </div>
@@ -103,7 +104,7 @@
 
         <h2 id="fila" data-en="3. The evaluation queue" data-es="3. La cola de evaluación">3. A fila de avaliação</h2>
         <figure class="shot">
-          <img src="/contest/ajuda/img/judge-fila.png" alt="">
+          <img loading="lazy" decoding="async" src="/contest/ajuda/img/judge-fila.webp" alt="">
           <figcaption data-en="The evaluation queue: counters at the top, then one row per submission with the computed verdict, the status, how many votes it already has and the action available to you." data-es="La cola de evaluación: contadores arriba, luego una fila por envío con el veredicto calculado, el estado, cuántos votos ya tiene y la acción disponible para ti.">
             A fila de avaliação: contadores no topo e uma linha por submissão com o veredicto
             computado, o status, quantos votos ela já tem e a ação disponível para você.
@@ -134,7 +135,7 @@
           <li data-en-html="<b>Vote</b> — choose the verdict in the list and confirm. Your vote is <b>final</b>: there is no undo." data-es-html="<b>Vota</b> — elige el veredicto en la lista y confirma. Tu voto es <b>definitivo</b>: no hay deshacer."><b>Vote</b> — escolha o veredicto na lista e confirme. O seu voto é <b>definitivo</b>: não há desfazer.</li>
         </ol>
         <figure class="shot">
-          <img src="/contest/ajuda/img/judge-avaliando.png" alt="">
+          <img loading="lazy" decoding="async" src="/contest/ajuda/img/judge-avaliando.webp" alt="">
           <figcaption data-en="This is the screen right after &quot;Take to evaluate&quot;: the queue gives way to the evaluation panel — computed verdict for reference, links to the log and the source, the verdict list, and the clock of your reservation." data-es="Esta es la pantalla justo después de &quot;Tomar para evaluar&quot;: la cola da paso al panel de evaluación — veredicto calculado como referencia, enlaces al log y a la fuente, la lista de veredictos y el reloj de tu reserva.">
             É esta a tela logo depois de <i>Claim to evaluate</i>: a fila dá lugar ao painel de
             avaliação — veredicto computado como referência, links para o log e o código, a lista
@@ -184,7 +185,7 @@
 
         <h2 id="todas" data-en="6. All submissions" data-es="6. Todos los envíos">6. Todas Submissões</h2>
         <figure class="shot">
-          <img src="/contest/ajuda/img/judge-todas.png" alt="">
+          <img loading="lazy" decoding="async" src="/contest/ajuda/img/judge-todas.webp" alt="">
           <figcaption data-en="Every submission of the contest, as a judge sees it: time, problem, verdict, and the links to the file and the log. There is no user column — and that is deliberate." data-es="Todos los envíos de la competencia, como los ve un juez: hora, problema, veredicto y los enlaces al archivo y al log. No hay columna de usuario — y eso es deliberado.">
             Todas as submissões da prova, como um juiz as vê: horário, problema, veredicto e os
             links para o arquivo e o log. Não há coluna de usuário — e isso é deliberado.
@@ -237,7 +238,7 @@
           sozinha a cada 30 segundos.
         </p>
         <figure class="shot">
-          <img src="/contest/ajuda/img/judge-clarification.png" alt="">
+          <img loading="lazy" decoding="async" src="/contest/ajuda/img/judge-clarification.webp" alt="">
           <figcaption data-en="The clarifications screen: the official-notice form on top, then the open questions. An open question shows &quot;Claim to answer&quot;. After you claim it, the answer box and the &quot;public&quot; checkbox appear." data-es="La pantalla de aclaraciones: el formulario de aviso oficial arriba, luego las preguntas abiertas. Una pregunta abierta muestra &quot;Reservar para responder&quot;. Después de reservarla, aparecen el cuadro de respuesta y la casilla &quot;pública&quot;.">
             A tela de clarifications: o formulário de aviso oficial em cima e as perguntas abertas
             embaixo. Uma pergunta aberta mostra <i>Claim to answer</i>. Depois da reserva aparecem
@@ -286,10 +287,10 @@
         </p>
 
         <h2 id="aquecimento" data-en="10. The warm-up is your rehearsal" data-es="10. El calentamiento es tu ensayo">10. O aquecimento é o seu ensaio</h2>
-        <p data-en-html="Before the contest there is a <b>warm-up</b> — a short round, at the same address, with the teams already seated. The queue you see there is a real queue: submissions arrive, you claim them, you vote, and the rule of two judges agreeing works exactly the same. Use it to check the things that are painful to discover later: that the <b>verdict options</b> are the ones this contest wants, that <b>log</b> and <b>code</b> open on your machine, and that you and your fellow judge read the same submission the same way." data-es-html="Antes de la competencia hay un <b>calentamiento</b> — una ronda corta, en la misma dirección, con los equipos ya sentados. La cola que ves ahí es una cola real: llegan envíos, los reclamas, votas, y la regla de que dos jueces coincidan funciona exactamente igual. Úsala para revisar las cosas que duele descubrir después: que las <b>opciones de veredicto</b> son las que esta competencia quiere, que el <b>log</b> y el <b>código</b> abren en tu máquina, y que tú y tu compañero juez leen el mismo envío de la misma forma.">
+        <p data-en-html="Before the contest there is a <b>warm-up</b> — a short round, at the same address, with the teams already seated. The queue you see there is a real queue: submissions arrive, you claim them, you vote, and the rule of the judges agreeing works exactly the same. Use it to check the things that are painful to discover later: that the <b>verdict options</b> are the ones this contest wants, that <b>log</b> and <b>code</b> open on your machine, and that you and your fellow judge read the same submission the same way." data-es-html="Antes de la competencia hay un <b>calentamiento</b> — una ronda corta, en la misma dirección, con los equipos ya sentados. La cola que ves ahí es una cola real: llegan envíos, los reclamas, votas, y la regla de que los jueces coincidan funciona exactamente igual. Úsala para revisar las cosas que duele descubrir después: que las <b>opciones de veredicto</b> son las que esta competencia quiere, que el <b>log</b> y el <b>código</b> abren en tu máquina, y que tú y tu compañero juez leen el mismo envío de la misma forma.">
           Antes da prova acontece o <b>aquecimento</b> — uma rodada curta, no mesmo endereço, com
           os times já sentados. A fila que aparece ali é fila de verdade: submissões chegam, você
-          pega, vota, e a regra dos dois juízes concordando vale igual. Use-o para conferir o que
+          pega, vota, e a regra dos juízes concordando vale igual. Use-o para conferir o que
           dói descobrir depois: se as <b>opções de veredicto</b> são as que esta prova quer, se o
           <b>log</b> e o <b>code</b> abrem na sua máquina, e se você e o outro juiz leem a mesma
           submissão do mesmo jeito.

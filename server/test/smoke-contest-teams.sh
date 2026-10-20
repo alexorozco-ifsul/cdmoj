@@ -14,7 +14,7 @@ NOW="$EPOCHSECONDS"
 PNG1='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 C="$FIX/tm"; mkdir -p "$C/var"
-{ printf 'CONTEST_ID=tm\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nUSER_STORE=v2\n' $((NOW-100)) $((NOW+7200))
+{ printf 'CONTEST_ID=tm\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nUSER_STORE=v2\n' $((NOW-100)) $((NOW+7200))
   printf "PROBS=(f0 col/pa 'Prob A' A 'col#pa')\n"; } > "$C/conf"
 fx_user "$C" tm.admin p "Admin"
 fx_user "$C" sede1.staff s "Balcao 1"
@@ -55,13 +55,18 @@ ck "privilegiados fora"        '[[ "$(jq -r '"'"'.teams | has("tm.admin")'"'"' <
 ck "sem foto ainda"            '[[ "$(jq -r .teams.alfa.has_photo <<<"$BODY")" == "false" ]]'
 
 echo "== admin/teams set (fullname = nome único) + materialize =="
+rm -f "$C/var/.score-dirty"
 call /contest/admin/teams POST t-adm 'contest=tm' '{"set":{"beta":{"fullname":"Beta Renomeado","univ_short":"USP"},"naoexiste":{"region":"X"}}}'
+ck "set marca o placar sujo (.score-dirty; o placar não seguia com o nome velho)" '[[ -f "$C/var/.score-dirty" ]]'
+rm -f "$C/var/.score-dirty"
 ck "set salva 1, pula 1"       '[[ "$(jq -r .saved <<<"$BODY")" == 1 && "$(jq -r .skipped[0] <<<"$BODY")" == "naoexiste" ]]'
 ck "fullname trocado + univ setada" '[[ "$(jq -r .fullname "$C/users/beta/account.json")" == "Beta Renomeado" && "$(jq -r .team.univ_short "$C/users/beta/account.json")" == "USP" ]]'
 call /contest/admin/teams POST t-adm 'contest=tm' '{"set":{"beta":{"fullname":"","univ_short":"USP2"}}}'
 ck "fullname vazio é ignorado (nome não fica em branco)" '[[ "$(jq -r .fullname "$C/users/beta/account.json")" == "Beta Renomeado" && "$(jq -r .team.univ_short "$C/users/beta/account.json")" == "USP2" ]]'
+rm -f "$C/var/.score-dirty"
 call /contest/admin/teams POST t-adm 'contest=tm' '{"action":"materialize"}'
 ck "materialize preenche gama (teams-meta ^mat-)" '[[ "$(jq -r .filled[\"mat-gama\"].flag <<<"$BODY")" == "AR" && "$(jq -r .team.univ_short "$C/users/mat-gama/account.json")" == "UBA" ]]'
+ck "materialize que preenche marca o placar sujo" '[[ -f "$C/var/.score-dirty" ]]'
 ck "materialize não sobrescreve alfa" '[[ "$(jq -r .team.flag "$C/users/alfa/account.json")" == "BR-DF" ]]'
 
 echo "== team-assets (foto/brasão) + rotas de leitura =="
@@ -102,7 +107,7 @@ sed -i '/^SECRET=1$/d' "$C/conf"
 
 echo "== users_from -> 409 =="
 C2="$FIX/tm2"; mkdir -p "$C2/var" "$C2/users"
-printf 'CONTEST_ID=tm2\nCONTEST_TYPE=icpc\nUSERS_FROM=tm\nUSER_STORE=v2\n' > "$C2/conf"
+printf 'CONTEST_ID=tm2\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nUSERS_FROM=tm\nUSER_STORE=v2\n' > "$C2/conf"
 mkdir -p "$C2/users/tm2.admin"; cp "$C/users/tm.admin/account.json" "$C2/users/tm2.admin/account.json" 2>/dev/null || true
 fx_user "$C2" tm2.admin p "Admin2"
 printf 'CONTEST=%q\nLOGIN=%q\nUSERFULLNAME=%q\nLOGINAT=%q\n' tm2 tm2.admin Admin2 "$NOW" > "$SESS/t-adm2"
@@ -118,6 +123,7 @@ echo "== /contest/teams é UMA varredura, e o que ela devolve não mudou =="
 TB="$FIX/tb"; mkdir -p "$TB/var"
 TB0=$(( $(date +%s) - 3600 ))
 printf 'CONTEST_ID=tb
+CONTEST_MODULES=coortes
 CONTEST_TYPE=icpc
 CONTEST_NAME=B
 CONTEST_START=%s

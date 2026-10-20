@@ -14,6 +14,11 @@
 #   remove   {slug}            — só rodada planejada (arquivada é auditoria, nunca some)
 #   publish  {slug, on:bool}   — arquivo da rodada visível p/ os times
 #   promote  {to?, force?}     — arquiva a ativa e coloca a próxima no ar
+#   undo     {confirm:<id do contest>} — DESFAZ a última promoção (lib/contest-rounds.sh rd_undo): só se a
+#              rodada no ar não teve atividade nenhuma; a desfeita volta a planejada (TCP 2026, 03/10/2026)
+# GET também traz undo:{from, to, possible, blockers} — o painel só oferece o botão quando há o que desfazer
+# e titles:{<id>:{pt,en,es}} — os títulos por idioma dos problemas das rodadas que têm escolha (nome sem
+# `name` entra no ar com o título no idioma da prova; os chips PT·EN·ES do painel escolhem outro)
 require_auth_contest "$(param contest)"
 contest="$(param contest)"
 [[ -n "$contest" ]] || fail 400 "Missing contest" "contest_missing"
@@ -27,9 +32,16 @@ if [[ "$REQUEST_METHOD" == GET ]]; then
   j="$(rd_sync_active "$contest")"; [[ -n "$j" ]] || fail 500 "Falha ao ler as rodadas" "rounds_read"
   rd_save "$contest" "$j"                       # persiste o espelho conf→json
   bl="$(rd_promote_blockers "$contest")"; [[ -n "$bl" ]] || bl='[]'
-  body="$(jq -cn --argjson j "$j" --argjson bl "$bl" --arg next "$(rd_next "$contest")" '
+  un="$(rd_undo_info "$contest")"; [[ -n "$un" ]] || un='null'
+  # títulos por idioma dos problemas das rodadas (só os com escolha): as opções de nome do painel. Por ARQUIVO.
+  tmf="$(mktemp)" || fail 500 "tmp" "tmp"
+  cc_bank_titles "$(jq -c '[(.rounds // [])[].problems[]? | (.bank_id // .problem_id // "") | strings | gsub("/"; "#")] | unique' <<<"$j")" > "$tmf"
+  jq -e 'type == "object"' "$tmf" >/dev/null 2>&1 || echo '{}' > "$tmf"
+  body="$(jq -cn --argjson j "$j" --argjson bl "$bl" --arg next "$(rd_next "$contest")" --argjson un "$un" --slurpfile tm "$tmf" '
     {success:true, active:($j.active // ""), rounds:($j.rounds // []), next:$next,
-     promote_ready:{ok:(($bl|length) == 0), blockers:$bl}}')"
+     promote_ready:{ok:(($bl|length) == 0), blockers:$bl}, undo:$un,
+     titles:(($tm[0] // {}) | with_entries(select(([.value[]] | unique | length) > 1)))}')"
+  rm -f "$tmf"
   [[ -n "$body" ]] || fail 500 "Falha ao montar a resposta" "build_fail"
   emit_json 200 OK; printf '%s\n' "$body"; exit 0
 fi
@@ -109,7 +121,7 @@ case "$action" in
       if [[ "$cl" == null ]]; then cur="$(jq -c 'del(.colors)' <<<"$cur")"
       elif [[ "$(jq 'if type=="object" then length else -1 end' <<<"$cl")" -gt 0 ]]; then
         jq -e 'to_entries | all(.[]; (.key == "enableSonic" and (.value|type) == "boolean")
-                 or ((.key|test("^[A-Z][A-Z0-9]{0,2}$")) and ((.value|type) == "string") and (.value|test("^[0-9A-Fa-f]{6}$"))))'           <<<"$cl" >/dev/null 2>&1 || fail 422 "colors: chaves = letras (RRGGBB) e enableSonic (bool)" "colors_invalid"
+                 or ((.key|test("^[A-Z0-9]{1,3}$")) and ((.value|type) == "string") and (.value|test("^[0-9A-Fa-f]{6}$"))))'           <<<"$cl" >/dev/null 2>&1 || fail 422 "colors: chaves = letras (RRGGBB) e enableSonic (bool)" "colors_invalid"
         cur="$(jq -c --argjson cl "$cl" '.colors=$cl' <<<"$cur")"
       elif [[ "$cl" != '{}' ]]; then fail 422 "colors deve ser objeto ou null" "colors_invalid"; fi
     fi
@@ -123,10 +135,22 @@ case "$action" in
     rd_save "$contest" "$j"
     # a rodada ATIVA vive no conf: aplica na hora, a partir do OBJETO editado (passar pelo slug
     # releria via rd_sync_active, que re-espelha a janela do conf por cima — edição no-op)
-    [[ "$(jq -r '.active' <<<"$j")" == "$slug" ]] && { rd_apply_obj "$contest" "$cur" || fail 500 "Falha ao gravar no conf" "conf_write"; }
+    if [[ "$(jq -r '.active' <<<"$j")" == "$slug" ]]; then
+      _w0="$(conf_value "$contest" CONTEST_START):$(conf_value "$contest" CONTEST_END):$(conf_value "$contest" FREEZE_TIME)"
+      rd_apply_obj "$contest" "$cur" || fail 500 "Falha ao gravar no conf" "conf_write"
+      # janela/freeze mudou na rodada no ar: recompute FORÇADO, como Regras e config (o gatilho passivo perde p/ um
+      # build em voo — a corrida do incidente de 29/08; auditoria do painel, 03/10/2026)
+      [[ "$(conf_value "$contest" CONTEST_START):$(conf_value "$contest" CONTEST_END):$(conf_value "$contest" FREEZE_TIME)" != "$_w0" ]] \
+        && score_kick_rebuild "$contest"
+      # cores novas na rodada no ar: a tarefa de balão ainda não impressa passa à cor nova (como em Evento › Balões)
+      if jq -e '.colors | type == "object"' <<<"$cur" >/dev/null 2>&1; then
+        source "$_LIBDIR/print.sh"; read -r rcol rold <<<"$(pr_recolor_pending_balloons "$contest")"
+      fi
+    fi
     mod_enable "$contest" rodadas
     audit_log_to "$contest" round-set "slug=$slug"
-    ok_json '{saved:true, round:$r}' --argjson r "$cur"
+    ok_json '{saved:true, round:$r, balloons_recolored:$rc, balloons_printed_old:$ro}' --argjson r "$cur" \
+      --argjson rc "${rcol:-0}" --argjson ro "${rold:-0}"
     ;;
   problems)
     rd_valid_slug "$slug" || fail 422 "slug inválido" "slug_invalid"
@@ -178,6 +202,9 @@ case "$action" in
     # COORTES: o relatório da rodada traz o placar ABERTO com todos os times. Publicá-lo para os
     # times antes de liberar os resultados entregaria os convidados de graça.
     if [[ "$on" == true ]]; then
+      # PLACAR ANÔNIMO: o site da rodada traz o placar com nomes e notas (03/10/2026)
+      [[ "$(conf_value "$contest" SCORE_ANON)" == 1 ]] \
+        && fail 409 "o placar deste contest é anônimo e o relatório da rodada mostra os nomes e o desempenho de cada time" "score_anon"
       source "$_DIR/lib/cohorts.sh"
       if ch_enabled "$contest" && ! ch_released "$contest"; then
         fail 409 "o contest tem coorte de convidados e os resultados não foram liberados — o relatório da rodada mostra todos os times" "cohorts_not_released"
@@ -206,7 +233,7 @@ case "$action" in
     if [[ "$force" == true ]]; then blk="$hard"; else blk="$bl"; fi
     if [[ "$(jq 'length' <<<"$blk")" != 0 ]]; then
       emit_json 409 Conflict
-      jq -cn --argjson bl "$blk" '{success:false, error:{message:"A rodada não está pronta para ser promovida", code:"not_ready"}, blockers:$bl}'
+      jq -cn --argjson bl "$blk" '{success:false, error:{message:"A rodada não está pronta para ser promovida", code:"not_ready", blockers:$bl}, blockers:$bl}'
       exit 0
     fi
     mkdir -p "$CONTESTSDIR/$contest/var" 2>/dev/null
@@ -230,10 +257,33 @@ case "$action" in
       (( ${_sw_s:-0} + ${_sw_d:-0} > 0 )) \
         && audit_log_to "$contest" round-promote-sweep "sessoes=${_sw_s:-0} dirs=${_sw_d:-0}"
     fi
+    # AQUECER os juízes p/ os problemas da rodada que entrou (TCP 2026: a oficial começou com juízes frios) —
+    # DESTACADO (a promoção nunca espera nem falha por ele; o mesmo núcleo do botão, bin/warm-judges.sh).
+    # Redirecionamento FORA do bash -c: sob fcgiwrap o filho não pode herdar o socket (lição do setsid).
+    # só em contest de PROVA (prova/super): lista de aula fica com o botão (decisão do Ribas, 03/10/2026)
+    _wprio="$(conf_value "$contest" CONTEST_PRIORITY)"; _wprio="${_wprio//\\/}"
+    if [[ "${AUTO_WARM_JUDGES:-1}" != 0 && ( "$_wprio" == prova || "$_wprio" == super ) ]]; then
+      ( setsid bash "$_DIR/../../bin/warm-judges.sh" "$contest" "promote:${SESSION_LOGIN:-}" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+    fi
     audit_log_to "$contest" "round-promote$([[ "$force" == true ]] && printf -- -forced)" \
       "from=$(jq -r '.from' <<<"$res") to=$(jq -r '.to' <<<"$res") users=$(jq -r '.archived.users' <<<"$res") subs=$(jq -r '.archived.submissions' <<<"$res")"
     ok_json '$r + {promoted:true} + (if $sw == "" then {} else {swept:{sessions:($sw|split("\t")[0]|tonumber? // 0), dirs:($sw|split("\t")[1]|tonumber? // 0)}} end)' \
       --argjson r "$res" --arg sw "$swept"
+    ;;
+  undo)
+    [[ "$(jq -r '.confirm // ""' "$bodyf")" == "$contest" ]] || fail 422 "Confirme digitando o id do contest" "confirm_required"
+    mkdir -p "$CONTESTSDIR/$contest/var" 2>/dev/null
+    exec 9>"$CONTESTSDIR/$contest/var/.round.lock"
+    flock -n 9 || fail 429 "Promoção em andamento" "busy"
+    un="$(rd_undo_info "$contest")"
+    if [[ "$(jq -r '.possible' <<<"$un")" != true ]]; then
+      emit_json 409 Conflict
+      jq -cn --argjson u "$un" '{success:false, error:{message:"Não dá para desfazer a última promoção", code:"undo_blocked", blockers:$u.blockers}, blockers:$u.blockers}'
+      exit 0
+    fi
+    res="$(rd_undo "$contest" "${SESSION_LOGIN:-}")" || fail 500 "Falha ao desfazer (confira rounds/.desfeitas/)" "undo_failed"
+    audit_log_to "$contest" round-undo "restored=$(jq -r .restored <<<"$res") pending=$(jq -r .pending <<<"$res") users=$(jq -r .users <<<"$res") subs=$(jq -r .submissions <<<"$res") kept=$(jq -r .kept <<<"$res")"
+    ok_json '$r + {undone:true}' --argjson r "$res"
     ;;
   *) fail 400 "action inválida" "action_invalid";;
 esac

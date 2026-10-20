@@ -5,8 +5,9 @@
 //   api = { meta(q)  -> {tags:[{tag,count}], collections:[{collection,count}]}   (q = {include_private?:'1'}),
 //           draw(p)  -> {problems[],candidates,drawn,seed,private_included}
 //                       (p = {tags,collections,count,match,difficulty,seed?,include_private?:'1'}),
-//           search(q)-> {problems:[{id,title,private?,has_statement?}]} }
-//   onAdd(item) é chamado ao adicionar ({id,title,private?,has_statement?}).
+//           search(q)-> {problems:[{id,title,titles?,private?,has_statement?}]} }
+//   onAdd(item) é chamado ao adicionar ({id,title,titles?,private?,has_statement?}); `titles` {pt,en,es}
+//   só vem quando o problema tem mais de um título (enunciado traduzido).
 // opts: searchLabel/searchPlaceholder, noQueryFilter(items) (wizard: só os privados do usuário),
 //       emptyHint (texto quando a busca sem query não tem nada),
 //       privateLabel (rótulo do opt-in "incluir privados": de quem são depende da rota).
@@ -16,6 +17,7 @@
 import { el } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { diffLabel } from '/shared/difficulty.js';
+import { titlesLine } from '/shared/problem-titles.js';
 
 // buckets do sorteio = a dificuldade CANÔNICA (taxa POR USUÁRIO, shared/difficulty.js, #30):
 // fáceis = muito fácil + fácil (≥70% de quem tenta resolve) · médios = 50–70% · difíceis <50%
@@ -65,18 +67,22 @@ export function makeBankPanel({ api, onAdd, searchLabel, searchPlaceholder, noQu
   const privQ = () => (incPriv.checked ? { include_private: '1' } : {});
   let lastSeed = null;
 
+  // com enunciado traduzido, os títulos por idioma (`titles`) aparecem como opções: o nome no contest segue o
+  // idioma da prova (o servidor decide) e pode ser trocado depois pelos chips PT·EN·ES (shared/problem-titles.js)
   const itemRow = (p, extraInfo) => el('div', { class: 'bank-item' },
-    el('div', {}, el('div', { class: 't' }, (p.title || p.id), accBadge(p)), el('div', { class: 'i' }, extraInfo || p.id)),
+    el('div', {}, el('div', { class: 't' }, (p.title || p.id), accBadge(p)), titlesLine(p.titles), el('div', { class: 'i' }, extraInfo || p.id)),
     el('button', { class: 'btn ghost', onclick: () => onAdd(p) }, T('+ adicionar', '+ add', '+ agregar')));
   const accBadge = (it) => it.private
     ? el('span', { class: 'tag', style: 'margin-left:.4rem;background:#3d3417;color:#ffe08a' }, '🔒 ' + (it.access === 'shared' ? T('compartilhado', 'shared', 'compartido') : T('privado', 'private', 'privado')))
     : '';
   // "+ adicionar todos" põe o enunciado na frente dos participantes sem revisão: com privado no
   // meio, confirma antes
-  const addAll = (probs) => {
+  // UM POR VEZ (await): no painel do admin cada onAdd é um POST que regrava a lista do contest — todos de uma vez
+  // se atropelavam e só 1 problema ficava (auditoria 03/10/2026; o servidor também trava agora)
+  const addAll = async (probs) => {
     const np = probs.filter((x) => x.private).length;
     if (np && !confirm(np + T(' problema(s) PRIVADO(S) no sorteio. Adicionar todos mesmo assim?', ' PRIVATE problem(s) in the draw. Add all anyway?', ' problema(s) PRIVADO(S) en el sorteo. ¿Agregar todos de todos modos?'))) return;
-    probs.forEach((p2) => onAdd(p2));
+    for (const p2 of probs) await onAdd(p2);
   };
 
   async function doDraw(reshuffle) {

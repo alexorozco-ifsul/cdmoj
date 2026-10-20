@@ -10,12 +10,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 export CONTESTSDIR="$TMP/contests"
 C="$CONTESTSDIR/prova"; mkdir -p "$C/users"
-: > "$C/conf"
+printf 'CONTEST_MODULES=maquinas\n' > "$C/conf"   # o gate é do módulo `maquinas` (desligado, não vale)
 printf '[{"name":"Campinas","regex":"^teambrspcp"},{"name":"Sorocaba","regex":"^teambrspso"}]' > "$C/regions.json"
 mk(){ mkdir -p "$C/users/$1"; jq -cn --arg l "$1" --arg r "${2:-}" \
   '{login:$l,fullname:$l} + (if $r=="" then {} else {team:{region:$r}} end)' > "$C/users/$1/account.json"; }
 mk teambrspso001; mk teambrspcp007 Campinas; mk conv55; mk cclconv9; mk time-reserva-07
-mk juiz1.admin; mk nada99
+mk juiz1.admin; mk nada99; mk convcp1 Campinas
 cat > "$C/ua-gate.json" <<'EOF'
 { "mode":"enforce",
   "from_login":{"regex":"^team([a-z]{6})[0-9]{3}$","expect":"\\1"},
@@ -23,6 +23,8 @@ cat > "$C/ua-gate.json" <<'EOF'
   "by_regex":[{"regex":"^conv","expect":"convidado"}],
   "exempt":["^ccl","time-reserva-07"] }
 EOF
+# o legado (LOGIN_UA_SUBSTRING) é lido pelo conf_value do common.sh (fiel ao source: sem o escape do %q)
+_CD="$CONTESTSDIR"; source "$ROOT/api/v1/lib/common.sh" >/dev/null 2>&1; CONTESTSDIR="$_CD"
 source "$ROOT/api/v1/lib/ua-gate.sh"
 
 pass=0; fail=0
@@ -33,6 +35,7 @@ echo "== ordem de resolução =="
 ck "captura no login (teambrspso001 -> brspso)" '[[ "$(exp teambrspso001)" == brspso ]]'
 ck "override por SEDE vence a captura"          '[[ "$(exp teambrspcp007)" == brspcp-especial ]]'
 ck "by_regex (conv55 -> convidado)"             '[[ "$(exp conv55)" == convidado ]]'
+ck "by_regex vence a SEDE (convcp1, de Campinas -> convidado)" '[[ "$(exp convcp1)" == convidado ]]'
 ck "isento por regex (^ccl) fica sem gate"      '[[ -z "$(exp cclconv9)" ]]'
 ck "isento literal (time-reserva-07)"           '[[ -z "$(exp time-reserva-07)" ]]'
 ck "conta de papel nunca é barrada"             '[[ -z "$(exp juiz1.admin)" ]]'
@@ -45,8 +48,8 @@ ck "UA vazio é barrado"            '! ug_ok prova teambrspso001 ""'
 ck "isento entra com qualquer UA"  'ug_ok prova cclconv9 "curl/8"'
 
 echo "== resolvedor em LOTE == (painel de Máquinas; tem de concordar com o individual)"
-MAP="$(ug_expected_map prova '["teambrspso001","teambrspcp007","conv55","cclconv9","juiz1.admin","nada99"]')"
-for l in teambrspso001 teambrspcp007 conv55 cclconv9 juiz1.admin nada99; do
+MAP="$(ug_expected_map prova '["teambrspso001","teambrspcp007","conv55","cclconv9","juiz1.admin","nada99","convcp1"]')"
+for l in teambrspso001 teambrspcp007 conv55 cclconv9 juiz1.admin nada99 convcp1; do
   ck "lote($l) == individual" '[[ "$(jq -r --arg l "'"$l"'" ".[\$l]" <<<"$MAP")" == "$(exp '"$l"')" ]]'
 done
 
@@ -56,7 +59,7 @@ ck "mode:off não barra ninguém"  'ug_ok prova teambrspso001 "Chrome"'
 ck "mode:off zera o esperado"    '[[ -z "$(exp teambrspso001)" ]]'
 
 echo "== sem ua-gate.json: cai no LOGIN_UA_SUBSTRING legado =="
-rm -f "$C/ua-gate.json"; printf 'LOGIN_UA_SUBSTRING=MOJ-KIOSK\n' > "$C/conf"
+rm -f "$C/ua-gate.json"; printf 'CONTEST_MODULES=maquinas\nLOGIN_UA_SUBSTRING=MOJ-KIOSK\n' > "$C/conf"
 ck "legado vira o esperado"          '[[ "$(exp teambrspso001)" == MOJ-KIOSK ]]'
 ck "legado barra quem não tem"       '! ug_ok prova teambrspso001 "Chrome/120"'
 ck "legado passa quem tem"           'ug_ok prova teambrspso001 "x MOJ-KIOSK y"'

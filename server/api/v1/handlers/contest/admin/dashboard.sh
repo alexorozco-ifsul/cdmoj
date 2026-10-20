@@ -16,9 +16,13 @@ WINDOW=500
 
 # --- juízes: estado POR HOST (saúde do cluster) + contagens + fila ---
 judges="$( { find "$REGISTRYDIR" -maxdepth 1 -name '*.json' 2>/dev/null | sort | while IFS= read -r jf; do
+      # juiz MULTI-SLOT julgando com slot livre vinha "free" (busy era só com zero livre) e o painel dizia "nenhum juiz
+      # ocupado — problema de fila" em plena correção; juiz DESABILITADO (judges-config) aparecia 🟢 online e no pool.
+      # slots usados = total − livres; status disabled não conta como online (auditoria do painel, 03/10/2026)
       jq -c --argjson now "$now" --argjson ttl "$REG_TTL" '{
-         host, state:(.state//"?"), capability:(.capability//""),
-         online:((.last_seen//0) >= ($now-$ttl)), last_seen:(.last_seen//0), age_s:($now-(.last_seen//0)),
+         host, state:(.state//"?"), capability:(.capability//""), status:(.status // "ok"),
+         total_slots:(.total_slots // 1), used_slots:(((.total_slots // 1) - (.free_slots // (if (.state // "") == "busy" then 0 else (.total_slots // 1) end))) | if . < 0 then 0 else . end),
+         online:(((.last_seen//0) >= ($now-$ttl)) and ((.status // "ok") != "disabled")), last_seen:(.last_seen//0), age_s:($now-(.last_seen//0)),
          problems_count:(.problems_count // ((.problems//{})|length)), langs:(.langs // []) }' "$jf" 2>/dev/null
     done; } | jq -cs 'sort_by(.host)')"
 [[ -n "$judges" ]] || judges='[]'
@@ -33,22 +37,35 @@ assigned="$(find "$ASSIGNEDDIR" -mindepth 2 -maxdepth 2 -name '*.json' 2>/dev/nu
 # --- submissões recentes (TSV: id login problem pending sub_epoch verdict) ---
 # Fonte: store por-usuário (emit_history_sorted, formato global de 7 campos) — o
 # controle/history global é do modelo legado e não existe nos contests v2.
-rows="$(emit_history_sorted "$contest" "$WINDOW" | awk -F: '
+HIST="$(mktemp)"; emit_history_sorted "$contest" 0 > "$HIST"
+_rows(){ awk -F: '
   NF>=6 {
     pending = ($0 ~ /:(Not Answered Yet|On queue|on queue|Running|running):/) ? 1 : 0
     v=$5; for(i=6;i<=NF-2;i++) v=v":"$i
     printf "%s\t%s\t%s\t%s\t%s\t%s\n", $(NF), $2, $3, pending, $(NF-1), v
-  }')"
+  }'; }
+rows="$(tail -n "$WINDOW" "$HIST" | _rows)"
+# PENDENTES saem do history INTEIRO, não da janela: uma submissão presa há 40 min seguida de 500 julgadas sumia do card
+# e a tela dizia "nenhuma aguardando o juiz" — quanto mais antiga a trava, mais rápido ela sumia. E as SEGURADAS na
+# revisão manual (review/<id>.json não liberado) esperam um juiz HUMANO, não a máquina: contavam como fila e
+# disparavam "investigar o juiz" (auditoria do painel, 03/10/2026).
+PENDF="$(mktemp)"; _rows < "$HIST" | awk -F'\t' '$4=="1"' > "$PENDF"; rm -f "$HIST"
+HELDF="$(mktemp)"
+find "$CONTESTSDIR/$contest/review" -maxdepth 1 -name '*.json' -type f -print0 2>/dev/null \
+  | xargs -0 -r jq -c 'select((.status // "") != "released") | .id // empty' 2>/dev/null | jq -cs 'map({(.): true}) | add // {}' > "$HELDF"
+[[ -s "$HELDF" ]] || echo '{}' > "$HELDF"
 
 # finalized_at por subid (users/*/results/*.json) — em ARQUIVO p/ --slurpfile (ARG_MAX)
-FINMAP="$(mktemp)"; trap 'rm -f "$FINMAP"' EXIT
+FINMAP="$(mktemp)"; trap 'rm -f "$FINMAP" "$PENDF" "$HELDF"' EXIT
 results_map_file "$contest" "$FINMAP"
 
-metrics="$(printf '%s\n' "$rows" | jq -R -cs --slurpfile finf "$FINMAP" --argjson now "$now" '
-  ($finf[0] // {}) as $fin
+metrics="$(printf '%s\n' "$rows" | jq -R -cs --slurpfile finf "$FINMAP" --rawfile pendr "$PENDF" --slurpfile held "$HELDF" --argjson now "$now" '
+  ($finf[0] // {}) as $fin | ($held[0] // {}) as $H
   | [ split("\n")[] | select(length>0) | split("\t")
     | { id:.[0], login:.[1], problem:.[2], pending:(.[3]=="1"), sub:(.[4]|tonumber? // 0), verdict:.[5] } ] as $subs
-  | ($subs | map(select(.pending))) as $pend
+  | [ $pendr | split("\n")[] | select(length>0) | split("\t")
+    | { id:.[0], login:.[1], problem:.[2], pending:true, sub:(.[4]|tonumber? // 0), verdict:.[5] }
+    | select($H[.id] | not) ] as $pend
   | ($subs | map(select(.pending|not) | . + {response:(($fin[.id] // 0) - .sub)}) | map(select(.response > 0))) as $done
   | ($pend | map({id, login, problem, submitted_at:.sub, waiting_s:($now - .sub)}) | sort_by(-.waiting_s)) as $pendlist
   | ($done | map(.response) | sort) as $rt
@@ -76,22 +93,21 @@ metrics="$(printf '%s\n' "$rows" | jq -R -cs --slurpfile finf "$FINMAP" --argjso
 [[ -n "$metrics" ]] || metrics='{}'
 
 # --- AVALIAÇÃO MANUAL: quantas não avaliadas / sendo avaliadas / em conflito + quem avalia ---
-revitems=()
-while IFS= read -r rf; do
-  [[ -n "$rf" ]] || continue
-  p="$(jq -c --argjson now "$now" --argjson q "$(rv_quorum "$contest")" "$(rv_expire_filter)
+# A fila se lê NUMA PASSADA (rv_scan, a regra da casa desde 25/09: um jq + rv_quorum POR ARQUIVO aqui era o mesmo
+# custo que o review/list e o review/conflicts já tinham perdido — levantamento de 03/10/2026). E o "aguardando"
+# segue a regra do review/list: com voto(s) e AINDA abaixo do quórum (era `votes_n == 1`, só certo com quórum 2).
+rq="$(rv_quorum "$contest")"; [[ "$rq" =~ ^[0-9]+$ ]] || rq=2
+allrev="$(rv_scan "$(rv_dir "$contest")" "$(rv_expire_filter)
     | $(rv_recompute)
     | select((.status // \"open\") != \"released\")
     | { id, problem_id, login, computed_verdict, status, conflict,
         claimants:[ (.claimants // [])[] | {judge:.by, elapsed_s:(\$now - (.at // 0))} ],
-        votes_n:((.votes // [])|length) }" "$rf" 2>/dev/null)"
-  [[ -n "$p" && "$p" != null ]] && revitems+=("$p")
-done < <(find "$(rv_dir "$contest")" -maxdepth 1 -name '*.json' 2>/dev/null)
-allrev="$( ((${#revitems[@]})) && printf '%s\n' "${revitems[@]}" | jq -cs '.' || echo '[]')"
-review="$(jq -c '{
+        votes_n:((.votes // [])|length) }" --argjson now "$now" --argjson q "$rq" | jq -cs '.')"
+[[ -n "$allrev" ]] || allrev='[]'
+review="$(jq -c --argjson q "$rq" '{
   not_evaluated:   ([.[]|select((.claimants|length)==0 and ((.votes_n//0)==0))]|length),
   being_evaluated: ([.[]|select((.claimants|length)>=1)]|length),
-  awaiting_second: ([.[]|select((.claimants|length)==0 and ((.votes_n//0)==1) and (.conflict!=true))]|length),
+  awaiting_second: ([.[]|select((.claimants|length)==0 and ((.votes_n//0)>=1) and ((.votes_n//0)<$q) and (.conflict!=true))]|length),
   conflicts:       ([.[]|select(.conflict==true)]|length),
   pending_total:   length,
   evaluators:      [ .[] | select((.claimants|length)>=1 or (.votes_n//0)>=1 or .conflict==true) ] }' <<<"$allrev")"
@@ -100,7 +116,7 @@ review="$(jq -c '{
 routing="$(spool_routing_json)"; [[ -n "$routing" ]] || routing='{}'
 
 ok_json '{now:$now, window:$win,
-          judges:{online:($j|map(select(.online))|length), busy:($j|map(select(.state=="busy"))|length),
+          judges:{online:($j|map(select(.online))|length), busy:($j|map(select(.online and ((.used_slots // 0) > 0 or .state == "busy")))|length),
                   total:($j|length), queue_depth:$qd, assigned:$asg, pool:$pool, list:$j},
           routing:$rt, submissions:$m, review:$rev}' \
   --argjson now "$now" --argjson win "$WINDOW" --argjson j "$judges" --argjson pool "$pool_json" \

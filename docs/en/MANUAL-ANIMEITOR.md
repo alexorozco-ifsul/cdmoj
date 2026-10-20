@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ANIMEITOR.md blob:cc164fe430e20209a05f71d7e2a12ed0dc81e3a0 -->
+<!-- i18n-source: MANUAL-ANIMEITOR.md blob:683e095b4d33ed3f92a48c9e5b0d4bac0812fa56 -->
 # MOJ: Big-screen manual (`.animeitor`)
 
 > **Translation note.** This manual is a translation of the Portuguese original. The command-line tools (`moj`, `moj-contest`, `moj-comp`) print their messages in Portuguese, and the command examples below are identical to the original.
@@ -57,11 +57,16 @@ comes from there. The Animeitor animates the comeback and keeps the freeze until
 2. **MOJ public URL.** The big screen fetches the photo and the music of each team from this address.
    Check it.
 3. **Scoreboards and sites.** MOJ proposes the overall scoreboard, one per cohort and one per country,
-   with the sites. Adjust the names and the medals, then save. A single-site contest gets the site
-   `Geral` (without a site, there is no reveal link).
+   with the sites. Adjust the names and the medals, then save. The overall scoreboard always has the site
+   **`Geral`**, with all the teams: this site gives the link for the **overall result** (without a site, there
+   is no reveal link). If a saved configuration lost it, use **+ Overall site (all teams)** on the scoreboard.
+   Its link is for you and the admin only: no site chief gets it. The admin Central warns when the overall
+   scoreboard does not have it or when a site has no teams.
 4. Click **📡 publish to the big screen** and **▶ start the feeder** (the clock every second and the
    submissions every 2 s). The event name is the contest id. MOJ refuses a name that already belongs to
-   another MOJ contest.
+   another MOJ contest. With the MOJ key, a new event starts with `moj-` (`moj-<contest>`): this is an
+   Animeitor rule for the shared key, and MOJ adds the prefix on its own — including to a name you type. With
+   your own key, the name is free. An event that already exists keeps its name (the reveal links stay valid).
 5. **Check.** MOJ asks the Animeitor, site by site, if it has **all** the submissions, with the correct
    answer. MOJ does this automatically every 5 minutes during the contest and, after the end, until the
    **final check**. MOJ automatically resends anything that is missing or different. The "Check" line of
@@ -72,6 +77,12 @@ comes from there. The Animeitor animates the comeback and keeps the freeze until
    the result in the confirmation question. Then each site chief (and each staff member) sees the link
    of their own site, **with the check seal** ("✓ Validated", "Checked" or "⚠"). The link shows the
    answers after the freeze. ⚠ Treat it as a password.
+   **Before the release**, "show the big-screen links" already lists all the links for you, with **open**,
+   **copy** and the column **Gets it on release** (which site chief or staff member gets each link). Use it to
+   check the scoreboards and the sites without giving anything to the sites. Each look at the links is recorded.
+   The same button also releases the MOJ built-in **Reveal** (`/contest/score/reveal.html`) to the site chiefs:
+   when the event is published on the Animeitor, it opens for them only after this release (and after the
+   contest ends for all sites). **take the links back from the sites** closes both again.
 
 ## 🎥 Streaming keys (legacy)
 

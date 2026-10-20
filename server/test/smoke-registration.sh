@@ -14,12 +14,12 @@ export CONTESTSDIR="$FIX" SESSIONDIR="$SESS" SPOOLDIR="$SPOOL" SCOREDIR="$ROOT/s
 NOW="$(date +%s)"
 
 T="$FIX/treino"; mkdir -p "$T/var/jsons"
-printf 'CONTEST_ID=treino\nCONTEST_NAME="Treino"\nCONTEST_TYPE=lista-publica\n' > "$T/conf"
+printf 'CONTEST_ID=treino\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_NAME="Treino"\nCONTEST_TYPE=lista-publica\n' > "$T/conf"
 for u in ana caio west zeze bob; do fx_user "$T" "$u" s3nha "Fulano $u"; done
 
 C="$FIX/esq"; mkdir -p "$C/var" "$C/users" "$C/enunciados"
 conf(){ # <start> <end> [extra…]
-  { printf 'CONTEST_ID=esq\nCONTEST_NAME="Esquenta"\nCONTEST_TYPE=icpc\nUSERS_FROM=treino\n'
+  { printf 'CONTEST_ID=esq\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_NAME="Esquenta"\nCONTEST_TYPE=icpc\nUSERS_FROM=treino\n'
     printf 'CONTEST_START=%s\nCONTEST_END=%s\n' "$1" "$2"
     printf 'PROBS=( cdmoj org#alfa Alfa A org#alfa )\n'
     shift 2; for e in "$@"; do printf '%s\n' "$e"; done; } > "$C/conf"
@@ -87,6 +87,14 @@ call /treino/contest-registration GET '' tok-caio 'contest=esq'
 ck "caio vê o convite"          '[[ "$(J ".invites[0].login")" == time-os-tres-ponteiros ]]'
 reg '{"contest":"esq","action":"team-accept","team":"time-os-tres-ponteiros"}' tok-caio
 ck "caio no time"               '[[ "$(J .me.kind)" == team && "$(J ".team.members|join(\",\")")" == *caio* ]]'
+# nome com ':' (TCP 2026) e corte por CARACTERE — o login do time não muda no renomear
+TACC="$C/users/time-os-tres-ponteiros/account.json"
+reg '{"contest":"esq","action":"team-rename","name":"localhost:6767"}' tok-ana
+ck "renomear com ':' grava '∶' (placar TXT separa por ':')" '[[ "$(jq -r .fullname "$TACC")" == "localhost"$'"'"'\xe2\x88\xb6'"'"'"6767" ]]'
+LONGN="Equipe dos Acentuados ãõçé Fenômenos Imbatíveis do Século XXI"
+reg "$(jq -cn --arg n "$LONGN" '{contest:"esq",action:"team-rename",name:$n}')" tok-ana
+ck "nome cortado em 48 CARACTERES, sem partir letra" '[[ "$(jq -r ".fullname | length" "$TACC")" -le 48 && "$(jq -r ".fullname | length" "$TACC")" -ge 47 && "$(jq -r .fullname "$TACC")" != *$'"'"'\xef\xbf\xbd'"'"'* && "$(jq -r .fullname "$TACC")" == "Equipe dos Acentuados ãõçé Fenômenos"* ]]'
+reg '{"contest":"esq","action":"team-rename","name":"Os Três Ponteiros"}' tok-ana
 reg '{"contest":"esq","action":"team-decline","team":"time-os-tres-ponteiros"}' tok-west
 ck "west recusou"               '[[ "$(J ".invites|length")" == 0 ]]'
 reg '{"contest":"esq","action":"team-invite","login":"caio"}' tok-caio
@@ -359,7 +367,10 @@ printf '10:org#alfa:c:Accepted,100p:%s:w1\n' "$((NOW-100))" > "$C/users/west/his
 printf '10:org#alfa:c:Accepted,100p:%s:s1\n' "$((NOW-200))" > "$C/users/time-os-tres-ponteiros/history"
 mkdir -p "$RUNDIR"; : > "$RUNDIR/judged.alive"
 bash "$SCOREDIR/build.sh" esq >/dev/null 2>&1
+# a rodada "prova" do fixture não tem problemas: o único bloqueador é o AVISO round_no_problems (03/10/2026) — o force passa
 call /contest/admin/rounds POST '{"action":"promote","to":"prova"}' tok-adm 'contest=esq'
+ck "sem force: só o aviso round_no_problems"   '[[ "$(J ".error.blockers | map(.code) | join(\",\")")" == round_no_problems ]]'
+call /contest/admin/rounds POST '{"action":"promote","to":"prova","force":true}' tok-adm 'contest=esq'
 ck "promoção de contest COMPARTILHADO passa"    '[[ "$(J .promoted)" == true ]]'
 ck "varreu a sessão do turista"                 '[[ "$(J .swept.sessions)" -ge 1 ]]'
 ck "e o diretório vazio dele"                   '[[ "$(J .swept.dirs)" -ge 1 && ! -e "$C/users/west" ]]'

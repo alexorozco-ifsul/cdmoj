@@ -48,6 +48,7 @@ export function makeSitesTab(CONTEST, opts = {}) {
   let explicit = new Map();               // login → sede GRAVADA hoje (flag x/o do mapa)
   let pending = new Map();                // login → sede proposta ("" = tirar)
   let moves = [];                         // renomeações desta edição: {from, to, n}
+  let renames = [];                       // TODA sede renomeada (o servidor leva o escopo do staff, o gate e o telão junto)
   const view = el('div', {}), prev = el('div', {}), modeBar = el('div', { class: 'row', style: 'gap:.4rem;flex-wrap:wrap;margin:.4rem 0' });
   const msg = el('div', { class: 'small', style: 'margin:.4rem 0' });
 
@@ -78,7 +79,7 @@ export function makeSitesTab(CONTEST, opts = {}) {
     prev.append(
       det(T('Sem sede', 'No site', 'Sin sede'), p.none),
       det(T('Pararam num grupo/país (a regex casou o grupo, nenhuma sede dele)', 'Stopped at a group/country (the regex matched the group, none of its sites)', 'Se quedaron en un grupo/país (la regex coincidió con el grupo, ninguna de sus sedes)'), p.stopped),
-      det(T('Casam em duas sedes (valeu a primeira da lista)', 'Match two sites (the first in the list won)', 'Coinciden con dos sedes (valió la primera de la lista)'), p.two),
+      det(T('Casam em duas sedes (vale a mais funda; no mesmo nível, a primeira da lista)', 'Match two sites (the deepest wins; at the same level, the first in the list)', 'Coinciden con dos sedes (vale la más profunda; en el mismo nivel, la primera de la lista)'), p.two),
       p.orphans.length ? el('p', { class: 'small notice' }, T('Sede gravada em time que não existe na árvore: ', 'Site stored on a team that does not exist in the tree: ', 'Sede grabada en un equipo que no existe en el árbol: ')
         + p.orphans.map((o) => '«' + o.name + '»').join(', ') + T(' — crie a sede com esse nome ou atribua outra.', ' — create a site with that name or assign another one.', ' — crea una sede con ese nombre o asigna otra.')) : '');
     const changes = [];
@@ -106,7 +107,7 @@ export function makeSitesTab(CONTEST, opts = {}) {
         // renomear: os times gravados com o nome velho acompanham (e a prévia mostra quantos)
         nm.addEventListener('change', () => {
           const to = nm.value.trim();
-          if (r.orig && to && to !== r.orig) { const mv = SM.renameAssignments(explicit, pending, r.orig, to); if (mv.length) moves.push({ from: r.orig, to, n: mv.length }); r.orig = to; }
+          if (r.orig && to && to !== r.orig) { const mv = SM.renameAssignments(explicit, pending, r.orig, to); if (mv.length) moves.push({ from: r.orig, to, n: mv.length }); renames.push({ from: r.orig, to }); r.orig = to; }
           sync();
         });
         pf.addEventListener('input', () => { r.prefixes = pf.value; sync(); });
@@ -171,7 +172,7 @@ export function makeSitesTab(CONTEST, opts = {}) {
       const nm = el('input', { value: s.name, placeholder: T('nome da sede', 'site name', 'nombre de la sede'), style: 'width:14rem' });
       nm.addEventListener('input', () => { s.name = nm.value; sync(); });
       nm.addEventListener('change', () => { const to = nm.value.trim();
-        if (s.orig && to && to !== s.orig) { const mv = SM.renameAssignments(explicit, pending, s.orig, to); if (mv.length) moves.push({ from: s.orig, to, n: mv.length }); s.orig = to; }
+        if (s.orig && to && to !== s.orig) { const mv = SM.renameAssignments(explicit, pending, s.orig, to); if (mv.length) moves.push({ from: s.orig, to, n: mv.length }); renames.push({ from: s.orig, to }); s.orig = to; }
         sync(); });
       const rl = el('div', { style: 'margin:.2rem 0 .2rem 1rem' });
       const drawRules = () => {
@@ -249,12 +250,19 @@ export function makeSitesTab(CONTEST, opts = {}) {
     const bad = rgAssign(tree, []).nodes.filter((nd) => nd.err);
     if (bad.length) { msg.className = 'small error-box'; msg.textContent = bad.map((nd) => nd.name + ': ' + regexErrText(nd.err)).join(' · '); return; }
     btn.disabled = true; msg.className = 'small'; msg.textContent = T('Salvando…', 'Saving…', 'Guardando…');
-    const body = { tree, mode, expect_sig: sig, assign: [...pending].map(([login, region]) => ({ login, region })) };
+    const body = { tree, mode, expect_sig: sig, assign: [...pending].map(([login, region]) => ({ login, region })), renames };
     try {
       const r = await apiPost('/contest/admin/regions?contest=' + enc(CONTEST), body, G);
-      const f = r.failed || [];
+      const f = r.failed || [], orf = r.orphan_refs || [];
       await load();
-      msg.className = 'small'; msg.textContent = T('✓ sedes salvas', '✓ sites saved', '✓ sedes guardadas') + (f.length ? T(' — não atribuídos: ', ' — not assigned: ', ' — no asignados: ') + f.map((x) => x.login + ' (' + x.code + ')').join(', ') : '');
+      // referência a sede que não existe mais (escopo do staff, gate de UA, sede do telão): avisar onde
+      const WH = { staff: T('escopo do staff', 'staff scope', 'alcance del staff'), ua_gate: T('gate de navegador', 'browser gate', 'gate de navegador'), animeitor: T('telão (Animeitor)', 'big screen (Animeitor)', 'pantalla (Animeitor)') };
+      msg.className = orf.length ? 'small error-box' : 'small';
+      msg.textContent = T('✓ sedes salvas', '✓ sites saved', '✓ sedes guardadas')
+        + (r.refs_renamed ? T(` — ${r.refs_renamed} configuração(ões) acompanharam o nome novo`, ` — ${r.refs_renamed} setting(s) followed the new name`, ` — ${r.refs_renamed} configuración(es) siguieron el nombre nuevo`) : '')
+        + (f.length ? T(' — não atribuídos: ', ' — not assigned: ', ' — no asignados: ') + f.map((x) => x.login + ' (' + x.code + ')').join(', ') : '')
+        + (orf.length ? T(' — ATENÇÃO, ainda apontam p/ sede que não existe: ', ' — WARNING, still pointing to a site that does not exist: ', ' — ATENCIÓN, todavía apuntan a una sede que no existe: ')
+          + orf.map((o) => (WH[o.where] || o.where) + ' «' + o.name + '»' + (o.login ? ' (' + o.login + ')' : '')).join(', ') : '');
     } catch (e) {
       btn.disabled = false;
       msg.className = 'small error-box';
@@ -278,7 +286,7 @@ export function makeSitesTab(CONTEST, opts = {}) {
     tree = Array.isArray(rg.tree) ? rg.tree : []; origTree = JSON.stringify(tree); sig = rg.sig || ''; savedMode = rg.mode || '';
     users = (mp.map || []).map((u) => ({ login: u.login, explicit: (u.flag === 'x' || u.flag === 'o') ? (u.site || '') : '' }));
     explicit = new Map(users.filter((u) => u.explicit).map((u) => [u.login, u.explicit]));
-    pending = new Map(); moves = [];
+    pending = new Map(); moves = []; renames = [];
     // o modo guardado, se a árvore ainda couber nele; senão o mais simples que couber (e dizemos)
     const fits = (m) => (m === 'simple' ? !SM.fitSimple(tree) : m === 'rules' ? !SM.fitRules(tree) : m === 'tree');
     mode = savedMode && fits(savedMode) ? savedMode : SM.simplestMode(tree);

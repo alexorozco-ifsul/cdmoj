@@ -38,9 +38,16 @@ ch_get(){
   [[ -v _CH_J[$1] ]] && { printf '%s' "${_CH_J[$1]}"; return 0; }
   _CH_J[$1]="$(_ch_get_raw "$1")"; printf '%s' "${_CH_J[$1]}"
 }
+# _ch_mod_on <c> — as coortes só valem com o módulo `coortes` LIGADO (desligar desliga a regra, 03/10/2026). A lib
+# também roda fora da API (score/build.sh), sem o common.sh: aí lê o CONTEST_MODULES do conf por sed.
+_ch_mod_on(){
+  if declare -F mod_on >/dev/null && declare -F conf_value_to >/dev/null; then mod_on "$1" coortes; return; fi
+  local v; v="$(sed -n 's/^CONTEST_MODULES=//p' "$CONTESTSDIR/$1/conf" 2>/dev/null | tail -n 1)"; v="${v//[\\\'\"]/}"
+  [[ ",$v," == *",coortes,"* ]]
+}
 _ch_get_raw(){
   local f; f="$(ch_file "$1")"
-  if [[ -s "$f" ]] && jq -e '.cohorts' "$f" >/dev/null 2>&1; then
+  if [[ -s "$f" ]] && _ch_mod_on "$1" && jq -e '.cohorts' "$f" >/dev/null 2>&1; then
     jq -c '{version:(.version // 1), results_released:(.results_released == true),
             cohorts:[ (.cohorts // [])[] | {
               id:(.id // ""), name:(.name // .id // ""), regex:(.regex // ""),
@@ -72,6 +79,12 @@ ch_is_ranking_view(){
     <<<"$(ch_get "$1")" >/dev/null 2>&1
 }
 ch_released(){ jq -e '.results_released == true' <<<"$(ch_get "$1")" >/dev/null 2>&1; }
+# ch_private_unreleased <c> -> 0 se há coorte PRIVADA (public:false) e os resultados ainda não foram liberados — o
+# que um relatório PÚBLICO (placar aberto com todos os times) entregaria. Coorte pública, mesmo com placar próprio,
+# já é visível a todos.
+ch_private_unreleased(){
+  jq -e '([.cohorts[]? | select(.public == false)] | length > 0) and (.results_released != true)' <<<"$(ch_get "$1")" >/dev/null 2>&1
+}
 
 # ch_default <c> -> id da coorte default (a 1ª marcada, senão a 1ª da lista, senão "oficial")
 ch_default(){
@@ -109,7 +122,9 @@ ch_view_cohorts(){
       else
         ((first(.cohorts[] | select(.id == $v))) as $co
          | if $co == null then $pub
-           elif ($co.sees | length) > 0 then $co.sees
+           # a coorte privada SEMPRE se vê: um `sees` sem ela mesma deixava os convidados fora do próprio placar
+           # (auditoria do painel, 03/10/2026)
+           elif ($co.sees | length) > 0 then ($co.sees + [$co.id])
            # placar PARALELO de coorte pública (times × individual): só ela — senão o
            # "placar dos times" mostraria todo mundo, que é o placar geral
            elif ($co.public and $co.ranking) then [$co.id]
@@ -131,6 +146,7 @@ ch_view_cohorts(){
 # ficam neste arquivo, de propósito). A normalização do ch_get está embutida no `norm`.
 ch_ctx(){
   local c="$1" l="$2" a="$CONTESTSDIR/$1/users/$2/account.json"
+  [[ -s "$(ch_file "$c")" ]] && _ch_mod_on "$c" || { printf '0\x01\x01public'; return 0; }   # sem coortes valendo
   [[ -f "$a" ]] || a=/dev/null
   jq -rn --arg l "$l" --slurpfile a "$a" --slurpfile j "$(ch_file "$c")" '
     ( ($j[0] // {}) | {released:(.results_released == true),

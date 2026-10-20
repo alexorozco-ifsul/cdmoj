@@ -1,6 +1,11 @@
 # GET/POST /contest/admin/problems?contest=<id>  (admin DO contest)
-# GET  -> [{source,problem_id,name,letter,statement_key}] na ordem atual.
-# POST {action, ...}: add | remove | reorder | rename. Reescreve PROBS no conf + auditoria.
+# GET  -> {problems:[{source,problem_id,name,letter,statement_key,languages,judges,titles?}], name_lang, phase}
+#         na ordem atual. `titles` {pt,en,es} = os títulos do banco quando há MAIS DE UM (enunciado
+#         traduzido): as opções de nome da tela. `name_lang` = o idioma do nome padrão (cc_prob_lang).
+# POST {action, ...}: add | remove | reorder | rename | apply_titles | langs | judges | statement.
+#   add sem `name` = o título do banco no idioma da prova (cc_prob_title). apply_titles {letters?} troca
+#   pelo título no idioma da prova o nome que é um título do banco em OUTRO idioma (cc_title_fixes; nome
+#   personalizado ou escolhido pelo `rename` nunca). Reescreve PROBS no conf + auditoria.
 contest="$(param contest)"
 [[ -n "$contest" ]] || fail 400 "Missing contest" "contest_missing"
 require_contest "$contest"
@@ -12,10 +17,18 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
   # inclui linguagens e pool de juízes por problema (problem-{langs,judges}.json, id canônico)
   plf="$CONTESTSDIR/$contest/problem-langs.json"; pl='{}'; [[ -f "$plf" ]] && pl="$(jq -c . "$plf" 2>/dev/null)"; jq -e . >/dev/null 2>&1 <<<"$pl" || pl='{}'
   pjf="$CONTESTSDIR/$contest/problem-judges.json"; pj='{}'; [[ -f "$pjf" ]] && pj="$(jq -c . "$pjf" 2>/dev/null)"; jq -e . >/dev/null 2>&1 <<<"$pj" || pj='{}'
-  out="$(jq -c --argjson pl "$pl" --argjson pj "$pj" '[ .[] | . as $p
-          | ((if (($p.statement_key // "")|test("#")) then $p.statement_key else (($p.problem_id // "")|gsub("/";"#")) end)) as $cid
-          | $p + {languages: ($pl[$cid] // []), judges: ($pj[$cid] // [])} ]' <<<"$(cc_probs_json "$contest")")"
-  ok_json '{problems:$p}' --argjson p "$out"
+  cur="$(cc_probs_json "$contest")"
+  # títulos por idioma (até 200 problemas × 3 títulos: por ARQUIVO, nunca por argv)
+  tmf="$(mktemp)" || fail 500 "tmp" "tmp"
+  cc_bank_titles "$(jq -c "$CC_PROB_CID_JQ"' [.[] | cid]' <<<"$cur")" > "$tmf"
+  jq -e 'type == "object"' "$tmf" >/dev/null 2>&1 || echo '{}' > "$tmf"
+  out="$(jq -c --argjson pl "$pl" --argjson pj "$pj" --slurpfile tm "$tmf" "$CC_PROB_CID_JQ"'($tm[0] // {}) as $TM | [ .[] | . as $p
+          | ($p | cid) as $cid | ($TM[$cid] // {}) as $x
+          | $p + {languages: ($pl[$cid] // []), judges: ($pj[$cid] // [])}
+               + (if ([$x[]] | unique | length) > 1 then {titles: $x} else {} end) ]' <<<"$cur")"
+  rm -f "$tmf"
+  source "$_LIBDIR/contest-gate.sh"   # phase: a tela confirma o reordenar (troca de letras) com a prova no ar
+  ok_json '{problems:$p, name_lang:$l, phase:$ph}' --argjson p "$out" --arg l "$(cc_prob_lang "$contest")" --arg ph "$(contest_phase "$contest")"
   exit 0
 fi
 
@@ -23,6 +36,11 @@ require_method POST
 body="$(read_body)"
 jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "JSON inválido" "bad_json"
 action="$(jq -r '.action // empty' <<<"$body")"
+# TRAVA por contest: toda ação LÊ o PROBS, monta o novo e REGRAVA o conf. Sem ela, o "+ adicionar todos" (um POST
+# por problema, todos de uma vez) perdia problemas: 6 adições respondiam 200 e só 1 ficava (auditoria 03/10/2026).
+mkdir -p "$CONTESTSDIR/$contest/var" 2>/dev/null
+exec {PLK}>"$CONTESTSDIR/$contest/var/.problems.lock"
+flock -w 20 "$PLK" || fail 409 "Outra alteração de problemas em andamento — tente de novo" "busy"
 cur="$(cc_probs_json "$contest")"
 new=""
 
@@ -78,6 +96,20 @@ case "$action" in
             | (if ($b|has("name")) then .name=$b.name else . end)
             | (if ($b|has("new_letter")) then .letter=$b.new_letter else . end))
           else .value end ]')"
+    # nome dado pelo `rename` é ESCOLHA do admin: a Central (prob_names) não insiste em trocá-lo pelo título
+    # no idioma da prova (cc_title_fixes). Chave = id canônico, que não muda com a letra. A tela manda o nome
+    # SEMPRE: trocar só a letra (nome igual + new_letter diferente) não conta como escolha — senão silenciava o
+    # aviso; salvar o MESMO nome sem mexer na letra conta (é o "manter de propósito" que o texto da Central ensina).
+    if jq -e --arg l "$L" --argjson cur "$cur" 'has("name") and ((.name != ([$cur[] | select(.letter == $l)][0].name))
+          or ((.new_letter // $l) == $l))' >/dev/null 2>&1 <<<"$body"; then
+      rcid="$(jq -r --arg l "$L" "$CC_PROB_CID_JQ"'[.[] | select(.letter == $l)][0] | cid // empty' <<<"$cur")"
+      if [[ -n "$rcid" ]]; then
+        kf="$(cc_names_chosen_file "$contest")"; mkdir -p "${kf%/*}" 2>/dev/null
+        kb='{}'; [[ -s "$kf" ]] && kb="$(cat "$kf" 2>/dev/null)"; jq -e 'type == "object"' >/dev/null 2>&1 <<<"$kb" || kb='{}'
+        jq -c --arg id "$rcid" --arg n "$(jq -r '.name // ""' <<<"$body")" '.[$id] = $n' <<<"$kb" > "$kf.tmp" 2>/dev/null \
+          && mv -f "$kf.tmp" "$kf" || rm -f "$kf.tmp"
+      fi
+    fi
     # a cor do balão é chaveada pela LETRA (balloons.json): a letra renomeada leva a cor junto
     # (COPIA em vez de mover quando a letra velha segue em uso — o caso da duplicata desfeita)
     NL="$(jq -r '.new_letter // empty' <<<"$body")"
@@ -88,6 +120,25 @@ case "$action" in
         'if (has($o) and (has($n)|not)) then (.[$n] = .[$o] | if $keep then . else del(.[$o]) end) else . end' \
         "$bf" > "$bf.tmp" 2>/dev/null && mv -f "$bf.tmp" "$bf" || rm -f "$bf.tmp"
     fi
+    ;;
+  apply_titles)
+    # o botão da Central (prob_names): nome = título do banco em outro idioma ⇒ o título no idioma da prova.
+    # `letters` (opcional) restringe; sem nada a trocar = 200 com changed:[] (o clique duplo não é erro).
+    fixes="$(cc_title_fixes "$contest")"; [[ -n "$fixes" ]] || fixes='[]'
+    only="$(jq -c '.letters // null' <<<"$body")"
+    fixes="$(jq -c --argjson o "$only" 'if ($o | type) == "array" then map(select(.letter as $l | $o | index($l))) else . end' <<<"$fixes")"
+    if [[ "$(jq 'length' <<<"$fixes")" == 0 ]]; then
+      ok_json '{saved:false, changed:[], problems:$p}' --argjson p "$cur"
+      exit 0
+    fi
+    new="$(jq -cn --argjson cur "$cur" --argjson f "$fixes" '
+      ($f | map({key:.letter, value:.to}) | from_entries) as $to
+      | [ $cur[] | if ($to[.letter] != null) then .name = $to[.letter] else . end ]')"
+    CC_KEEP_STATEMENTS=1 cc_set_probs "$contest" "$new" || fail 422 "Falha ao gravar problemas (dados inválidos?)" "probs_write"
+    audit_log_to "$contest" problems-apply_titles "$(jq -cr 'map(.letter + "→" + .lang) | join(" ")' <<<"$fixes" | head -c 300)"
+    mkdir -p "$CONTESTSDIR/$contest/var" 2>/dev/null; touch "$CONTESTSDIR/$contest/var/.problems-dirty" 2>/dev/null
+    ok_json '{saved:true, changed:$f, problems:$p}' --argjson f "$fixes" --argjson p "$(cc_probs_json "$contest")"
+    exit 0
     ;;
   reorder)
     order="$(jq -c '.order // []' <<<"$body")"
@@ -104,6 +155,24 @@ case "$action" in
       | ($cur | map({(.letter): .}) | add) as $by
       | [ $order | to_entries[] | . as $e | ($by[$e.value] // empty)
           | (if $auto then .letter = letter($e.key) else . end) ]')"
+    # letras AUTOMÁTICAS são re-letradas pela posição: a cor do balão (balloons.json) e as clarifications são
+    # chaveadas pela LETRA e ficavam no problema errado (auditoria 03/10/2026). Mapa letra velha → nova pelo id
+    # canônico, aplicado às duas — uma permutação, então a troca é simultânea.
+    LMAP="$(jq -cn --argjson cur "$cur" --argjson new "$new" "$CC_PROB_CID_JQ"'
+      ($new | map({key:(cid), value:.letter}) | from_entries) as $N
+      | [ $cur[] | {key:.letter, value:($N[cid] // .letter)} | select(.key != .value) ] | from_entries')"
+    if [[ -n "$LMAP" && "$LMAP" != '{}' ]]; then
+      bf="$CONTESTSDIR/$contest/balloons.json"
+      if [[ -s "$bf" ]]; then
+        jq -c --argjson m "$LMAP" 'with_entries(.key = ($m[.key] // .key))' "$bf" > "$bf.tmp" 2>/dev/null && mv -f "$bf.tmp" "$bf" || rm -f "$bf.tmp"
+        rm -f "$CONTESTSDIR/$contest/var/balloons-cache.json" "$CONTESTSDIR/$contest/var/balloons-cache.json.inputs" 2>/dev/null
+      fi
+      while IFS= read -r -d '' cf; do
+        jq -e --argjson m "$LMAP" '(.problem // "") as $p | $m | has($p)' "$cf" >/dev/null 2>&1 || continue
+        jq -c --argjson m "$LMAP" '.problem = $m[.problem]' "$cf" > "$cf.tmp" 2>/dev/null && mv -f "$cf.tmp" "$cf" || rm -f "$cf.tmp"
+      done < <(find "$CONTESTSDIR/$contest/clarifications" -maxdepth 1 -name '*.json' -print0 2>/dev/null)
+      audit_log_to "$contest" problems-reletter "$(jq -r 'to_entries | map(.key + "→" + .value) | join(" ")' <<<"$LMAP")"
+    fi
     ;;
   langs)
     # linguagens permitidas POR problema (ids canônicos minúsculos). Chaveado pelo id
@@ -179,13 +248,24 @@ case "$action" in
     [[ "$(jq -r '.remove_html // false' <<<"$body")" == true ]] && { rm -f "$edir/$skey$sfx.html"; did="$did -html$sfx"; }
     [[ "$(jq -r '.remove_pdf  // false' <<<"$body")" == true ]] && { rm -f "$edir/$skey$sfx.pdf";  did="$did -pdf$sfx"; }
     if [[ "$(jq -r '.refresh // false' <<<"$body")" == true && -n "$cid" ]]; then
-      # remove o cache (PT e TODAS as traduções) -> /contest/problems volta a buscar/cachear do banco
-      rm -f "$edir/$skey.html"
-      for _l in $(stmt_langs_all); do [[ "$_l" == pt ]] || rm -f "$edir/$skey.$_l.html"; done
-      # reindexa NO SERVIDOR (o antigo idx_request enfileirava kind=index p/ o juiz, que responde
-      # "legado, nada a fazer" — era no-op e o "refresh" não refrescava nada).
-      source "$_DIR/lib/tl-store.sh" 2>/dev/null || true
-      declare -F index_problem_bg >/dev/null && index_problem_bg "$cid" 1 >/dev/null 2>&1 || true
+      # reindexa NO SERVIDOR (o antigo idx_request enfileirava kind=index p/ o juiz, que responde "legado, nada a
+      # fazer") e SÓ DEPOIS regrava o enunciado do contest (PT e traduções) a partir do json novo. Antes apagava os
+      # arquivos na hora e reindexava em background: um /contest/problems no meio rematerializava o enunciado VELHO,
+      # e pacote que não reindexava ficava sem nada (auditoria 03/10/2026). Destacado (pandoc leva segundos).
+      # Reindexar que FALHA (pacote quebrado, ou sem pacote) não deixa de "atualizar do banco": regrava a partir do json
+      # que o banco já serve — o mesmo que a re-materialização preguiçosa fazia antes. MOJ_JOBS_SYNC=1 = na hora (testes).
+      lib="$_DIR/lib"
+      _rf_job='source "$1/common.sh" >/dev/null 2>&1; source "$1/tl-store.sh"; source "$1/contest-statement.sh"
+          index_problem_now "$2" 0 >/dev/null 2>&1 || true
+          bf="$(cs_bank_json "$2")" && cs_bank_write "$bf" "$CONTESTSDIR/$3" "$4" all
+          touch "$CONTESTSDIR/$3/var/.problems-dirty"'
+      if [[ "${MOJ_JOBS_SYNC:-0}" == 1 ]]; then
+        env CONTESTSDIR="$CONTESTSDIR" RUNDIR="$RUNDIR" TL_STORE_DIR="${TL_STORE_DIR:-}" MOJ_PROBLEMS_DIR="$MOJ_PROBLEMS_DIR" \
+          MOJTOOLS_DIR="$MOJTOOLS_DIR" bash -c "$_rf_job" _ "$lib" "$cid" "$contest" "$skey" </dev/null >/dev/null 2>&1
+      else
+        ( setsid env CONTESTSDIR="$CONTESTSDIR" RUNDIR="$RUNDIR" TL_STORE_DIR="${TL_STORE_DIR:-}" MOJ_PROBLEMS_DIR="$MOJ_PROBLEMS_DIR" \
+            MOJTOOLS_DIR="$MOJTOOLS_DIR" bash -c "$_rf_job" _ "$lib" "$cid" "$contest" "$skey" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+      fi
       did="$did refresh"
     fi
     [[ -n "$did" ]] || fail 422 "Nada a fazer (envie html_b64/pdf_b64, remove_*, ou refresh)" "noop"
@@ -194,11 +274,14 @@ case "$action" in
     ok_json '{saved:true, statement_key:$k, lang:$l, did:$d}' --arg k "$skey" --arg l "$slang" --arg d "$did"
     exit 0
     ;;
-  *) fail 400 "action inválida (add|remove|reorder|rename|langs|judges|statement)" "action_invalid" ;;
+  *) fail 400 "action inválida (add|remove|reorder|rename|apply_titles|langs|judges|statement)" "action_invalid" ;;
 esac
 
 [[ -n "$new" ]] || fail 422 "Nada a fazer" "noop"
-cc_set_probs "$contest" "$new" || fail 422 "Falha ao gravar problemas (dados inválidos?)" "probs_write"
+# CC_KEEP_STATEMENTS=1: reescrever o PROBS NÃO re-baixa enunciado que o contest já tem. Sem isso, qualquer
+# add/remove/rename/reorder (e o apply_titles) regravava enunciados/*.html — PT e traduções — a partir do banco,
+# apagando o HTML que o admin enviou à mão (auditoria 03/10/2026). Problema novo (sem arquivo) segue baixando.
+CC_KEEP_STATEMENTS=1 cc_set_probs "$contest" "$new" || fail 422 "Falha ao gravar problemas (dados inválidos?)" "probs_write"
 audit_log_to "$contest" "problems-$action" "$(jq -cr '. | del(.problem.statement_b64)' <<<"$body" 2>/dev/null | head -c 300)"
 # invalida o cache de /contest/problems NA HORA. O handler também confere as entradas por mtime
 # (conf, os dois json, enunciados/) e tem teto de idade, então isto é o caminho rápido, não a

@@ -13,7 +13,11 @@ body="$(read_body)"
 jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "Invalid JSON body" "bad_json"
 new="$(jq -r '.new_username // empty' <<<"$body")"
 [[ -n "$new" ]] || fail 400 "Informe o novo nome de usuário" "missing"
-[[ "$new" =~ ^[A-Za-z0-9._-]{2,32}$ ]] || fail 400 "Nome de usuário inválido (2–32 caracteres: letras, números, . _ -)" "uname_invalid"
+profile_limits                       # limites de troca do conf do treino (lib/profile.sh)
+# UNAME_CHANGE_LIMIT=0 = troca DESATIVADA (15/10/2026): recusa antes de qualquer validação, com mensagem própria
+(( UNAME_CHANGE_LIMIT <= 0 )) && fail 403 "A troca de nome de usuário está desativada." "uname_disabled"
+[[ "$new" =~ ^[A-Za-z0-9._-]{2,32}$ ]] && valid_login "$new" \
+  || fail 400 "Nome de usuário inválido (2–32 caracteres: letras, números, . _ -; não começa com . nem -; sem ..)" "uname_invalid"
 # réplica da lista canônica de sufixos de papel (ver lib/auth.sh is_reserved_role_login)
 _role_suffix(){ case "$1" in
   *.admin) echo admin;; *.cjudge) echo cjudge;; *.judge) echo judge;;
@@ -44,7 +48,7 @@ used="$(uname_changes_recent "$changes")"
 if (( used >= UNAME_CHANGE_LIMIT )); then
   nextav="$(uname_next_available "$changes")"
   whenstr="$(date -d "@$nextav" '+%d/%m/%Y' 2>/dev/null || echo '-')"
-  fail 403 "Limite de $UNAME_CHANGE_LIMIT trocas por ano atingido. Próxima troca disponível em $whenstr." "uname_limit"
+  fail 403 "Limite de $UNAME_CHANGE_LIMIT $( (( UNAME_CHANGE_LIMIT == 1 )) && echo troca || echo trocas) por ano atingido. Próxima troca disponível em $whenstr." "uname_limit"
 fi
 # sem submissão pendente (verdict é o 4º campo na linha login-less do history por-usuário)
 hf="$(user_hist_file treino "$old")"
@@ -54,35 +58,12 @@ fi
 # …também nos contests COMPARTILHADOS com o treino (o dir de lá segue o rename logo abaixo)
 shared_pending_for treino "$old" \
   && fail 409 "Você tem submissões pendentes de julgamento. Aguarde o veredicto e tente de novo." "uname_pending"
-# mv do diretório (+ account.login) e registro da troca
-user_rename treino "$old" "$new" || fail 500 "Falha ao renomear a conta" "save_fail"
+# a CASCATA inteira (mv da conta + Telegram, orgs, inscrições, compartilhados, virtuais, posse, sessões) mora em
+# lib/rename-cascade.sh — a mesma da promoção pelo admin (bin/user-promote.sh)
+source "$_LIBDIR/rename-cascade.sh"
+nsess="$(treino_rename_cascade "$old" "$new")" || fail 500 "Falha ao renomear a conta" "save_fail"
+# registro da troca (conta p/ o limite anual — a promoção pelo admin não conta)
 account_merge treino "$new" '.uname_changes = ((.uname_changes // []) + [$t])' --argjson t "$EPOCHSECONDS"
-# (o índice Telegram — by-login/by-tgid — é ajustado em tg_rename)
-command -v tg_rename >/dev/null 2>&1 && tg_rename treino "$old" "$new" 2>/dev/null || true
-# ACESSO segue o rename: troca o login em members/admins de TODAS as orgs (sem isso a conta
-# renomeada ficava órfã de todas — inclusive da implícita — e perdia acesso aos problemas)
-source "$_DIR/lib/orgs.sh"
-orgs_rename_login "$old" "$new" || true
-# INSCRIÇÕES seguem o rename: sem isto a pessoa "sumia" do roster (e do time) de todo contest
-# em que estava inscrita ao trocar de handle. Ver lib/registration.sh.
-source "$_DIR/lib/registration.sh"
-reg_rename_login "$old" "$new" || true
-# CONTESTS COMPARTILHADOS (USERS_FROM=treino): o dir local do participante (history, submissões) segue o
-# nome — sem isto ficava órfão e sumia do placar (lib/users.sh shared_rename_login)
-shared_rename_login treino "$old" "$new" >/dev/null || true
-# PARTICIPAÇÕES VIRTUAIS seguem o rename: o estado mora no dir do usuário (já foi no mv), mas o
-# snapshot publicado fica no contest, chaveado pelo login (lib/virtual.sh)
-source "$_LIBDIR/virtual.sh" 2>/dev/null && vr_rename_login "$old" "$new" || true
-# A POSSE segue o rename (lib/owner-rename.sh): dono de problema, de contest, de coleção e as permissões
-# de criar contest. `owner` CONCEDE acesso — dono apontando p/ login que deixou de existir é posse solta
-# (e os problemas somem de "Meus"). O barato vale JÁ; os metas dos pacotes (1 commit cada) vão destacados.
-source "$_LIBDIR/owner-rename.sh" 2>/dev/null && { owner_rename_fast "$old" "$new" >/dev/null; owner_rename_bg "$old" "$new" "$new"; } || true
-
-# TODAS as sessões do login seguem o novo nome — não só a que pediu a troca. A sessão da outra
-# aba/computador e o token do moj-cli continuavam valendo com o login VELHO: como a conta é um
-# diretório (rename = mv), a próxima submissão por uma dessas sessões recriava o diretório do
-# nome antigo (fantasma sem account.json). Ver rename_contest_sessions em lib/auth.sh.
-nsess="$(rename_contest_sessions treino "$old" "$new")"
 
 flock -u 9
 used2=$(( used + 1 ))

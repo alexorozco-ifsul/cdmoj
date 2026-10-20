@@ -8,6 +8,7 @@ import { apiGet, apiPost, getToken } from '/shared/api.js';
 import { contestLoginHref } from '/shared/contest-guard.js';
 import { el, renderAuthArea } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
+import { requiresText } from '/shared/module-requires.js';
 import { downloadCsv } from '/shared/users-batch.js';
 import { makeStepInicio } from './steps/inicio.js';
 import { makeStepDados } from './steps/dados.js';
@@ -49,13 +50,15 @@ function newDraft(perm) {
     origem: T('em branco', 'blank', 'en blanco'),
     name: '', id: '', mode: 'icpc',
     start: nowEpoch(), end: nowEpoch() + 3 * 3600,
-    // problems: {kind:'bank'|'id', bank_id?|source+problem_id, name, _letter?, _stmt? (texto),
-    //            _stmt_b64?/_stmt_pdf_b64? (herdados de export/template), languages?, _private?, _hasStmt?}
+    // problems: {kind:'bank'|'id', bank_id?|source+problem_id, name ('' = automático), _letter?, _stmt? (texto),
+    //            _stmt_b64?/_stmt_pdf_b64? (herdados de export/template), languages?, _private?, _hasStmt?,
+    //            _title? (o título PT), _titles? ({pt,en,es} quando há tradução: as opções de nome)}
     problems: [],
     userMode: 'own', users: [], usersFrom: 'treino', sharedAck: false,
     admin: { login: me ? (me.endsWith('.admin') ? me : me + '.admin') : '', password: '', fullname: perm.name || '' },
     // opts alimenta o settings-editor (shape do GET /contest/admin/settings + priority do create)
-    opts: { locale: 'pt', login_enabled: true, priority: 'lista-publica' },
+    // sem `priority`: o assistente EXIGE a escolha (TCP 2026 — a prova nasceu lista-publica sem ninguém escolher)
+    opts: { locale: 'pt', login_enabled: true },
     visual: { colors: {}, regions: [], teams_meta: [] },
     // módulos ligados (ids do catálogo) + seções cruas herdadas de template/export (ua_gate,
     // cohorts, rounds…): o wizard não tem editor p/ elas, mas não pode PERDÊ-LAS no create
@@ -95,6 +98,11 @@ function showResult(res) {
     'That is the account that opens the contest ADMIN panel (your ordinary login enters as a competitor).',
     'Con esta cuenta se entra al PANEL de la competencia (tu usuario común entra como competidor).')));
   if (res.users_from) card.append(el('div', { class: 'notice small', style: 'margin:.4rem 0' }, T('Usuários: compartilhados do "', 'Users: shared from "', 'Usuarios: compartidos de "') + res.users_from + T('" (login com a conta do Treino Livre). Para uma prova, converta em contas próprias em Pessoas › Contas — senhas novas, sem volta.', '" (log in with the Free Training account). For an exam, convert them into own accounts in People › Accounts — new passwords, no way back.', '" (inicia sesión con la cuenta de Entrenamiento libre). Para un examen, conviértelas en cuentas propias en Personas › Cuentas — contraseñas nuevas, sin vuelta atrás.')));
+  // módulo que o servidor DESLIGOU na criação por faltar o pré-requisito (hoje só o virtual: o portão precisa do contest
+  // no disco) — o que falta e onde ligar depois (Central › Módulos)
+  (res.modules_skipped || []).forEach((m) => card.append(el('div', { class: 'warn-box', style: 'margin:.4rem 0' },
+    T('Módulo ', 'Module ', 'Módulo '), el('code', {}, m.id), T(' ficou desligado — ', ' was left off — ', ' quedó desactivado — '), requiresText(m),
+    T(' Ligue depois em Central › Módulos.', ' Turn it on later in Central › Modules.', ' Actívalo después en Central › Módulos.'))));
   if (res.users && res.users.length > 1) {
     card.append(el('p', {}, res.users.length + T(' contas criadas. ', ' accounts created. ', ' cuentas creadas. '),
       el('button', { class: 'btn ghost', onclick: () => downloadCsv(res.contest_id + '-credenciais.csv', res.users) }, T('⬇ baixar credenciais (CSV)', '⬇ download credentials (CSV)', '⬇ descargar credenciales (CSV)'))));
@@ -147,6 +155,8 @@ async function boot() {
       catch { return []; }
     },
     buildSpec, applyTemplate, applyExport, submit,
+    // idioma da prova (passo 5) — decide o nome AUTOMÁTICO dos problemas (passo 2 e Revisão)
+    contestLocale: () => (optsValue() || {}).locale || 'pt',
   };
 
   function optsValue() { return ctx.editors.settings ? ctx.editors.settings.getValue() : ctx.draft.opts; }
@@ -159,7 +169,7 @@ async function boot() {
     const teamsV = ctx.editors.teams ? ctx.editors.teams.getValue() : (d.visual.teams_meta || []);
     return {
       id: (d.id || '').trim() || undefined, name: (d.name || '').trim(), mode: d.mode,
-      priority: o.priority || 'lista-publica',
+      ...(o.priority ? { priority: o.priority } : {}),
       start: d.start, end: d.end,
       allow_empty: !!allowEmpty,
       admin: {
@@ -171,7 +181,8 @@ async function boot() {
         : { users: (d.users || []).filter((u) => u.login || u.fullname).map((u) => ({ login: u.login || undefined, password: u.password || undefined, fullname: u.fullname || undefined, email: u.email || undefined })) }),
       problems: (d.problems || []).map((p, i) => ({
         ...(p.bank_id ? { bank_id: p.bank_id } : { source: p.source || 'cdmoj', problem_id: p.problem_id }),
-        name: p.name, letter: p._letter || autoLetter(i),
+        // nome vazio = AUTOMÁTICO: o servidor põe o título no idioma da prova (cc_prob_title)
+        ...((p.name || '').trim() ? { name: p.name.trim() } : {}), letter: p._letter || autoLetter(i),
         ...(p._stmt ? { statement_b64: b64utf8(p._stmt) } : (p._stmt_b64 ? { statement_b64: p._stmt_b64 } : {})),
         ...(p._stmt_pdf_b64 ? { statement_pdf_b64: p._stmt_pdf_b64 } : {}),
         ...((p.languages || []).length ? { languages: p.languages } : {}),
@@ -268,7 +279,8 @@ async function boot() {
   function fromSpecProblem(p) {
     return {
       ...(p.bank_id ? { kind: 'bank', bank_id: p.bank_id } : { kind: 'id', source: p.source || 'cdmoj', problem_id: p.problem_id }),
-      name: p.name || p.bank_id || p.problem_id || '',
+      // sem nome no spec = automático (o servidor decide); nunca o id como nome (virava "org#prob" na sanfona)
+      name: p.name || '',
       _letter: p.letter || '',
       ...(p.statement_b64 ? { _stmt_b64: p.statement_b64 } : {}),
       ...(p.statement_pdf_b64 ? { _stmt_pdf_b64: p.statement_pdf_b64 } : {}),
@@ -282,6 +294,7 @@ async function boot() {
     if (!(d.name || '').trim()) { msg.className = 'small error-box'; msg.textContent = T('Informe o nome (passo 1).', 'Enter the name (step 1).', 'Ingresa el nombre (paso 1).'); return; }
     if (!(d.admin.login || '').trim()) { msg.className = 'small error-box'; msg.textContent = T('Defina o login do admin (passo 4).', 'Set the admin login (step 4).', 'Define el usuario del admin (paso 4).'); return; }
     if (!allowEmpty && !d.problems.length) { msg.className = 'small error-box'; msg.textContent = T('Adicione problemas (passo 2), ou use "Criar vazio".', 'Add problems (step 2), or use "Create empty".', 'Agrega problemas (paso 2), o usa "Crear vacía".'); return; }
+    if (!optsValue().priority) { msg.className = 'small error-box'; msg.textContent = T('Escolha a prioridade no julgamento (passo 5 · Opções): Prova para ICPC/OBI de verdade, Lista para aula/exercício.', 'Choose the judging priority (step 5 · Options): Contest for a real ICPC/OBI contest, List for a class/exercise.', 'Elige la prioridad en la evaluación (paso 5 · Opciones): Competencia para un ICPC/OBI de verdad, Lista para clase/ejercicio.'); return; }
     if (d.userMode === 'shared' && !d.sharedAck) { msg.className = 'small error-box'; msg.textContent = T('Usuários compartilhados (passo 3): leia as consequências e marque "Entendi".', 'Shared users (step 3): read the consequences and tick "I understand".', 'Usuarios compartidos (paso 3): lee las consecuencias y marca "Entendido".'); return; }
     const rbad = ctx.editors.regions && ctx.editors.regions.validate ? ctx.editors.regions.validate() : '';
     if (rbad) { msg.className = 'small error-box'; msg.textContent = T('Sedes (passo 6 · Visual): ', 'Sites (step 6 · Appearance): ', 'Sedes (paso 6 · Apariencia): ') + rbad; return; }

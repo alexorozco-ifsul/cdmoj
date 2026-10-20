@@ -34,11 +34,27 @@ export CONTESTSDIR SCOREDIR   # herdados por sub-processos (ex.: server/score/bu
 : "${MOJ_TZ:=America/Sao_Paulo}"
 export TZ="$MOJ_TZ"
 
+# Diretório do zoneinfo que VALIDA nomes de fuso (testes apontam p/ uma árvore falsa).
+: "${MOJ_ZONEINFO:=/usr/share/zoneinfo}"
+# tz_canon <nome> — ecoa o nome IANA ATUAL do fuso, ou rc 1 se não existe. Aceita o nome ANTIGO
+# (`America/Buenos_Aires`, `Asia/Calcutta`, `Europe/Kiev`): o Chrome os usa até no fuso do próprio
+# navegador, e a imagem (Debian trixie, sem tzdata-legacy) não tem esses arquivos — o mapa antigo→atual
+# vem das linhas `L <atual> <antigo>` do tzdata.zi. Quem grava CONTEST_TZ grava SEMPRE o nome que o
+# zoneinfo da imagem tem (o `date` com nome desconhecido cai mudo em UTC).
+tz_canon(){
+  local v="$1" t
+  [[ "$v" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ ]] || return 1
+  [[ -f "$MOJ_ZONEINFO/$v" ]] && { printf '%s' "$v"; return 0; }
+  [[ -r "$MOJ_ZONEINFO/tzdata.zi" ]] || return 1
+  t="$(awk -v a="$v" '$1 == "L" && $3 == a { print $2; exit }' "$MOJ_ZONEINFO/tzdata.zi" 2>/dev/null)"
+  [[ -n "$t" && "$t" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ && -f "$MOJ_ZONEINFO/$t" ]] || return 1
+  printf '%s' "$t"
+}
 # contest_tz <c> — fuso DO CONTEST (CONTEST_TZ no conf), com fallback p/ o MOJ_TZ.
 # Validado contra o zoneinfo: nome inválido faria `date` cair mudo em UTC.
 contest_tz(){
   local v; v="$( ( CONTEST_TZ=""; source "$CONTESTSDIR/$1/conf" 2>/dev/null; printf '%s' "${CONTEST_TZ:-}" ) )"
-  if [[ -n "$v" && "$v" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ && -f "/usr/share/zoneinfo/$v" ]]
+  if [[ -n "$v" && "$v" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ && -f "$MOJ_ZONEINFO/$v" ]]
     then printf '%s' "$v"; else printf '%s' "$MOJ_TZ"; fi
 }
 # contest_locale_ok <v> — idioma de INTERFACE que um contest pode fixar (LOCALE do conf). Fonte única dos
@@ -62,8 +78,9 @@ fmt_epoch(){
 : "${RUNDIR:=/home/ribas/moj/run}"
 : "${JUDGED_ALIVE_FILE:=$RUNDIR/judged.alive}"
 : "${JUDGED_ALIVE_TTL:=120}"          # s; o daemon re-drena (e bate) a cada WATCH_REDRAIN_SECS=30
+: "${JUDGED_PGREP_PAT:=server/daemons/judged.sh}"   # o teste troca por um padrão impossível p/ simular o daemon morto
 daemon_judged_alive() {
-  pgrep -f 'server/daemons/judged.sh' >/dev/null 2>&1 && return 0
+  pgrep -f "$JUDGED_PGREP_PAT" >/dev/null 2>&1 && return 0
   local m; m="$(stat -c %Y "$JUDGED_ALIVE_FILE" 2>/dev/null)"
   [[ -n "$m" ]] || return 1
   (( EPOCHSECONDS - m <= JUDGED_ALIVE_TTL ))
@@ -191,10 +208,37 @@ resp_cache_store(){
   return 0
 }
 
+# --- NOME de exibição (time, escola) --------------------------------------
+# O placar e o relatório são TXT separados por ':' (desc:asc:flag:username:univ short:team name:…), então
+# um ':' cru no nome desalinharia as colunas. Até 04/10/2026 cada caminho fazia uma coisa (recusava, pulava
+# a linha do lote sem dizer por quê, trocava por espaço — "localhost:6767" virava "localhost 6767" —, ou
+# gravava cru); o TCP 2026 tropeçou nisso. Decisão do Ribas: TODO caminho que grava nome troca ':' por '∶'
+# (U+2236 RATIO — igual na tela, o que o organizador fazia à mão) e avisa. Tab/quebra de linha viram espaço.
+# Senha e email continuam sem ':' (não são exibição). Os bytes do '∶' vão por escape: `$'∶'` depende do
+# locale do bash, e a imagem roda em POSIX.
+NAME_COLON=$'\xe2\x88\xb6'
+# name_clean <var-saída> <texto> — zero fork; NAME_CLEAN_COLON=1 se trocou algum ':' (p/ a resposta avisar)
+name_clean(){
+  local -n _nc_out="$1"; local _nc_s="$2"     # (local com prefixo: o nameref não pode sombrear a var do chamador)
+  NAME_CLEAN_COLON=0; [[ "$_nc_s" == *:* ]] && NAME_CLEAN_COLON=1
+  _nc_s="${_nc_s//:/$NAME_COLON}"; _nc_s="${_nc_s//[$'\t\n\r']/ }"
+  _nc_s="${_nc_s#"${_nc_s%%[! ]*}"}"; _nc_s="${_nc_s%"${_nc_s##*[! ]}"}"
+  _nc_out="$_nc_s"
+}
+# o mesmo, como filtro jq (p/ quem já está num jq): `… | <NAME_CLEAN_JQ>`
+NAME_CLEAN_JQ='gsub(":"; "∶") | gsub("[\t\n\r]"; " ") | gsub("^ +| +$"; "")'
+
 # --- validação / paths ----------------------------------------------------
 valid_id() {  # id seguro (sem traversal). Permite #, @, ., +, -, _ (usados em ids).
   [[ "$1" =~ ^[A-Za-z0-9._@#+-]+$ ]] && [[ "$1" != *..* ]]
 }
+# valid_login <login> — o login de uma conta NOVA (criar ou trocar). É o valid_id (sem `..`) + NÃO começa com `.` nem
+# com `-`: com ponto inicial a conta fica OCULTA de todo glob `*` do store por usuário (listagens, placar, varreduras)
+# e, com `..` no meio, o login (valid_id) a recusa para sempre; com hífen inicial o nome vira OPÇÃO nos comandos dos
+# scripts de manutenção (`mv`, `grep` sem `--`). Relato de 15/10/2026: a troca de login aceitou `.....` (e aceitaria
+# `-rf`/`.x`) e a conta nunca mais entrou. Só p/ login NOVO — buscar/agir em conta existente segue no valid_id (há
+# logins antigos com `#` e `@`).
+valid_login() { valid_id "$1" && [[ "$1" != [.-]* ]]; }
 # safe_src_filename <nome> — normaliza o NOME DE ARQUIVO DA FONTE que o aluno mandou.
 #
 # É ENTRADA HOSTIL e viaja longe: vai no job, o agente do juiz materializa o arquivo com ELE
@@ -232,17 +276,39 @@ require_contest() {  # require_contest <id>
 }
 # carrega o conf do contest em variáveis (CONTEST_NAME, CONTEST_TYPE, PROBS, ...)
 load_contest_conf() { source "$CONTESTSDIR/$1/conf"; }
-# conf_value <contest> <CHAVE> -> valor da 1ª linha `CHAVE=…`, sem aspas, SEM PROCESSO NENHUM.
+# conf_value <contest> <CHAVE> -> valor de `CHAVE=…` como o `source` o veria, SEM PROCESSO NENHUM.
 # O conf é *sourced* em outros caminhos, mas aqui não pode ser (é o caminho de auth: conteúdo de
 # usuário não vira código) — e o par grep|cut custava DOIS processos numa checagem que roda em
 # TODA rota pública de contest. `$(<arquivo)` é caso especial do bash: lê sem forkar.
-conf_value() {
-  local f="$CONTESTSDIR/$1/conf" k="$2=" line v
-  [[ -r "$f" ]] || return 0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ "$line" == "$k"* ]] || continue
-    v="${line#"$k"}"; v="${v//\'/}"; v="${v//\"/}"; printf '%s' "$v"; return 0
-  done < "$f"
+# Fiel ao `source` (auditoria do painel, 03/10/2026):
+#   - a ÚLTIMA linha da chave vence (era a 1ª: um `CONTEST_END=` acrescentado ao fim valia p/ o `source` e não p/
+#     os leitores daqui — webcast, animeitor, trava de sede);
+#   - o escape do `printf %q` sai (`\X` -> `X`): `SCORE_FULL_USERS=alice\ bob` dava "alice\ bob" e só o ÚLTIMO
+#     login recebia o placar completo. Valor `$'…'` (não-ASCII) fica como está.
+conf_value() { local __cv_r; conf_value_to __cv_r "$1" "$2"; printf '%s' "$__cv_r"; return 0; }
+# conf_value_to <var> <contest> <CHAVE> — o MESMO, gravando em <var> (nameref): ZERO fork, nem o subshell do `$(…)`.
+# É o que deixa o `mod_on` (módulo desligado desliga a regra, 03/10/2026) entrar em rota quente.
+conf_value_to() {
+  local -n __cv_ref="$1"
+  local __cv_f="$CONTESTSDIR/$2/conf" __cv_k="$3=" __cv_line __cv_v="" __cv_o __cv_i __cv_c __cv_hit=0
+  __cv_ref=""
+  [[ -r "$__cv_f" ]] || return 0
+  while IFS= read -r __cv_line || [[ -n "$__cv_line" ]]; do
+    [[ "$__cv_line" == "$__cv_k"* ]] || continue
+    __cv_v="${__cv_line#"$__cv_k"}"; __cv_hit=1
+  done < "$__cv_f"
+  (( __cv_hit )) || return 0
+  __cv_v="${__cv_v//\'/}"; __cv_v="${__cv_v//\"/}"
+  if [[ "$__cv_v" == *\\* && "$__cv_v" != \$* ]]; then
+    __cv_o=""
+    for (( __cv_i=0; __cv_i<${#__cv_v}; __cv_i++ )); do
+      __cv_c="${__cv_v:__cv_i:1}"
+      if [[ "$__cv_c" == \\ ]]; then __cv_i=$((__cv_i+1)); __cv_c="${__cv_v:__cv_i:1}"; fi
+      __cv_o+="$__cv_c"
+    done
+    __cv_v="$__cv_o"
+  fi
+  __cv_ref="$__cv_v"
   return 0
 }
 # contest SUPER SECRETO (conf SECRET=1): fora das listagens públicas (home/arquivo/status);
@@ -345,6 +411,30 @@ score_kick_rebuild() {
       </dev/null >/dev/null 2>&1 & ) 2>/dev/null
 }
 
+# score_build_bg <contest> — monta o placar COMPLETO destacado, se ninguém o estiver montando
+# (`flock -n` no MESMO .placar.lock do regen_locked e do judged). É o pré-aquecimento da largada
+# (15/10/2026, ensaio de escrita de 800 times): sem var/placar.txt, o 1º build acontecia no segundo
+# do início, com centenas de times pedindo o placar — e sem cache não há o que servir, então todos
+# esperavam no `regen_locked` (-w 20), os workers do fcgiwrap estacionavam no lock e TODAS as rotas
+# bash (submit, history, fila do staff) esperavam junto (~11 s no ensaio). Chamado pelo ramo
+# PRÉ-INÍCIO do /contest/score e pela varredura pré-início do judged quando o placar não existe.
+# Antes do início só a organização vê o placar completo (a vitrine é outro arquivo), então montá-lo
+# cedo não revela nada. MOJ_JOBS_SYNC=1 = na hora (testes).
+score_build_bg() {
+  local c="$1" cdir="$CONTESTSDIR/$1"
+  if [[ "${MOJ_JOBS_SYNC:-0}" == 1 ]]; then
+    ( exec 9>>"$cdir/var/.placar.lock" && flock -n 9 && bash "$SCOREDIR/build.sh" "$c" >/dev/null 2>&1 ) 2>/dev/null
+    return 0
+  fi
+  # fds dentro do parêntese (lição do setsid sob CGI): o filho não pode herdar o socket.
+  ( setsid bash -c '
+      exec 9>>"$1" 2>/dev/null || exit 0
+      flock -n 9 || exit 0
+      bash "$2" "$3"' _ "$cdir/var/.placar.lock" "$SCOREDIR/build.sh" "$c" \
+      </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  return 0
+}
+
 # --- util -----------------------------------------------------------------
 urldecode() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
 # b64_strip_data_prefix <NOME-da-var> — tira o prefixo data:...;base64, de upload SEM pagar
@@ -407,7 +497,7 @@ audit_log_to() {
   local c="$1" who="${SESSION_LOGIN:-?}" det="${3//$'\t'/ }"
   det="${det//$'\n'/ }"
   valid_id "$c" || return 0
-  mkdir -p "$CONTESTSDIR/$c/var" 2>/dev/null
+  [[ -d "$CONTESTSDIR/$c/var" ]] || mkdir -p "$CONTESTSDIR/$c/var" 2>/dev/null   # o mkdir era um fork por linha de audit
   printf '%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$who" "$2" "$det" \
     >> "$CONTESTSDIR/$c/var/admin-audit.log" 2>/dev/null || true
 }

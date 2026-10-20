@@ -28,7 +28,8 @@ export function makeSettingsTab(CONTEST, opts = {}) {
     // campo novo entra no fim justamente para não deslocar estes índices)
     { label: T('🕒 Identidade e janela', '🕒 Identity and window', '🕒 Identidad y ventana'), idx: [0, 1, 2, 3, 26, 27, 28], open: true },
     { label: T('👁 O que o time vê durante a prova', '👁 What the team sees during the contest', '👁 Lo que el equipo ve durante la competencia'), idx: [5, 6, 7, 8, 9, 10] },
-    { label: T('⚖️ Julgamento (linguagens, pool, veredicto manual)', '⚖️ Judging (languages, pool, manual verdict)', '⚖️ Evaluación (lenguajes, pool, veredicto manual)'), idx: [11, 12, 17, 18, 19, 20, 21, 22] },
+    // 35,36,37 = o bloco da PRIORIDADE no julgamento (01/10/2026), acrescentado no fim do editor
+    { label: T('⚖️ Julgamento (linguagens, pool, veredicto manual)', '⚖️ Judging (languages, pool, manual verdict)', '⚖️ Evaluación (lenguajes, pool, veredicto manual)'), idx: [11, 12, 17, 18, 19, 20, 21, 22, 35, 36, 37] },
     // 29,30,31 = o bloco "balões durante o freeze", também acrescentado no fim do editor
     { label: T('🏅 Placar, freeze e penalidade', '🏅 Scoreboard, freeze and penalty', '🏅 Marcador, congelamiento y penalización'), idx: [13, 16, 23, 24, 25, 29, 30, 31, 32, 33, 34] },
     { label: T('🔒 Acesso ao contest', '🔒 Contest access', '🔒 Acceso a la competencia'), idx: [4, 14, 15] },
@@ -76,7 +77,8 @@ export function makeSettingsTab(CONTEST, opts = {}) {
       save.disabled = true; msg.className = 'small'; msg.textContent = T('Salvando…', 'Saving…', 'Guardando…');
       try {
         await apiPost('/contest/admin/settings?contest=' + enc(CONTEST), v, G);
-        s.secret = v.secret; msg.className = 'small'; msg.textContent = T('✓ salvo', '✓ saved', '✓ guardado');
+        s.secret = v.secret; ed.commit(v);   // o gravado vira a linha de base do editor (próximo Salvar compara com ele)
+        msg.className = 'small'; msg.textContent = T('✓ salvo', '✓ saved', '✓ guardado');
       } catch (e) { msg.className = 'small error-box'; msg.textContent = esqErrorText(e); }   // inclui o 409 do módulo esqueletos
       save.disabled = false;
     });

@@ -10,9 +10,12 @@ export BALLOON_RECONCILE_FLOOR_S=0
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/router.sh"
 FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; trap 'rm -rf "$FIX" "$SESS"' EXIT
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
+# o reconcile de balão da FILA vai destacado no ar (pr_reconcile_balloons_bg); aqui ele roda na hora, p/ a fila
+# já vir com o balão na mesma consulta — o caminho destacado tem teste próprio (smoke-balloon-batch.sh)
+export MOJ_JOBS_SYNC=1
 C="$FIX/bf"; mkdir -p "$C/var" "$C/print-requests"
 NOW="$(date +%s)"; FZ=$((NOW-1800)); PRE=$((NOW-2400)); POS=$((NOW-600))
-printf 'CONTEST_ID=bf\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nFREEZE_TIME=%s\nUSER_STORE=v2\nPROBS=( cdmoj apc#p1 Um A apc#p1 cdmoj apc#p2 Dois B apc#p2 )\n' \
+printf 'CONTEST_ID=bf\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nFREEZE_TIME=%s\nUSER_STORE=v2\nPROBS=( cdmoj apc#p1 Um A apc#p1 cdmoj apc#p2 Dois B apc#p2 )\n' \
   "$((NOW-3600))" "$((NOW+3600))" "$FZ" > "$C/conf"
 fx_user "$C" bf.admin p "Admin"
 fx_user "$C" sede.staff p "Staff"
@@ -42,6 +45,9 @@ ck "contagem só p/ o admin"            '[[ "$(jq -r .balloons_frozen <<<"$BODY"
 call /contest/staff/queue GET '' stf 'contest=bf'
 ck "staff não recebe a contagem"       '[[ "$(jq -r .balloons_frozen <<<"$BODY")" == 0 ]]'
 ck "staff também não vê o balão de B"  '[[ "$(jq -r "[.requests[]|select(.short==\"B\")]|length" <<<"$BODY")" == 0 ]]'
+# a página do staff avisa o congelamento pelo /contest/basic: só a POLÍTICA (booleano), nunca a contagem
+call /contest/basic GET '' stf 'contest=bf'
+ck "basic: balloons_during_freeze=false"  '[[ "$(jq -r .balloons_during_freeze <<<"$BODY")" == false && "$BODY" != *balloons_frozen* ]]'
 
 echo "== impressão NÃO é afetada pelo freeze =="
 call /contest/print POST '{"filename":"sol.c","file_b64":"aW50IG1haW4oKXtyZXR1cm4gMDt9"}' alu 'contest=bf'
@@ -63,6 +69,8 @@ ck "settings expõe o estado"           '[[ "$(jq -r .balloons_during_freeze <<<
 call /contest/admin/settings POST '{"balloons_during_freeze":true}' adm 'contest=bf'
 ck "resposta diz quantos liberou"      '[[ "$(jq -r .balloons_released <<<"$BODY")" == 1 ]]'
 ck "auditado o release"                'grep -q "balloon-freeze-release" "$C/var/admin-audit.log"'
+call /contest/basic GET '' stf 'contest=bf'
+ck "basic: balloons_during_freeze=true"   '[[ "$(jq -r .balloons_during_freeze <<<"$BODY")" == true ]]'
 call /contest/staff/queue GET '' adm 'contest=bf'
 ck "agora o balão de B existe"         '[[ "$(shorts)" == A,B ]]'
 ck "não duplicou o de A"               '[[ "$(jq -r "[.requests[]|select(.kind==\"balloon\")]|length" <<<"$BODY")" == 2 ]]'

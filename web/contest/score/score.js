@@ -7,6 +7,7 @@ import { el, fmtDate, fmtCountdown as fmtLeft } from '/shared/ui.js';
 import { flagManifest, flagName } from '/shared/flags.js';
 import { mountContestUserChip } from '/shared/contest-shell.js';
 import { mountSiteFooter } from '/shared/site-footer.js';
+import { baseOrigin, contestHost } from '/shared/contest-host.js';
 import { parseICPC, renderICPC } from './score-icpc.js';
 // a LÓGICA dos filtros (enriquecer times, casar bandeira/sede/escola) mora em score-filters.js —
 // fonte única com a Participação Virtual; aqui ficam só o ESTADO da página e a barra
@@ -16,6 +17,7 @@ import { parseOBI, renderOBI } from './score-obi.js';
 import { parseGeneric, renderGeneric } from './score-generic.js';
 import { T, setLang, getLang, uiLocale } from '/shared/i18n.js';
 import { navLabel } from '/shared/nav-i18n.js';
+import { serverNow, serverNowMs } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const qs = new URLSearchParams(location.search);
 const CONTEST = (window.__MOJ_CONTEST || qs.get('c') || '');
@@ -27,6 +29,7 @@ let teamsDir = {};       // /contest/teams: login -> {team,univ_short,univ_full,
 let activeCountry = '';
 let activeSchool = '';
 let anonMode = false;       // placar anônimo (agregado, sem desempenho individual)
+let serverAnon = false;     // a API mandou SÓ o agregado (SCORE_ANON, fora da organização): não há o que alternar
 let forcedAnon = false;     // contest força o modo anônimo (não-admin não desliga)
 // região ativa: {name?, regex?} — casa por NOME (== sede do time, /contest/teams) OU regex
 // no login. Persistida como JSON; valor legado (string crua) é tratado como regex.
@@ -80,7 +83,7 @@ function startCountdown() {
   const preLeft = document.getElementById('prestartLeft');
   let wasBefore = false;
   const tick = () => {
-    const now = Math.floor(Date.now() / 1000);
+    const now = serverNow();
     // PRÉ-INÍCIO: o servidor já serve a vitrine (times SEM colunas de problema); aqui é só
     // o aviso + a contagem regressiva até o start. Ao zerar, busca o placar de verdade.
     const toStart = (basic.start_time || 0) - now;
@@ -266,24 +269,34 @@ function updateCount(shown, total, filtered) {
 }
 
 // ---- placar anônimo (agregado: distribuição + quartis, sem nomes) ------------
-function renderAnon(p) {
-  const box = document.getElementById('scoreContainer'); box.innerHTML = '';
-  if (!(p.mode === 'icpc' || p.mode === 'obi')) { box.innerHTML = `<span class="muted">${T('Modo anônimo é só p/ ICPC/OBI.', 'Anonymous mode is ICPC/OBI only.', 'El modo anónimo es solo para ICPC/OBI.')}</span>`; return; }
+// AGREGADO do placar anônimo — o MESMO formato que a API manda a quem não é da organização (var/placar-anon.json,
+// gerado pelo build.sh): {mode, n, supported, problems, per_problem, dist, q}. A organização, que recebe o TXT,
+// calcula o mesmo daqui p/ o "Anônimo" local; quem não é recebe só isto (o corte é na API desde 03/10/2026).
+export function aggregateOf(p) {
+  const supported = p.mode === 'icpc' || p.mode === 'obi';
   const isSolved = p.mode === 'icpc' ? (v) => /^\d+\/\d+\/?\*?$/.test(v || '') : (v) => { const n = parseInt(v, 10); return v !== '' && n > 0; };
-  const teams = p.teams || [];
-  const solves = teams.map((t) => p.probShorts.filter((sn) => isSolved(t.probs[sn])).length);
-  const n = solves.length, sorted = solves.slice().sort((a, b) => b - a);
-  const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(q * n))] : 0);
+  const teams = (p.teams || []).filter((t) => !t.guest);
+  const solves = supported ? teams.map((t) => p.probShorts.filter((sn) => isSolved(t.probs[sn])).length) : [];
+  const n = teams.length, sorted = solves.slice().sort((a, b) => b - a);
+  const at = (q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : 0);
   const dist = {}; solves.forEach((k) => { dist[k] = (dist[k] || 0) + 1; });
-  const probCounts = p.probShorts.map((sn) => ({ sn, c: teams.filter((t) => isSolved(t.probs[sn])).length }));
+  const per = {}; (p.probShorts || []).forEach((sn) => { per[sn] = supported ? teams.filter((t) => isSolved(t.probs[sn])).length : 0; });
+  return { anon: true, mode: p.mode, n, supported, problems: p.probShorts || [], per_problem: per, dist,
+    q: { p25: at(0.25), median: at(0.5), p75: at(0.75), max: sorted[0] || 0 } };
+}
+export function renderAnon(a) {
+  const box = document.getElementById('scoreContainer'); box.innerHTML = '';
+  if (!a.supported) { box.innerHTML = `<span class="muted">${T('Modo anônimo é só p/ ICPC/OBI.', 'Anonymous mode is ICPC/OBI only.', 'El modo anónimo es solo para ICPC/OBI.')}</span>`; return; }
+  const n = a.n || 0, q = a.q || {}, dist = a.dist || {};
+  const probCounts = (a.problems || []).map((sn) => ({ sn, c: (a.per_problem || {})[sn] || 0 }));
   const card = (big, sub) => el('div', { style: 'flex:1;min-width:110px;background:#fff;border:1px solid #e3e9f2;border-radius:10px;padding:.7rem .9rem' },
     el('div', { style: 'font-size:1.7rem;font-weight:800;line-height:1' }, String(big)), el('div', { style: 'color:#64748b;font-size:.82rem' }, sub));
   const bar = (pc) => el('span', { style: 'display:inline-block;height:.7em;background:#1e57c4;border-radius:3px;min-width:2px;vertical-align:middle;width:' + pc + '%' });
   box.append(el('div', { style: 'background:#eef3fb;border-radius:8px;padding:.5rem .7rem;margin-bottom:.6rem;color:#334155' },
     '🔒 ' + T('Placar anônimo — desempenho individual oculto.', 'Anonymous scoreboard — individual performance hidden.', 'Marcador anónimo — desempeño individual oculto.')));
   box.append(el('div', { style: 'display:flex;gap:.8rem;flex-wrap:wrap;margin-bottom:.4rem' },
-    card(n, T('participantes', 'participants', 'participantes')), card('≥' + at(0.25), T('top 25% resolveu', 'top 25% solved', 'top 25% resolvió')),
-    card(at(0.5), T('mediana', 'median', 'mediana')), card('≥' + at(0.75), T('75% resolveu ≥', '75% solved ≥', '75% resolvió ≥')), card(sorted[0] || 0, T('máximo', 'max', 'máximo'))));
+    card(n, T('participantes', 'participants', 'participantes')), card('≥' + (q.p25 || 0), T('top 25% resolveu', 'top 25% solved', 'top 25% resolvió')),
+    card(q.median || 0, T('mediana', 'median', 'mediana')), card('≥' + (q.p75 || 0), T('75% resolveu ≥', '75% solved ≥', '75% resolvió ≥')), card(q.max || 0, T('máximo', 'max', 'máximo'))));
   const dtb = el('tbody');
   Object.keys(dist).map(Number).sort((a, b) => a - b).forEach((k) => {
     const pc = n ? Math.round(dist[k] / n * 100) : 0;
@@ -306,7 +319,7 @@ function reRender() {
   // ficaria um contador mentindo sobre um placar que não mostra times)
   const fb = document.getElementById('scoreFilters');
   if (fb) fb.classList.toggle('hidden', !!anonMode);
-  if (anonMode) { renderAnon(parsed); return; }
+  if (anonMode) { renderAnon(aggregateOf(parsed)); return; }
   const opts = { searchTerm, regionFn: combinedFilterFn(), genPlace, classified,
     showPhotos: !frozenView,   // 📷 só com o placar ABERTO (R4)
     style: (basic && basic.balloon_style) === 'fill' ? 'fill' : 'icon' };
@@ -389,6 +402,16 @@ async function pollScore() {
     txt = r.text;
     frozenView = r.headers.get('X-MOJ-Frozen') === '1';
     setFrozenNotice(frozenView);
+    // PLACAR ANÔNIMO cortado NA API: quem não é da organização recebe só o agregado (JSON), nunca o TXT com nomes
+    if (r.headers.get('X-MOJ-Anon') === '1') {
+      serverAnon = true; anonMode = true; parsed = null;
+      const fb = document.getElementById('scoreFilters'); if (fb) fb.classList.add('hidden');
+      let agg = null; try { agg = JSON.parse(txt); } catch { agg = null; }
+      if (agg) renderAnon(agg);
+      else document.getElementById('scoreContainer').innerHTML = `<span class="muted">${T('Placar ainda não gerado.', 'Scoreboard not generated yet.', 'El marcador aún no se ha generado.')}</span>`;
+      refreshTimer = setTimeout(pollScore, 30000 + Math.random() * 30000);
+      return;
+    }
   }
   catch {
     const box = document.getElementById('scoreContainer');
@@ -442,13 +465,17 @@ async function boot() {
   document.getElementById('contestTitle').textContent = basic.contest_name || 'Contest';
   document.getElementById('backBtn').href = '/contest/?c=' + encodeURIComponent(CONTEST);
   startCountdown();
-  // PARTICIPAÇÃO VIRTUAL: prova encerrada + módulo ligado ⇒ link p/ a página (no site PRINCIPAL:
-  // por subdomínio o token do treino não existe aqui). Conveniência — quem decide é a API de lá.
-  if ((basic.modules || []).includes('virtual') && basic.end_time && Date.now() / 1000 > basic.end_time) {
-    const sub = location.host.toLowerCase().startsWith(String(CONTEST).toLowerCase() + '.');
-    const base = sub ? location.protocol + '//' + location.host.replace(/^[^.]+\./, '') : '';
-    document.getElementById('virtualLink').href = base + '/treino/virtual/?c=' + encodeURIComponent(CONTEST);
-    document.getElementById('virtualNotice').classList.remove('hidden');
+  // PARTICIPAÇÃO VIRTUAL: o link (p/ o site PRINCIPAL: por subdomínio o token do treino não existe aqui) só aparece
+  // quando o PORTÃO deixa — /contest/virtual roda o mesmo vr_load das rotas do virtual. Antes bastava "módulo ligado +
+  // prova encerrada" e o link aparecia num contest com problema privado (07/10/2026). Só pergunta quando pode dar
+  // certo (módulo ligado, prova encerrada), e não segura o placar: roda à parte.
+  if ((basic.modules || []).includes('virtual') && basic.end_time && serverNowMs() / 1000 > basic.end_time) {
+    apiGet('/contest/virtual?contest=' + encodeURIComponent(CONTEST), {}).then((v) => {
+      if (!v || v.available !== true) return;
+      // o virtual mora no site principal (sessão do treino): no subdomínio, o link sobe p/ ele
+      document.getElementById('virtualLink').href = (contestHost() ? baseOrigin() : '') + '/treino/virtual/?c=' + encodeURIComponent(CONTEST);
+      document.getElementById('virtualNotice').classList.remove('hidden');
+    }).catch(() => {});
   }
 
   const st = await status(CONTEST);
@@ -484,7 +511,7 @@ async function boot() {
   // modo anônimo: forçado pelo contest (não-admin não desliga) ou alternável localmente
   forcedAnon = !!(basic && basic.score_anon);
   anonMode = forcedAnon || localStorage.getItem('moj_score_anon_' + CONTEST) === '1';
-  if (!(forcedAnon && !st.is_admin)) {
+  if (!(forcedAnon && !st.is_admin) && !serverAnon) {
     const cb = el('input', { type: 'checkbox' }); cb.checked = anonMode;
     cb.addEventListener('change', () => { anonMode = cb.checked; localStorage.setItem('moj_score_anon_' + CONTEST, cb.checked ? '1' : '0'); reRender(); });
     document.getElementById('noAnim').parentNode.parentNode.append(

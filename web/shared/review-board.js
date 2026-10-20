@@ -9,9 +9,10 @@ import { el } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { logLink, srcLink } from '/shared/submission-links.js';
 import { pokeChiefAlert } from '/shared/chief-alert.js';
+import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const enc = encodeURIComponent;
-const nowE = () => Math.floor(Date.now() / 1000);
+const nowE = () => serverNow();
 const fmtS = (s) => { s = Math.max(0, Math.round(+s || 0)); if (s < 60) return s + 's'; const m = Math.floor(s / 60); return m < 60 ? m + 'min' : Math.floor(m / 60) + 'h' + (m % 60 ? (m % 60) + 'min' : ''); };
 const STATUS = () => ({
   open: T('🕓 não avaliada', '🕓 not evaluated', '🕓 no evaluado'), claimed: T('👀 em avaliação', '👀 under evaluation', '👀 en evaluación'), voting: T('1️⃣ aguarda 2º voto', '1️⃣ awaiting 2nd vote', '1️⃣ espera 2º voto'),
@@ -106,7 +107,7 @@ export function makeReviewBoard({ contest }) {
           el('th', {}, T('Ver', 'View', 'Ver')), el('th', {}, T('Ação', 'Action', 'Acción')))), tb)));
     }
     listBox.append(el('p', { class: 'small muted', style: 'margin:.4rem 0 0' },
-      T('Para avaliar como juiz (pegar + votar, fluxo dos 2 votos): ', 'To evaluate as a judge (take + vote, the 2-vote flow): ', 'Para evaluar como juez (reservar + votar, el flujo de 2 votos): '),
+      T('Para avaliar como juiz (pegar + votar; quantos juízes validam cada veredicto está nas Regras): ', 'To evaluate as a judge (take + vote; how many judges validate each verdict is in Rules): ', 'Para evaluar como juez (reservar + votar; cuántos jueces validan cada veredicto está en Reglas): '),
       el('a', { href: '/contest/judge/?c=' + enc(contest) }, T('área de avaliação →', 'evaluation area →', 'área de evaluación →'))));
   }
 

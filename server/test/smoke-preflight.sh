@@ -91,6 +91,7 @@ run(){ OUT="$(PATH_INFO="/contest/admin/preflight" REQUEST_METHOD=GET QUERY_STRI
   BODY="$(printf '%s' "$OUT" | awk 'f{print} /^\r?$/{f=1}')"; i18n_scan; }
 lvl(){ printf '%s' "$BODY" | jq -r --arg i "$1" 'first(.checks[]|select(.id==$i)|.level) // "(ausente)"'; }
 det(){ printf '%s' "$BODY" | jq -r --arg i "$1" 'first(.checks[]|select(.id==$i)|.detail) // ""'; }
+lbl(){ printf '%s' "$BODY" | jq -r --arg i "$1" 'first(.checks[]|select(.id==$i)|.label) // ""'; }
 
 run
 echo "== resposta =="
@@ -131,6 +132,9 @@ check "detalhe conta quem ficou fora"  '[[ "$(det ua_gate)" == *"1 sem regra"* ]
 jq -c '.mode="off"' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"; run
 check "mode:off => ok"                 '[[ "$(lvl ua_gate)" == ok ]]'
 check "mode:off => sessão única nem aparece" '[[ "$(lvl session_single)" == "(ausente)" ]]'
+jq -c '.mode="observe" | .from_login.regex="^team([a-z]{6})[0-9]{3}$" | .from_login.expect="\\1"' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"; run
+check "mode:observe => ok com linha própria"  '[[ "$(lvl ua_gate)" == ok && "$(lbl ua_gate)" == *OBSERVAR* && "$(det ua_gate)" == *"ninguém é barrado"* ]]'
+check "observe: sessão única diz que não vale" '[[ "$(lbl session_single)" == *"só no modo Barrar"* ]]'
 
 echo "== sessão única por time (com gate ligado) =="
 jq -c '.mode="enforce" | .from_login.regex="^team([a-z]{6})[0-9]{3}$" | .from_login.expect="\\1"' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"; run
@@ -141,7 +145,7 @@ check "trava ligada => ok (0 IPs presos)"      '[[ "$(lvl site_lock)" == ok && "
 sed -i '/^SITE_LOCK=/d' "$C/conf"; run
 jq -c '.single_session=false' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"; run
 check "single_session:false => warn"   '[[ "$(lvl session_single)" == warn ]]'
-check "detalhe aponta o painel"        '[[ "$(det session_single)" == *"Sessões & anomalias"* ]]'
+check "detalhe aponta o painel"        '[[ "$(det session_single)" == *"Máquinas › Anomalias"* && "$(det session_single)" == *"Máquinas › Gate & trava"* ]]'
 jq -c 'del(.single_session)' "$C/ua-gate.json" > "$C/x" && mv "$C/x" "$C/ua-gate.json"; run
 
 echo "== sede com menos máquinas que times (nutellaboot) =="
@@ -171,6 +175,19 @@ check "detalhe diz 'só visíveis'"        '[[ "$(det docs)" == *"só visíveis"
 printf '{"published":["times.pt"]}' > "$C/docs/config.json"; run
 check "publicado => ok"                  '[[ "$(lvl docs)" == ok ]]'
 
+echo "== sem aviso eterno (03/10/2026): sem freeze e contas compartilhadas só avisam numa PROVA =="
+_fzb="$(grep '^FREEZE_TIME=' "$C/conf")"; sed -i '/^FREEZE_TIME=/d; /^CONTEST_PRIORITY=/d' "$C/conf"; printf 'CONTEST_PRIORITY=lista-publica\n' >> "$C/conf"; run
+check "lista sem freeze: ok (não é aviso eterno)" '[[ "$(lvl freeze)" == ok ]]'
+sed -i 's/^CONTEST_PRIORITY=.*/CONTEST_PRIORITY=prova/' "$C/conf"; run
+check "prova ICPC sem freeze: warn" '[[ "$(lvl freeze)" == warn ]]'
+sed -i '/^CONTEST_PRIORITY=/d' "$C/conf"; [[ -n "$_fzb" ]] && printf '%s\n' "$_fzb" >> "$C/conf"; run
+
+echo "== classificação (destino da Central sem checagem até 03/10/2026) =="
+check "módulo ligado sem estágio => warn" '[[ "$(lvl classificacao)" == warn ]]'
+printf '{"version":1,"stages":[{"id":"final-br","status":"published"},{"id":"pda","status":"draft"}]}' > "$C/classification.json"; run
+check "1 de 2 publicado com a prova no ar => ok" '[[ "$(lvl classificacao)" == ok && "$(det classificacao)" == *"1 publicado"* ]]'
+rm -f "$C/classification.json"
+
 echo "== prorrogação × freeze =="
 printf '[{"regex":"^teambrspso","end":%s,"reason":"queda de energia"}]' "$((NOW+7200))" > "$C/time-overrides.json"; run
 check "prorrogação ativa => warn"          '[[ "$(lvl tov)" == warn ]]'
@@ -183,9 +200,13 @@ printf 'BALLOONS_DURING_FREEZE=1\n' >> "$C/conf"; run
 check "permissão ligada => warn"           '[[ "$(lvl balloons_freeze)" == warn ]]'
 sed -i '/^BALLOONS_DURING_FREEZE=/d' "$C/conf"; run
 
-echo "== gate sem NENHUMA configuração = desligado (não é fail falso) =="
+echo "== gate sem NENHUMA configuração: aviso (nada decidido), nunca fail falso =="
 mv "$C/ua-gate.json" "$C/ua-gate.json.bak"; run
-check "sem ua-gate.json => ok"           '[[ "$(lvl ua_gate)" == ok ]]'
+# TCP 2026: módulo maquinas ligado e nenhuma regra gravada = AVISO (o painel dizia "ativo"); Desligado gravado = ok
+check "sem ua-gate.json (maquinas ligado) => warn" '[[ "$(lvl ua_gate)" == warn && "$(det ua_gate)" == *"Observar"* ]]'
+printf '{"mode":"off"}' > "$C/ua-gate.json"; run
+check "Desligado GRAVADO => ok (escolha)"  '[[ "$(lvl ua_gate)" == ok ]]'
+rm -f "$C/ua-gate.json"
 mv "$C/ua-gate.json.bak" "$C/ua-gate.json"; run
 
 echo "== inscrição (roster + janela) =="
@@ -204,6 +225,11 @@ rm -f "$C/registrations.json"
 echo "== módulos (lib/modules.sh): checagem só com o módulo ligado =="
 run
 check "todos ligados => modules ok lista os ids" '[[ "$(lvl modules)" == ok && "$(det modules)" == *"coortes"* ]]'
+# PRÉ-REQUISITO (mod_requires_ok): o fixture tem contas PRÓPRIAS e inscricoes ligado — o legado de produção (07/10/2026)
+check "inscricoes sem USERS_FROM => modules_requires warn" '[[ "$(lvl modules_requires)" == warn && "$(det modules_requires)" == *"inscricoes"* ]]'
+printf 'USERS_FROM=treino\n' >> "$C/conf"; run
+check "com USERS_FROM => sem modules_requires"            '[[ "$(lvl modules_requires)" == "(ausente)" ]]'
+sed -i '/^USERS_FROM=/d' "$C/conf"; run
 sed -i 's/^CONTEST_MODULES=.*/CONTEST_MODULES=sedes,maquinas,rodadas,documentos,baloes,inscricoes,telao,classificacao/' "$C/conf"; run
 check "coortes DESLIGADO com cohorts.json => modules warn cita coortes" '[[ "$(lvl modules)" == warn && "$(det modules)" == *"coortes (cohorts.json)"* ]]'
 check "coortes desligado => checagem cohorts OMITIDA"                   '[[ "$(lvl cohorts)" == "(ausente)" ]]'
@@ -217,26 +243,55 @@ echo "== problema PARALELO (CPUNEEDED>1) × largura dos juízes (judges_cpus) ==
 # o json servível do banco leva cpu_needed/same_numa (gen-problem-json.sh); o juiz NOVO manda slot_cpus
 mkdir -p "$FIX/treino/var/jsons"
 printf '{"id":"col#p0","title":"P0","cpu_needed":4,"same_numa":false,"public":true}' > "$FIX/treino/var/jsons/col#p0.json"
-jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:2,free_slots:2,slot_cpus:1,slots_by_node:{"0":2}}' > "$REG/j1.json"
+jq -cn --argjson now "$EPOCHSECONDS" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:2,free_slots:2,slot_cpus:1,slots_by_node:{"0":2}}' > "$REG/j1.json"
 run
 check "juiz com 2 slots×1 cpu p/ um problema de 4 CPUs => warn" '[[ "$(lvl judges_cpus)" == warn && "$(det judges_cpus)" == *"A(4 CPUs)"* ]]'
-jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8,slot_cpus:1,slots_by_node:{"0":3,"1":5}}' > "$REG/j1.json"
+jq -cn --argjson now "$EPOCHSECONDS" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8,slot_cpus:1,slots_by_node:{"0":3,"1":5}}' > "$REG/j1.json"
 run
 check "juiz com 8 slots => ok"                                     '[[ "$(lvl judges_cpus)" == ok && "$(det judges_cpus)" == *"A"* ]]'
 printf '{"id":"col#p0","title":"P0","cpu_needed":4,"same_numa":true,"public":true}' > "$FIX/treino/var/jsons/col#p0.json"
-jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:6,free_slots:6,slot_cpus:1,slots_by_node:{"0":3,"1":3}}' > "$REG/j1.json"
+jq -cn --argjson now "$EPOCHSECONDS" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:6,free_slots:6,slot_cpus:1,slots_by_node:{"0":3,"1":3}}' > "$REG/j1.json"
 run
 check "SAMENUMA com nós de 3: warn cita NUMA"                       '[[ "$(lvl judges_cpus)" == warn && "$(det judges_cpus)" == *"NUMA"* ]]'
-jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8}' > "$REG/j1.json"
+jq -cn --argjson now "$EPOCHSECONDS" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8}' > "$REG/j1.json"
 run
 check "juiz ANTIGO (sem slot_cpus) não conta => warn"               '[[ "$(lvl judges_cpus)" == warn ]]'
 printf 'CONTEST_JUDGES=j2\n' >> "$C/conf"
-jq -cn --argjson now "$NOW" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8,slot_cpus:1,slots_by_node:{"0":8}}' > "$REG/j1.json"
+jq -cn --argjson now "$EPOCHSECONDS" '{host:"j1",last_seen:$now,langs:["c"],problems:{},total_slots:8,free_slots:8,slot_cpus:1,slots_by_node:{"0":8}}' > "$REG/j1.json"
 run
 check "pool do contest (j2) sem o juiz capaz (j1) => warn"          '[[ "$(lvl judges_cpus)" == warn ]]'
 sed -i '/^CONTEST_JUDGES=/d' "$C/conf"; rm -f "$FIX/treino/var/jsons/col#p0.json"
 run
 check "sem problema paralelo => checagem ausente (sem ruído)"       '[[ "$(lvl judges_cpus)" == "(ausente)" ]]'
+
+echo "== parar no 1º erro (prova ICPC; TCP 2026: o G com 214 testes levava 4 min por TLE) =="
+run
+check "json sem stop_when (antigo) => checagem ausente" '[[ "$(lvl stop_first)" == "(ausente)" ]]'
+printf '{"id":"col#p0","title":"P0","public":true,"stop_when":{"wa":true,"tle":false,"re":true},"tests":214}' > "$FIX/treino/var/jsons/col#p0.json"
+run
+check "segue após TLE => warn com a letra, os testes e o que falta" '[[ "$(lvl stop_first)" == warn && "$(det stop_first)" == *"A(214 testes, segue após TLE)"* ]]'
+check "e em inglês"                                     '[[ "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"stop_first\")|.detail_en)")" == *"A(214 tests, keeps going after TLE)"* ]]'
+printf '{"id":"col#p0","title":"P0","public":true,"stop_when":{"wa":true,"tle":true,"re":true},"tests":214}' > "$FIX/treino/var/jsons/col#p0.json"
+run
+check "para no 1º erro => ok"                           '[[ "$(lvl stop_first)" == ok ]]'
+sed -i 's/^CONTEST_TYPE=.*/CONTEST_TYPE=obi/' "$C/conf"; printf '{"id":"col#p0","title":"P0","public":true,"stop_when":{"wa":false,"tle":false,"re":false},"tests":9}' > "$FIX/treino/var/jsons/col#p0.json"
+run
+check "modo obi (pontua por teste) => checagem ausente" '[[ "$(lvl stop_first)" == "(ausente)" ]]'
+sed -i 's/^CONTEST_TYPE=.*/CONTEST_TYPE=icpc/' "$C/conf"; rm -f "$FIX/treino/var/jsons/col#p0.json"
+
+echo "== daemon de julgamento (auditoria 03/10/2026: spool vazio + daemon morto saía verde) =="
+JUDGED_PGREP_PAT='nao-existe-processo-assim-xyz' JUDGED_ALIVE_FILE="$FIX/sem-heartbeat" run
+check "daemon morto (sem processo, sem heartbeat) => fail" '[[ "$(lvl daemon)" == fail ]]'
+touch "$FIX/heartbeat"; JUDGED_PGREP_PAT='nao-existe-processo-assim-xyz' JUDGED_ALIVE_FILE="$FIX/heartbeat" run
+check "heartbeat fresco => não é fail" '[[ "$(lvl daemon)" != fail ]]'
+
+echo "== nome do problema × idioma da prova (prob_names, 03/10/2026; TCP 2026: LOCALE=es com os nomes em PT) =="
+printf '{"id":"col#p0","title":"Prob A","public":true,"statements":{"es":{"title":"Problema A en ES"}}}' > "$FIX/treino/var/jsons/col#p0.json"
+run
+check "contest em PT com o nome = título PT => sem aviso" '[[ "$(lvl prob_names)" == "(ausente)" ]]'
+printf 'LOCALE=es\n' >> "$C/conf"; run
+check "LOCALE=es e o nome é o título PT => warn com o botão apply_titles" '[[ "$(lvl prob_names)" == warn && "$(det prob_names)" == *"A Prob A → Problema A en ES"* && "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"prob_names\")|.action)")" == apply_titles ]]'
+sed -i '/^LOCALE=/d' "$C/conf"; rm -f "$FIX/treino/var/jsons/col#p0.json"
 
 echo "== telão (Animeitor): chave e conferência =="
 run
@@ -252,8 +307,54 @@ jq -cn --argjson t "$NOW" '{at:$t, state:"diverge", ok:false, final:false, missi
 check "última conferência com divergência => warn com as contagens" '[[ "$(lvl telao)" == warn && "$(det telao)" == *"2 faltando, 0 diferentes, 1 a mais"* ]]'
 jq -cn --argjson t "$NOW" '{at:$t, state:"ok", ok:true, final:true, final_at:$t}' > "$C/var/animeitor-verify.json"; run
 check "conferência final => ok \"Telão validado\""                 '[[ "$(lvl telao)" == ok && "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"telao\")|.label)")" == "Telão validado" ]]'
+jq -cn --argjson t "$NOW" '{at:$t, state:"no_sites", ok:false, final:false}' > "$C/var/animeitor-verify.json"; run
+check "conferência sem sede nenhuma => warn (era verde)"            '[[ "$(lvl telao)" == warn && "$(det telao)" == *"não achou sede"* ]]'
+check "…com o atalho p/ a mesa do telão"                            '[[ "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"telao\")|.action)")" == open_telao ]]'
+rm -f "$C/var/animeitor-verify.json"
+echo "== reveleitor: placares e sedes (telao_sites; TCP 2026 — esqueceram a sede Geral) =="
+run
+check "proposta (sem config) e nada publicado => ok, configurado com resultado geral" '[[ "$(lvl telao_sites)" == ok && "$(det telao_sites)" == *"ainda não publicado"* ]]'
+GB='{"name":"Geral","source":{"kind":"view","id":"public"},"codes":null'
+printf '{"contests":[%s,"sites":[{"name":"Sede A","source":{"kind":"region","id":"Sede A"},"codes":null}]}]}' "$GB" > "$C/animeitor.json"; run
+check "config gravada sem a sede de todos os times => warn com o placar" '[[ "$(lvl telao_sites)" == warn && "$(det telao_sites)" == *"placar Geral"* && "$(det telao_sites)" == *"+ sede Geral"* ]]'
+printf '{"contests":[%s,"sites":[{"name":"Geral","source":{"kind":"whole","id":"public"},"codes":null},{"name":"Sede A","source":{"kind":"region","id":"Sede A"},"codes":null}]}]}' "$GB" > "$C/animeitor.json"
+jq -cn '{event:"ev", event_hash:"h", contests:{Geral:{hash:"x", sites:{"Sede A":"y"}}}}' > "$C/var/animeitor-managed.json"; run
+check "config certa mas o publicado (managed) é antigo, sem a Geral => warn publique de novo" '[[ "$(lvl telao_sites)" == warn && "$(det telao_sites)" == *"publique de novo"* ]]'
+jq -cn '{event:"ev", event_hash:"h", contests:{Geral:{hash:"x", sites:{"Geral":"z","Sede A":"y"}}}}' > "$C/var/animeitor-managed.json"; run
+check "publicado com a Geral => ok com as contagens do reveleitor" '[[ "$(lvl telao_sites)" == ok && "$(det telao_sites)" == *"1 placar(es) e 2 sede(s)"* ]]'
+printf '{"contests":[%s,"sites":[{"name":"Geral","source":{"kind":"whole","id":"public"},"codes":null},{"name":"Vazia","source":{"kind":"manual","id":""},"codes":[]}]}]}' "$GB" > "$C/animeitor.json"; run
+check "sede com regex vazia na config antiga => warn sem times" '[[ "$(lvl telao_sites)" == warn && "$(det telao_sites)" == *"Geral › Vazia"* ]]'
+rm -f "$C/animeitor.json" "$C/var/animeitor-managed.json"
 sed -i 's/,telao,/,/' "$C/conf"; run
-check "módulo telao desligado => checagem ausente"                   '[[ "$(lvl telao)" == "(ausente)" ]]'
+check "módulo telao desligado => checagem ausente"                   '[[ "$(lvl telao)" == "(ausente)" && "$(lvl telao_sites)" == "(ausente)" ]]'
+
+echo "== abertura do login × janela da rodada ativa (login_open; TCP 2026) =="
+run
+check "sem abertura própria => ok (entra no início)"           '[[ "$(lvl login_open)" == ok && "$(det login_open)" == *"a partir do início"* ]]'
+printf 'LOGIN_START_TIME=%s\n' "$((NOW-4200))" >> "$C/conf"; run
+check "abre 10 min antes do início => ok com os minutos"       '[[ "$(lvl login_open)" == ok && "$(det login_open)" == *"10 min antes do início"* ]]'
+sed -i '/^LOGIN_START_TIME=/d' "$C/conf"; printf 'LOGIN_START_TIME=%s\n' "$((NOW-1800))" >> "$C/conf"; run
+check "abre DEPOIS do início => warn (perdem o começo)"         '[[ "$(lvl login_open)" == warn && "$(det login_open)" == *"30 min depois do início"* && "$(det login_open)" == *"Trocar de rodada"* ]]'
+sed -i '/^LOGIN_START_TIME=/d' "$C/conf"; printf 'LOGIN_START_TIME=%s\n' "$((NOW+4200))" >> "$C/conf"; run
+check "abre DEPOIS do fim (o caso do warmup) => fail"           '[[ "$(lvl login_open)" == fail && "$(det login_open)" == *"NENHUM time entra"* ]]'
+printf 'LOGIN_ENABLED=n\n' >> "$C/conf"; run
+check "login desligado em Regras => warn (vence a abertura)"   '[[ "$(lvl login_open)" == warn && "$(det login_open)" == *"nenhum time entra"* ]]'
+sed -i '/^LOGIN_START_TIME=/d; /^LOGIN_ENABLED=/d' "$C/conf"
+cp "$C/conf" "$FIX/conf.bak"; sed -i "s/^CONTEST_START=.*/CONTEST_START=$((NOW-7200))/; s/^CONTEST_END=.*/CONTEST_END=$((NOW-3600))/" "$C/conf"
+printf 'LOGIN_START_TIME=%s\n' "$((NOW+4200))" >> "$C/conf"; run
+check "rodada já encerrada => sem o item (nada a avisar)"      '[[ "$(lvl login_open)" == "(ausente)" ]]'
+cp "$FIX/conf.bak" "$C/conf"
+
+echo "== envios na fila: a PRIORIDADE decide o teto (submit_cap) =="
+run
+check "icpc SEM prioridade (nunca escolhida) => warn com o teto 3"  '[[ "$(lvl submit_cap)" == warn && "$(det submit_cap)" == *"no máximo 3 envios"* && "$(det submit_cap)" == *"prioridade Prova em Regras"* ]]'
+printf 'CONTEST_PRIORITY=lista-publica\n' >> "$C/conf"; run
+check "lista-publica explícita => ok (configuração deliberada)"   '[[ "$(lvl submit_cap)" == ok && "$(det submit_cap)" == *"no máximo 3 envios"* ]]'
+printf 'SUBMIT_MAX_INFLIGHT=0\n' >> "$C/conf"; run
+check "SUBMIT_MAX_INFLIGHT=0 => ok sem teto"                       '[[ "$(lvl submit_cap)" == ok && "$(det submit_cap)" == *"SUBMIT_MAX_INFLIGHT=0"* ]]'
+sed -i '/^CONTEST_PRIORITY=/d; /^SUBMIT_MAX_INFLIGHT=/d' "$C/conf"; printf 'CONTEST_PRIORITY=prova\n' >> "$C/conf"; run
+check "prova => ok sem teto, menos prioridade a partir do 6º"      '[[ "$(lvl submit_cap)" == ok && "$(det submit_cap)" == *"6º"* ]]'
+sed -i '/^CONTEST_PRIORITY=/d' "$C/conf"
 
 echo "== trilíngue: todo item de toda execução acima leva en + es (sem português) =="
 I18N_NSEEN="$(tr ' ' '\n' <<<"$I18N_SEEN" | sed '/^$/d' | sort -u | wc -l)"

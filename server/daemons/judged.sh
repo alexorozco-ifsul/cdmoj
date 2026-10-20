@@ -274,7 +274,29 @@ intake_enqueue() {
     record_verdict "$contest" "$login" "$EPOCHSECONDS" "$problem" "$lang" "Judge Error" "$EPOCHSECONDS" "$id"
     schedule_score_rebuild "$contest"; return 1
   fi
-  q_enqueue "$id" "$prio" "$job"
+  q_enqueue "$id" "$prio" "$job" "$(deprio_delay "$contest" "$id" "$login" "$prio")"
+}
+
+# deprio_delay <contest> <id> <login> <prio> -> atraso (s) do job na fila. PROVA não tem teto de envios (o teto
+# é do treino e das listas, no /submit); em troca, o time com MUITAS pendentes perde prioridade (01/10/2026):
+# com mais de SUBMIT_DEPRIO_PENDING (5) envios esperando o juiz — a linha deste já está no history, o /submit a
+# grava antes de responder, então é "a partir do 6º"; conta só até a linha DESTE envio, então um spool represado
+# não adianta os cinco primeiros —, o job entra na MESMA banda como se tivesse chegado
+# SUBMIT_DEPRIO_DELAY (120) s depois. Conforme os veredictos saem, o próximo volta ao normal (conta a cada envio).
+# SUBMIT_DEPRIO_PENDING=0 desliga. Gêmeo em Python: deprio_delay() do daemons/spool-drain.py.
+deprio_delay() {
+  local contest="$1" id="$2" login="$3" prio="$4" lim dl n
+  case "$prio" in prova|super) ;; *) echo 0; return;; esac
+  lim="${SUBMIT_DEPRIO_PENDING:-5}"; lim="${lim//[^0-9]/}"; lim="${lim:-5}"
+  dl="${SUBMIT_DEPRIO_DELAY:-120}"; dl="${dl//[^0-9]/}"; dl="${dl:-120}"
+  (( lim > 0 && dl > 0 )) || { echo 0; return; }
+  n="$(user_queue_pending "$contest" "$login" "$id")"; n="${n//[^0-9]/}"; n="${n:-0}"
+  if (( n > lim )); then
+    log "deprio id=$id contest=$contest login=$login pendentes=$n atraso=${dl}s"
+    clog "$contest" envio-deprio "id=$id login=$login pendentes=$n atraso=${dl}s"
+    echo "$dl"; return
+  fi
+  echo 0
 }
 
 # ===== Veredicto MANUAL (.judge): segura o veredicto computado p/ revisão de 2 juízes ======
@@ -753,6 +775,74 @@ spool_done_gc() {
   return 0
 }
 
+# --- AQUECIMENTO AUTOMÁTICO antes do início (TCP 2026, 03/10/2026) -------------------------------------
+# A oficial começou com juízes FRIOS (problema que um juiz nunca calibrou espera a calibração na 1ª submissão) e o
+# organizador não achou o botão. ~WARM_LEAD_S antes do CONTEST_START (default 15 min) o shard 0 dispara o
+# bin/warm-judges.sh (o MESMO núcleo do botão, jw_warm) UMA vez por início (carimbo var/.warm-prestart = o epoch
+# do início; rodada nova = início novo = aquece de novo). SÓ contest de PROVA (CONTEST_PRIORITY prova/super). Custo: UM `grep` sobre todos os confs a cada
+# WARM_SWEEP_EVERY_S — nunca um processo por contest (a lição do reconciliador). AUTO_WARM_JUDGES=0 desliga.
+: "${WARM_LEAD_S:=900}"
+: "${WARM_SWEEP_EVERY_S:=120}"
+_WARM_LAST=0
+WARM_SH="$SERVER_DIR/bin/warm-judges.sh"
+# _warm_priority_ok <c> — o contest é PROVA (CONTEST_PRIORITY prova ou super)? Leitura BUILTIN do conf, como o
+# contest_is_demo (o daemon não carrega o common.sh); ausente = lista-publica = não.
+_warm_priority_ok() {
+  local f="$CONTESTSDIR/$1/conf" line v=""
+  [[ -r "$f" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == CONTEST_PRIORITY=* ]] && { v="${line#CONTEST_PRIORITY=}"; v="${v//[\'\"]/}"; }
+  done < "$f"
+  [[ "$v" == prova || "$v" == super ]]
+}
+prestart_warm_sweep() {
+  [[ "${AUTO_WARM_JUDGES:-1}" == 0 ]] && return 0
+  [[ "${JUDGED_SHARD:-0}" == 0 && -f "$WARM_SH" ]] || return 0
+  local now="$EPOCHSECONDS" line f c v st
+  (( now - _WARM_LAST >= WARM_SWEEP_EVERY_S )) || return 0
+  _WARM_LAST="$now"
+  while IFS= read -r line; do
+    f="${line%%:CONTEST_START=*}"; v="${line#*:CONTEST_START=}"; v="${v//[^0-9]/}"
+    [[ -n "$v" ]] || continue
+    (( v > now && v - now <= WARM_LEAD_S )) || continue
+    c="${f%/conf}"; c="${c##*/}"
+    valid_contest_id "$c" || continue
+    # o placar COMPLETO montado ANTES da largada (15/10/2026, ensaio de 800 times): sem ele o 1º build
+    # acontece no segundo do início, com todos pedindo o placar — e sem cache não há o que servir (ver
+    # score_build_bg na common.sh). Vale p/ todo contest que começa em breve, DEMO e lista inclusive.
+    if [[ ! -s "$CONTESTSDIR/$c/var/placar.txt" ]]; then
+      if [[ -n "${_WARM_SYNC:-}" ]]; then bash "$SCORE_BUILD" "$c" </dev/null >/dev/null 2>&1   # --prestart-warm
+      else schedule_score_rebuild "$c"; fi
+    fi
+    st=""; [[ -f "$CONTESTSDIR/$c/var/.warm-prestart" ]] && read -r st < "$CONTESTSDIR/$c/var/.warm-prestart"
+    [[ "$st" == "$v" ]] && continue
+    contest_is_demo "$c" && continue
+    # SÓ PROVA (decisão do Ribas, 03/10/2026): lista de aula fica com o botão — dez listas às 8h mandariam uma
+    # calibração por par juiz×problema de todas elas às 7h45, cada uma ocupando um slot
+    _warm_priority_ok "$c" || continue
+    mkdir -p "$CONTESTSDIR/$c/var" 2>/dev/null
+    printf '%s\n' "$v" > "$CONTESTSDIR/$c/var/.warm-prestart" 2>/dev/null || continue
+    log "aquecimento automático: $c começa em $(( (v - now) / 60 )) min — aquecendo os juízes"
+    if [[ -n "${_WARM_SYNC:-}" ]]; then bash "$WARM_SH" "$c" auto-inicio </dev/null >>"$RUNDIR/warm-judges.log" 2>&1
+    else ( bash "$WARM_SH" "$c" auto-inicio </dev/null >>"$RUNDIR/warm-judges.log" 2>&1 & ) 2>/dev/null; fi
+  done < <(grep -H -m1 '^CONTEST_START=' "$CONTESTSDIR"/*/conf 2>/dev/null)
+}
+
+# _recon_pending <c> -> _RPN (nº de pendentes do contest), pela MESMA regra de cache do count_pending
+# (lib/users.sh: var/.pending-count vale enquanto var/.score-dirty não for mais novo), mas por builtins:
+# cache válido = um `read`; sem users/ = 0; só o cache sujo/ausente paga o count_pending (que o refaz).
+_recon_pending() {
+  local c="$1" cache="$CONTESTSDIR/$1/var/.pending-count" v=""
+  _RPN=0
+  [[ -d "$CONTESTSDIR/$c/users" ]] || return 0
+  if [[ -f "$cache" && ! "$CONTESTSDIR/$c/var/.score-dirty" -nt "$cache" ]]; then
+    read -r v < "$cache" 2>/dev/null || true
+  else
+    v="$(count_pending "$c" 2>/dev/null)"
+  fi
+  v="${v//[^0-9]/}"; _RPN="${v:-0}"
+}
+
 reconcile_stale_pending() {
   local now="$EPOCHSECONDS"
   (( now - _RECONCILE_LAST >= RECONCILE_EVERY_S )) || return 0
@@ -767,9 +857,13 @@ reconcile_stale_pending() {
     # linha o reconciliador os varria 15 min depois (49 viraram Judge Error no zz-seed-teste em
     # 24/08) e o cliente ficava testando contra um placar que muda sozinho. Não há o que
     # reconciliar aqui: submissão sintética nunca teve job no pipeline.
+    # "tem pendente?" SEM PROCESSO quando o cache de pendentes vale (o caso de quase todos): eram um
+    # subshell + `cat` POR CONTEST — 1.517 contests × 2 shards a cada 10 min = ~27 s com o daemon a 110%,
+    # o "judged a 1 núcleo" das coletas do TCP 2026 (03/10/2026). Só recalcula (count_pending) com o cache
+    # sujo/ausente; e o DEMO (lê o conf inteiro) só p/ quem tem pendente.
+    _recon_pending "$c"
+    (( _RPN > 0 )) || continue
     contest_is_demo "$c" && continue
-    n="$(count_pending "$c" 2>/dev/null)"; n="${n//[^0-9]/}"
-    [[ -n "$n" && "$n" -gt 0 ]] || continue
     local hf login line tempo prob lang se id age
     for hf in "$cdir"users/*/history; do
       [[ -f "$hf" ]] || continue
@@ -883,6 +977,7 @@ watch_loop() {
       while f="$(next_spool_file)"; do beat; process_spool_file "$f" || break; done
       reconcile_stale_pending
       spool_done_gc
+      prestart_warm_sweep
       if (( ${JUDGED_SHARDS:-1} > 1 )) && [[ "${JUDGED_SHARD:-0}" == 0 ]]; then sweep_orphan_shards; fi
       if ! inw_wait; then
         log "watch: inotifywait terminou — re-subindo em 1s (o re-drain segurou a fila)"
@@ -896,6 +991,7 @@ watch_loop() {
       while f="$(next_spool_file)"; do process_spool_file "$f" || break; done
       reconcile_stale_pending
       spool_done_gc
+      prestart_warm_sweep
       if (( ${JUDGED_SHARDS:-1} > 1 )) && [[ "${JUDGED_SHARD:-0}" == 0 ]]; then sweep_orphan_shards; fi
       sleep 1
     done
@@ -963,6 +1059,13 @@ main() {
       # roda o reconciliador de pendência velha UMA vez e sai (operação/testes)
       _RECONCILE_LAST=-999999
       reconcile_stale_pending
+      exit 0
+      ;;
+    --prestart-warm)
+      # a varredura do aquecimento automático antes do início UMA vez e sai (operação/testes; SÍNCRONA — no laço
+      # do daemon o aquecimento vai destacado, aqui quem chamou espera o resultado)
+      _WARM_LAST=-999999; _WARM_SYNC=1
+      prestart_warm_sweep
       exit 0
       ;;
     --gc)

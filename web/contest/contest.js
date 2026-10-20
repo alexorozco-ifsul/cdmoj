@@ -10,11 +10,14 @@ import { T, setLang, getLang } from '/shared/i18n.js';
 import { navLabel } from '/shared/nav-i18n.js';
 import { mountContestUserChip } from '/shared/contest-shell.js';
 import { makeSubmissionsTable } from '/contest/submissions-table.js';
+import { makeSubmitFlow, attachSubmitButton, lastSubKey, submitChannel } from '/shared/submit-ux.js';
 import { mountSiteFooter } from '/shared/site-footer.js';
+import { baseOrigin, contestOrigin } from '/shared/contest-host.js';
 import { openHtmlReport } from '/shared/submission-links.js';
 import { balloonColorHex, balloonSVG, balloonEdge, balloonTint } from '/contest/score/score-colors.js';
 import { pickStmtLang, makeStmtLangChips, setChipsActive, rememberStmtLang, stmtHtmlLang } from '/shared/statement-langs.js';
 import { decorateSamples, downloadSamplesZip, SAMPLES_TAB_SCRIPT } from '/shared/statement-samples.js';
+import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const qs = new URLSearchParams(location.search);
 const CONTEST = (window.__MOJ_CONTEST || qs.get('c') || '');
@@ -188,7 +191,7 @@ let orgLogin = false;
 function enableOrgLogin() { orgLogin = true; updateLoginCountdown(); document.getElementById('loginPass')?.focus(); }
 function updateLoginCountdown() {
   clearTimeout(loginCountdownTimer);
-  const now = Math.floor(Date.now() / 1000);
+  const now = serverNow();
   const loginStart = basic.login_start_time != null ? basic.login_start_time : basic.start_time;
   const left = loginStart - now;
   const box = document.getElementById('loginCountdown');
@@ -229,6 +232,19 @@ function scheduleLoginPoll() {
   }, 15000);
 }
 
+// TIME SÓ PELO ENDEREÇO DO CONTEST (403 host_required, lib/team-host.sh): a mensagem do servidor + o link do endereço
+// certo. `url` vem do servidor (error.url); sem ela, o subdomínio derivado daqui.
+function hostNotice(box, url) {
+  const href = url || (contestOrigin(CONTEST) ? contestOrigin(CONTEST) + '/contest/' : '');
+  box.textContent = T('Os times deste contest só entram pelo endereço dele:', 'Teams of this contest can only log in at its own address:', 'Los equipos de esta competencia solo pueden entrar por su propia dirección:') + ' ';
+  if (href) {
+    const a = document.createElement('a');
+    a.href = href; a.textContent = href; a.style.fontWeight = '600';
+    box.append(a);
+  }
+  box.classList.remove('hidden');
+}
+
 function bootLogin() {
   show('loginView');
   hide('mainView');
@@ -253,10 +269,10 @@ function bootLogin() {
       // A PORTA do contest (roster/janela): a mensagem sozinha não resolve — quem não se
       // inscreveu precisa do link, e a inscrição mora no site principal (outro domínio).
       const code = ex && ex.code;
+      if (code === 'host_required') hostNotice(err, ex.data && ex.data.url);
       if (code === 'not_registered' || code === 'registration_not_open') {
-        const base = location.host.replace(/^[^.]+\./, '');   // <id>.moj.x → moj.x
         const a = document.createElement('a');
-        a.href = location.protocol + '//' + base + '/contests/inscricao/?c=' + encodeURIComponent(CONTEST);
+        a.href = baseOrigin() + '/contests/inscricao/?c=' + encodeURIComponent(CONTEST);
         a.textContent = T(' Inscreva-se aqui →', ' Register here →', ' Inscríbete aquí →');
         a.style.marginLeft = '.4rem';
         err.append(a);
@@ -273,7 +289,7 @@ function bootLogin() {
 function startContestCountdown() {
   const eln = document.getElementById('contestCountdown');
   const tick = () => {
-    const now = Math.floor(Date.now() / 1000);
+    const now = serverNow();
     const left = (basic.end_time || 0) - now;
     if (left > 0) {
       eln.textContent = T('Termina em: ', 'Ends in: ', 'Termina en: ') + fmtLeft(left);
@@ -407,7 +423,15 @@ const DOC_NAME = {
 };
 
 function renderResources(items) {
-  if (!Array.isArray(items) || !items.length) { hide('resourcesSection'); return; }
+  // a lista de recursos e o link das rodadas encerradas (renderRoundsLink) chegam por duas buscas em PARALELO: o
+  // `innerHTML = ''`/hide daqui apagava o link quando os recursos chegavam depois — o único caminho do time até a
+  // rodada publicada sumia de vez em quando (auditoria do painel, 03/10/2026). O link volta a cada render.
+  if (!Array.isArray(items) || !items.length) {
+    const ul0 = document.getElementById('resourcesList'); if (ul0) ul0.innerHTML = '';
+    document.querySelectorAll('#resourcesSection .doc-lines').forEach((n) => n.remove());
+    if (ARCHIVED_ROUNDS && ARCHIVED_ROUNDS.length) appendRoundsLink(); else hide('resourcesSection');
+    return;
+  }
   show('resourcesSection');
   const ul = document.getElementById('resourcesList'); ul.innerHTML = '';
   // renderResources pode rodar de novo (recarga): tira as linhas de documento da rodada anterior
@@ -447,6 +471,7 @@ function renderResources(items) {
       ul.append(el('li', { style: 'margin:.3rem 0' }, el('a', { href: url, target: '_blank' }, label)));
     }
   });
+  appendRoundsLink();   // o link das rodadas encerradas volta depois de refazer a lista
 }
 
 // ---- notificações ao usuário: novidades (notícias) + clarifications respondidas ----------
@@ -795,18 +820,31 @@ function toggleDetail(p, item, toggle, submitWrap) {
 // form de submit por problema: upload rápido (na linha) + editor completo no detalhe
 // (CodeMirror com tela cheia e "nova janela", espelhando o modo treino).
 function renderSubmitInline(p) {
-  // envia ao juiz; problem_id já é a forma canônica 'coleção#problema' (vinda de /contest/problems)
-  async function doSubmit(payload, stepsEl, btnEl) {
-    btnEl.disabled = true; stepsEl.textContent = T('Enviando…', 'Sending…', 'Enviando…');
-    try {
-      await apiPost('/submit?contest=' + encodeURIComponent(CONTEST),
-        { problem_id: p.problem_id, ...payload }, { contest: CONTEST, auth: true });
-      stepsEl.textContent = T('✓ Enviado!', '✓ Sent!', '✓ ¡Enviado!');
-      setTimeout(loadSubmissions, 1200);
-    } catch (ex) {
-      stepsEl.innerHTML = `<span class="error-box">${T('Erro: ', 'Error: ', 'Error: ') + (ex && ex.message ? ex.message : T('falha ao enviar', 'failed to send', 'no se pudo enviar'))}</span>`;
-    } finally { btnEl.disabled = false; }
-  }
+  // UM fluxo de envio POR PROBLEMA (shared/submit-ux.js): a linha (arquivo) e o editor compartilham a máquina —
+  // roda só enquanto o POST está no ar, "✓ Enviado" verde por 1,5 s, 2º clique p/ o mesmo código. problem_id já é a
+  // forma canônica 'coleção#problema' (vinda de /contest/problems).
+  const flow = makeSubmitFlow({ key: lastSubKey(CONTEST, userinfo && userinfo.login, p.problem_id),
+    send: (payload) => apiPost('/submit?contest=' + encodeURIComponent(CONTEST),
+      { problem_id: p.problem_id, ...payload }, { contest: CONTEST, auth: true }) });
+  const describe = (r) => (p.short_name || p.problem_id) + ' · ' + langById(r.prep.lang).label;
+  const hint = () => EDITOR_ONLY
+    ? T('acompanhe na página do contest', 'follow it on the contest page', 'síguelo en la página de la competencia')
+    : el('a', { href: '#mySubsSection', onclick: (e) => { e.preventDefault(); document.getElementById('mySubsSection')?.scrollIntoView({ block: 'start' }); } },
+      T('acompanhe em Minhas submissões', 'follow it in My submissions', 'síguelo en Mis envíos'));
+  // a linha pendente aparece NA HORA (a resposta traz id/epoch/lang); a janela ⧉ avisa a principal
+  const sent = (resp, prep) => {
+    const rec = { subid: resp && resp.submission_id, problem: (resp && resp.problem_id) || p.problem_id,
+      lang: (resp && resp.lang) || String(prep.lang || '').toUpperCase(), epoch: resp && resp.epoch };
+    if (EDITOR_ONLY) submitBus().post({ type: 'submitted', ...rec }); else noteSubmitted(rec);
+  };
+  // whitelist do problema vale TAMBÉM p/ arquivo (a API recusa; aqui é a mensagem amigável antes do POST)
+  const extOk = (name) => {
+    const fext = name.includes('.') ? name.split('.').pop() : '';
+    if (p.languages && p.languages.length && !p.languages.map(extCanon).includes(extCanon(fext))) {
+      throw new Error(T(`Este problema só aceita: ${p.languages.join(', ')} — o arquivo .${fext || '?'} não pode ser enviado.`, `This problem only accepts: ${p.languages.join(', ')} — the .${fext || '?'} file cannot be submitted.`, `Este problema solo acepta: ${p.languages.join(', ')} — el archivo .${fext || '?'} no se puede enviar.`));
+    }
+    return extCanon(fext);
+  };
 
   // ---- linha sempre visível: upload rápido de arquivo ----
   // O input nativo ficava com max-width:170px e mostrava "No…d" (issue #23): agora ele é
@@ -822,14 +860,17 @@ function renderSubmitInline(p) {
   const steps = el('span', { class: 'submit-steps' });
   const btn = el('button', { class: 'btn', type: 'button' }, T('Enviar', 'Submit', 'Enviar'));
   const row = el('span', { class: 'prob-submit' }, fileInput, pick, fileName, btn, steps);
-  btn.addEventListener('click', async () => {
-    if (fileInput.files && fileInput.files[0]) {
-      const f = fileInput.files[0];
-      steps.textContent = T('Preparando…', 'Preparing…', 'Preparando…');
-      doSubmit({ filename: f.name, code_b64: await fileToBase64(f), source: 'file' }, steps, btn);
-    } else {
-      steps.innerHTML = `<span class="muted small">${T('Escolha um arquivo ou escreva no editor (abra os detalhes ▼).', 'Choose a file or write in the editor (open details ▼).', 'Elige un archivo o escribe en el editor (abre los detalles ▼).')}</span>`;
-    }
+  // o botão da linha envia SÓ o arquivo, e o limpa depois do envio (o próximo é escolhido de novo — o arquivo
+  // do disco é relido, nunca um conteúdo velho)
+  attachSubmitButton(flow, btn, steps, {
+    label: () => T('Enviar', 'Submit', 'Enviar'), describe, hint,
+    prepare: async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) throw new Error(T('Escolha um arquivo ou escreva no editor (abra os detalhes ▼).', 'Choose a file or write in the editor (open details ▼).', 'Elige un archivo o escribe en el editor (abre los detalles ▼).'));
+      const lang = extOk(f.name);
+      return { payload: { filename: f.name, code_b64: await fileToBase64(f), source: 'file' }, lang };
+    },
+    onSent: (resp, prep) => { fileInput.value = ''; fileName.textContent = ''; fileName.title = ''; sent(resp, prep); },
   });
 
   // ---- editor completo (montado sob demanda no detalhe) ----
@@ -908,29 +949,22 @@ function renderSubmitInline(p) {
     })();
     return mounting;
   }
-  edBtn.addEventListener('click', async () => {
-    if (fileInput.files && fileInput.files[0]) {
-      const f = fileInput.files[0];
-      // whitelist do problema vale TAMBÉM p/ upload de arquivo (a API rejeita; aqui é a
-      // mensagem amigável antes do POST — o dropdown do editor já filtra)
-      if (p.languages && p.languages.length) {
-        const fext = f.name.includes('.') ? f.name.split('.').pop() : '';
-        if (!p.languages.map(extCanon).includes(extCanon(fext))) {
-          edSteps.innerHTML = `<span class="error-box">${T(`Este problema só aceita: ${p.languages.join(', ')} — o arquivo .${fext || '?'} não pode ser enviado.`, `This problem only accepts: ${p.languages.join(', ')} — the .${fext || '?'} file cannot be submitted.`, `Este problema solo acepta: ${p.languages.join(', ')} — el archivo .${fext || '?'} no se puede enviar.`)}</span>`;
-          return;
-        }
+  // o botão do editor envia SÓ o editor (antes um arquivo esquecido na linha vencia o texto e pulava as travas)
+  attachSubmitButton(flow, edBtn, edSteps, {
+    label: () => T('Enviar solução', 'Submit solution', 'Enviar solución'), describe, hint, onSent: sent,
+    prepare: async () => {
+      const txt = editor ? editor.getValue() : '';
+      if (!txt.trim()) {
+        const f = fileInput.files && fileInput.files[0];
+        throw new Error(f
+          ? T(`O editor está vazio. Para enviar o arquivo ${f.name}, use o botão Enviar ao lado dele.`, `The editor is empty. To submit the file ${f.name}, use the Submit button next to it.`, `El editor está vacío. Para enviar el archivo ${f.name}, usa el botón Enviar que está a su lado.`)
+          : T('Escreva o seu código no editor.', 'Write your code in the editor.', 'Escribe tu código en el editor.'));
       }
-      edSteps.textContent = T('Preparando…', 'Preparing…', 'Preparando…');
-      doSubmit({ filename: f.name, code_b64: await fileToBase64(f), source: 'file' }, edSteps, edBtn);
-      return;
-    }
-    const txt = editor ? editor.getValue() : '';
-    if (!txt.trim()) { edSteps.innerHTML = `<span class="error-box">${T('Escreva código ou escolha um arquivo.', 'Write code or choose a file.', 'Escribe código o elige un archivo.')}</span>`; return; }
-    // o esqueleto INTACTO conta como vazio: sem isto a trava acima nunca dispararia com o módulo ligado, e um
-    // clique acidental mandaria o main puro (WA com penalidade)
-    if (skel && isSkeleton(txt, skel)) { edSteps.innerHTML = `<span class="error-box">${T('Você ainda não alterou o esqueleto: escreva a sua solução.', 'You have not changed the skeleton yet: write your solution.', 'Todavía no cambiaste el esqueleto: escribe tu solución.')}</span>`; return; }
-    edSteps.textContent = T('Preparando…', 'Preparing…', 'Preparando…');
-    doSubmit({ filename: 'solution.' + sel.value, code_b64: textToBase64(txt), source: 'web' }, edSteps, edBtn);
+      // o esqueleto INTACTO conta como vazio: sem isto a trava acima nunca dispararia com o módulo ligado, e um
+      // clique acidental mandaria o main puro (WA com penalidade)
+      if (skel && isSkeleton(txt, skel)) throw new Error(T('Você ainda não alterou o esqueleto: escreva a sua solução.', 'You have not changed the skeleton yet: write your solution.', 'Todavía no cambiaste el esqueleto: escribe tu solución.'));
+      return { payload: { filename: 'solution.' + sel.value, code_b64: textToBase64(txt), source: 'web' }, lang: sel.value };
+    },
   });
 
   return { row, editorBlock, mountEditor, refreshEd };
@@ -947,6 +981,15 @@ function mountSubmissionsTable() {
     onLoaded: (list) => { submissions = list; retintProblems(); } });
 }
 async function loadSubmissions() { if (!subsTable) mountSubmissionsTable(); return subsTable.load(); }
+// um envio acabou de sair (nesta página ou na janela ⧉): a linha pendente entra NA HORA e a tabela recarrega
+// sem o microcache do nginx — antes esperava 1,2 s e podia pegar a resposta de 2 s atrás
+function noteSubmitted(rec) {
+  if (!subsTable) mountSubmissionsTable();
+  subsTable.addPending(rec);
+  subsTable.load({ fresh: true });
+}
+let _bus = null;
+const submitBus = () => (_bus ||= submitChannel(CONTEST));
 
 // Faixa da RODADA: um contest pode rodar aquecimento (ensaio) antes da prova oficial, no mesmo
 // endereço e com o mesmo login. O time não pode confundir os dois — então, quando a rodada no ar
@@ -963,12 +1006,16 @@ function renderRoundBanner() {
         'Esta ronda sirve para probar el entorno y tu cuenta: su marcador NO es el de la competencia.')));
 }
 
-function renderRoundsLink(archived) {
+let ARCHIVED_ROUNDS = null;
+function renderRoundsLink(archived) { ARCHIVED_ROUNDS = archived || []; appendRoundsLink(); }
+function appendRoundsLink() {
+  const archived = ARCHIVED_ROUNDS;
   if (!archived || !archived.length) return;
   const ul = document.getElementById('resourcesList');
   if (!ul) return;
   show('resourcesSection');
-  ul.append(el('li', { style: 'margin:.3rem 0' },
+  const old = document.getElementById('roundsLinkLi'); if (old) old.remove();
+  ul.append(el('li', { id: 'roundsLinkLi', style: 'margin:.3rem 0' },
     el('a', { href: '/contest/rounds/?c=' + encodeURIComponent(CONTEST), target: '_blank' },
       '🔁 ' + T('Rodadas encerradas (placar e submissões do aquecimento)',
                 'Finished rounds (warm-up scoreboard and submissions)',
@@ -995,6 +1042,8 @@ async function bootMain() {
   balloons = bc ? (bc.balloons || bc) : {};
 
   renderRoundBanner();
+  // envio feito na janela ⧉ só-editor: a linha pendente aparece aqui na hora (BroadcastChannel, mesma origem)
+  submitBus().listen((m) => { if (m && m.type === 'submitted' && m.subid) noteSubmitted(m); });
   // rodadas: faixa do aquecimento + link p/ o arquivo das encerradas (só quando houver)
   apiGet('/contest/rounds?contest=' + encodeURIComponent(CONTEST), { contest: CONTEST, auth: true })
     .then(j => renderRoundsLink((j.rounds || []).filter(r => r.state === 'archived'))).catch(() => {});
@@ -1009,7 +1058,7 @@ async function bootMain() {
   // início — tela de contagem regressiva (a API também recusa: /contest/problems devolve
   // {locked:"not_started"} e /submit -> 403). .admin/.judge entram direto (sempre).
   const privileged = !!(userinfo && (userinfo.is_admin || userinfo.is_judge));
-  const nowS = Math.floor(Date.now() / 1000);
+  const nowS = serverNow();
   if (!privileged && basic.start_time && nowS < basic.start_time) {
     renderPreStart();
     return;
@@ -1072,7 +1121,7 @@ function renderPreStart() {
     'Los problemas aparecen automáticamente cuando empieza la competencia.');
   const tick = async () => {
     clearTimeout(preStartTimer);
-    const left = (basic.start_time || 0) - Math.floor(Date.now() / 1000);
+    const left = (basic.start_time || 0) - serverNow();
     if (left > 0) {
       cd.textContent = fmtLeft(left);
       preStartTimer = setTimeout(tick, 1000);
@@ -1085,7 +1134,7 @@ function renderPreStart() {
       await new Promise(r => setTimeout(r, Math.random() * 1200));
       // começou: revalida com a API (que agora libera) e carrega o corpo do contest
       try { basic = await apiGet('/contest/basic?contest=' + encodeURIComponent(CONTEST), {}); } catch {}
-      if ((basic.start_time || 0) - Math.floor(Date.now() / 1000) > 0) { preStartTimer = setTimeout(tick, 1000); return; }
+      if ((basic.start_time || 0) - serverNow() > 0) { preStartTimer = setTimeout(tick, 1000); return; }
       await loadContestBody();
     }
   };
@@ -1114,7 +1163,7 @@ async function boot() {
   if (basic.locale) setLang(basic.locale, { persist: false });
   LANGS = resolveLangs(basic.languages);   // whitelist do contest (conf LANGUAGES=); vazio = todas
 
-  const st = await status(CONTEST);
+  const st = await status(CONTEST, { alerts: !EDITOR_ONLY });   // a janela de editor não leva o banner
   // .staff/.cstaff não participam do contest (não submetem / não veem problemas): vão
   // direto à área da fila (o .cstaff a vê em modo somente leitura).
   if (st.logged_in && (st.is_staff || st.is_cstaff) && !st.is_admin) {
@@ -1130,7 +1179,10 @@ async function boot() {
   if (st.logged_in && !EDITOR_ONLY) mountContestUserChip(st);
   if (!EDITOR_ONLY) mountSiteFooter().catch(() => {});
   if (st.logged_in) { if (EDITOR_ONLY) await bootEditorOnly(); else await bootMain(); }
-  else bootLogin();
+  else {
+    bootLogin();
+    if (st.host_required) hostNotice(document.getElementById('loginError'), st.url);
+  }
 }
 
 // janela "só editor" (?editoronly=1&prob=<id>): carrega o problema e mostra apenas o editor

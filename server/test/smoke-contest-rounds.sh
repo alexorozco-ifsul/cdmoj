@@ -11,7 +11,7 @@ export CONTESTSDIR="$FIX" SESSIONDIR="$SESS" SPOOLDIR="$SPOOL" SCOREDIR="$ROOT/s
 export JUDGED_ALIVE_FILE="$RUN/judged.alive"
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 T="$FIX/treino"; mkdir -p "$T/var/jsons" "$T/var/jsons-private"
-printf 'CONTEST_ID=treino\nCONTEST_TYPE=lista-publica\nUSER_STORE=v2\n' > "$T/conf"
+printf 'CONTEST_ID=treino\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=lista-publica\nUSER_STORE=v2\n' > "$T/conf"
 fx_user "$T" regular s "Regular"
 fx_user "$T" eve s "Eve"
 printf '{"threshold":0,"allow":["regular"],"deny":[]}' > "$T/var/contest-perms.json"
@@ -143,10 +143,20 @@ sed -i "s/^CONTEST_END=.*/CONTEST_END=$((NOW-7200))/" "$C/conf"
 grep -q '^CONTEST_END=' "$C/conf" || printf 'CONTEST_END=%s\n' "$((NOW-7200))" >> "$C/conf"
 : > "$RUN/judged.alive"
 RD '{"action":"set","slug":"prova","colors":{"A":"AA0000","enableSonic":false}}'
+# o fluxo de verdade: a rodada no ar é o AQUECIMENTO (a janela dele aqui é degenerada, então vai direto ao conf)
+sed -i '/^ROUND_KIND=/d' "$C/conf"; printf 'ROUND_KIND=warmup\n' >> "$C/conf"
 mkdir -p "$C/docs"; printf '%%PDF-enviado' > "$C/docs/info-sheet.pt.uploaded.pdf"; printf '%%PDF-gerado' > "$C/docs/info-sheet.pt.pdf"
-RD '{"action":"promote","to":"prova"}'
+printf '%%PDF-caderno-do-aquecimento' > "$C/docs/contest.pt.uploaded.pdf"; printf 'PNG' > "$C/docs/header-logo.png"
+sed -i '/^CONTEST_PRIORITY=/d' "$C/conf"; printf 'CONTEST_PRIORITY=prova\n' >> "$C/conf"   # o automático é só de PROVA
+AUTO_WARM_JUDGES=1 RD '{"action":"promote","to":"prova"}'
 ck "promoveu"                      '[[ "$(J .promoted)" == true ]]'
+# AQUECIMENTO dos juízes p/ a rodada que entrou (TCP 2026): destacado — a resposta não espera; o audit chega depois
+for _w in 1 2 3 4 5 6 7 8 9 10; do grep -q "warm-judges.*by=promote:" "$C/var/admin-audit.log" 2>/dev/null && break; sleep 0.5; done
+ck "promoção dispara o aquecimento (destacado, auditado by=promote:<login>)" 'grep -q "	promote:boss.admin	warm-judges	sent=0 by=promote:boss.admin" "$C/var/admin-audit.log"'
 ck "PDF ENVIADO (config à mão) volta após a promoção; o gerado fica só no arquivo" '[[ -f "$C/docs/info-sheet.pt.uploaded.pdf" && ! -f "$C/docs/info-sheet.pt.pdf" && -f "$C/rounds/oficial/docs/info-sheet.pt.pdf" ]]'
+# auditoria do painel (03/10/2026): o caderno ENVIADO é da rodada (os problemas mudam) — voltar fazia o do aquecimento
+# valer na prova (o enviado vence o gerado); o logo do cabeçalho é config e volta
+ck "caderno ENVIADO do aquecimento NÃO volta (fica no arquivo); o logo volta" '[[ ! -f "$C/docs/contest.pt.uploaded.pdf" && -f "$C/rounds/oficial/docs/contest.pt.uploaded.pdf" && -f "$C/docs/header-logo.png" ]]'
 ck "balloons.json = cores da rodada que entrou" '[[ "$(jq -r .A "$C/balloons.json")" == AA0000 ]]'
 ck "arquivo da rodada que saiu guardou as cores dela" '[[ "$(jq -r .A "$C/rounds/oficial/balloons.json")" == 0000FF ]]'
 call /contest/balloons GET '' cadm "$Q"
@@ -154,12 +164,52 @@ ck "/contest/balloons serve a cor nova" '[[ "$(J .balloons.A)" == AA0000 && "$(J
 # terceira rodada, sem cores: herda
 RD "{\"action\":\"add\",\"slug\":\"extra\",\"name\":\"Extra\",\"kind\":\"extra\",\"start\":$((NOW+3600)),\"end\":$((NOW+7200))}"
 sed -i "s/^CONTEST_END=.*/CONTEST_END=$((NOW-7200))/" "$C/conf"
+# a prova teve atividade (é o que o desfazer tem de devolver)
+fx_user "$C" time1 x "Time 1"; printf '60:A:C:Accepted:%s:s1\n' "$((NOW-8000))" > "$C/users/time1/history"
+mkdir -p "$C/clarifications"; printf '{"id":"q1","answer":""}' > "$C/clarifications/q1.json"
+# TCP 2026 (03/10/2026): promover a partir da PROVA OFICIAL encerrada arquiva o resultado — vira aviso
+call /contest/admin/rounds GET '' cadm "$Q"
+ck "prova oficial encerrada no ar: bloqueador official_over, trilíngue" '[[ "$(J "[.promote_ready.blockers[] | select(.code==\"official_over\") | .detail_en, .detail_es] | map(select(length > 0)) | length")" == 2 && "$(J "$BLK_I18N")" == 0 ]]'
+# auditoria do painel (03/10/2026): a extra NÃO tem problemas — a do aquecimento seguiria no ar com "tudo pronto"
+ck "rodada sem problemas: bloqueador round_no_problems (aviso, o force passa)" '[[ "$(J "[.promote_ready.blockers[] | select(.code==\"round_no_problems\")] | length")" == 1 ]]'
 RD '{"action":"promote","to":"extra"}'
+ck "…sem 'ignorar', a promoção é recusada (409 not_ready)" '[[ "$OUT" == *"Status: 409"* && "$(J .error.code)" == not_ready ]]'
+ck "…e os bloqueadores vêm DENTRO do error (a tela lê ApiError.data)" '[[ "$(J ".error.blockers | length")" -ge 2 ]]'
+sed -i 's/^CONTEST_PRIORITY=.*/CONTEST_PRIORITY=lista-publica/' "$C/conf"   # LISTA: o automático não roda
+AUTO_WARM_JUDGES=1 RD '{"action":"promote","to":"extra","force":true}'
 ck "promoveu p/ a extra"           '[[ "$(J .promoted)" == true ]]'
+sleep 1
+ck "contest de LISTA: a promoção NÃO aquece sozinha (fica com o botão)" '[[ "$(grep -c "warm-judges.*by=promote:" "$C/var/admin-audit.log")" == 1 ]]'
+ck "…a atividade da prova foi p/ o arquivo" '[[ ! -s "$C/users/time1/history" && -s "$C/rounds/prova/users/time1/history" && ! -e "$C/clarifications" ]]'
 ck "sem cores próprias: herdou"    '[[ "$(jq -r .A "$C/balloons.json")" == AA0000 ]]'
 call /contest/admin/rounds GET '' cadm "$Q"
 ck "ativa (extra) espelha as herdadas" '[[ "$(J ".rounds[] | select(.slug==\"extra\") | .colors.A")" == AA0000 ]]'
 ck "arquivada 'prova' mantém as cores no plano (auditoria)" '[[ "$(J ".rounds[] | select(.slug==\"prova\") | .colors.A")" == AA0000 ]]'
+
+echo "== DESFAZER a última promoção (TCP 2026) =="
+call /contest/admin/rounds GET '' cadm "$Q"
+ck "GET: dá p/ desfazer prova → extra" '[[ "$(J .undo.possible)" == true && "$(J .undo.from)" == prova && "$(J .undo.to)" == extra ]]'
+RD '{"action":"undo"}'
+ck "sem confirmar o id do contest: 422" '[[ "$OUT" == *"Status: 422"* && "$(J .error.code)" == confirm_required ]]'
+call /contest/admin/rounds POST '{"action":"undo","confirm":"rd-c"}' cjud "$Q"
+ck "juiz-chefe não desfaz (403)" '[[ "$OUT" == *"Status: 403"* ]]'
+RD '{"action":"undo","confirm":"rd-c"}'
+ck "desfez: prova de volta, extra planejada" '[[ "$(J .undone)" == true && "$(J .restored)" == prova && "$(J .pending)" == extra ]]'
+ck "history e clarification da prova de volta ao vivo" '[[ "$(cat "$C/users/time1/history")" == *Accepted* && -f "$C/clarifications/q1.json" ]]'
+ck "conf de volta na rodada da prova" '[[ "$(grep -m1 "^ROUND=" "$C/conf")" == "ROUND=prova" ]]'
+call /contest/admin/rounds GET '' cadm "$Q"
+ck "rounds.json: prova ativa, extra planejada (não sumiu)" '[[ "$(J .active)" == prova && "$(J ".rounds[] | select(.slug==\"extra\") | .state")" == pending && "$(J ".rounds[] | select(.slug==\"prova\") | .state")" == active ]]'
+ck "a sobra do arquivo saiu de rounds/prova (fica em rounds/.desfeitas/)" '[[ ! -e "$C/rounds/prova" ]] && ls -d "$C"/rounds/.desfeitas/extra-*/arquivo-prova >/dev/null 2>&1'
+ck "desfazer vai ao audit" 'grep -q "round-undo" "$C/var/admin-audit.log"'
+ck "nada mais a desfazer além do aquecimento (o oficial ainda arquivado)" '[[ "$(J .undo.from)" == oficial ]]'
+RD '{"action":"promote","to":"extra","force":true}'
+ck "dá p/ promover de novo (o arquivo de antes não trava)" '[[ "$(J .promoted)" == true ]]'
+printf '70:A:C:Wrong Answer:%s:s2\n' "$NOW" > "$C/users/time1/history"
+call /contest/admin/rounds GET '' cadm "$Q"
+ck "com atividade na rodada nova: não dá p/ desfazer (round_has_activity, trilíngue)" '[[ "$(J .undo.possible)" == false && "$(J "[.undo.blockers[] | select(.code==\"round_has_activity\") | .detail_en, .detail_es] | map(select(length > 0)) | length")" == 2 ]]'
+RD '{"action":"undo","confirm":"rd-c"}'
+ck "…e o POST é recusado (409 undo_blocked)" '[[ "$OUT" == *"Status: 409"* && "$(J .error.code)" == undo_blocked ]]'
+: > "$C/users/time1/history"
 
 echo "== export/create round-trip leva colors =="
 RD "{\"action\":\"add\",\"slug\":\"final\",\"name\":\"Final\",\"start\":$((NOW+9000)),\"end\":$((NOW+12000))}"
@@ -204,7 +254,8 @@ ck "promoção bloqueada por freeze_locked" '[[ "$(J ".promote_ready.blockers | 
 ck "freeze_locked trilíngue (detail_en + detail_es, sem PT)" '[[ "$(J "[.promote_ready.blockers[] | select(.code==\"freeze_locked\") | .detail_en, .detail_es] | map(select(length > 0)) | length")" == 2 && "$(J "$BLK_I18N")" == 0 ]]'
 RD '{"action":"promote","to":"prox","force":true}'
 ck "force NÃO passa por cima"      '[[ "$OUT" == *"Status: 409"* && "$(J ".blockers | map(.code) | join(\",\")")" == freeze_locked ]]'
-# sede prorrogada empurra o mínimo: fim geral = +20 min
+# sede prorrogada empurra o mínimo: fim geral = +20 min (a prorrogação é do módulo `sedes`: ligado aqui)
+grep -q '^CONTEST_MODULES=' "$C/conf" && sed -i '/^CONTEST_MODULES=/ s/$/,sedes/' "$C/conf" || printf 'CONTEST_MODULES=sedes\n' >> "$C/conf"
 printf '[{"regex":"^sede1-","end":%s}]' "$((NOW+1200))" > "$C/time-overrides.json"
 sed -i "s/^CONTEST_END=.*/CONTEST_END=$((NOW-7200))/" "$C/conf"
 call /contest/admin/settings GET '' cadm "$Q"

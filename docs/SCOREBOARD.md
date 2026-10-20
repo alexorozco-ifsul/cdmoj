@@ -14,9 +14,12 @@ Princípio: **adicionar um modo = 1 gerador (`server/score/updatescore-<modo>.sh
    `heur` (Score/Score Ajustado) e a visão **`frozen`** (pré-`FREEZE_TIME`). Os geradores
    leem tudo numa passada só (`sc_cells` em `score-common.sh`: `find users -name
    metrics.json | xargs jq`) — rebuild O(usuários), sem varrer history.
-3. `server/score/build.sh <contest>` recomputa os metrics em massa se o `conf` mudou desde
-   o último build (`var/.metrics-stamp` — cobre edição de `FREEZE_TIME` e o 1º build de um
-   contest importado), despacha para `updatescore-<modo>.sh` e grava
+3. `server/score/build.sh <contest>` recomputa os metrics em massa se o que eles usam do
+   `conf` mudou desde o último build — só `FREEZE_TIME` e `PENALTY_VERDICTS`: o
+   `var/.metrics-stamp` guarda a assinatura dos dois (`metrics_conf_sig`), e editar outra opção
+   só anda o carimbo; cobre também o 1º build de um contest importado. O recompute em massa é
+   UM jq para o contest inteiro (`metrics_recompute_all`, mesmo programa da porta por conta do
+   daemon; 821 contas em 0,24 s). Depois despacha para `updatescore-<modo>.sh` e grava
    `contests/<contest>/var/placar.txt` (atômico; `var/placar-full.txt` = sem freeze, p/
    privilegiados). É chamado pelo daemon após cada veredicto.
    Grava também um **`.gz` ao lado de cada placar**: 175 KB por requisição no corpo mais servido
@@ -47,6 +50,13 @@ vale p/ todos os modos), servida pelo mesmo cache preguiçoso do handler. O fron
 **API** (o cabeçalho com os short names nunca sai do servidor antes da hora); pela mesma regra,
 `/index/contests` emite `problems_count:0` p/ contest `upcoming`.
 
+**O placar COMPLETO é montado antes da largada** (`score_build_bg`, 15/10/2026): a visita
+pré-início que regenera a vitrine e a varredura pré-início do judged (~15 min antes) montam o
+`var/placar.txt` destacado quando ele não existe. Sem isso o 1º build acontecia no segundo do
+início, com todos pedindo o placar — e sem cache não há o que servir: todos esperavam o build e o
+pool do fcgiwrap parava junto (ensaio de 800 times: ~11 s). Montá-lo cedo não revela nada: antes do
+início só a organização recebe o completo.
+
 ## Formato do TXT
 
 ```
@@ -72,7 +82,7 @@ BR:br-df-alfa:UNB:ALFA:Universidade de Brasília:1/30:2/40:1/55::3/68::4:213:68
 ### Células por modo
 | Modo | Célula de problema | Ordenação | Cor |
 |---|---|---|---|
-| `icpc` | vazio=não tentou · `tentativas/tempo`=resolveu (tempo em SEGUNDOS com a flag `s` na linha 1, exibido em minutos; em minutos no legado) · `tentativas/tempo*`=**first to solve** (★ + contorno; menor `first_ac_epoch` do problema entre os times do placar, na mesma visão frozen/full) · `tentativas/-`=tentou | **1º** acertos↓ · **2º** penalidade↑ (penalidade=(tent−1)·`PENALTY_MINUTES`+minuto; default 20 — SEMPRE em minutos ICPC, mesmo com célula em segundos) · **3º** minuto do ÚLTIMO problema resolvido↑ (`LastAC`) | ver **Balão × visibilidade** abaixo |
+| `icpc` | vazio=não tentou · `tentativas/tempo`=resolveu (tempo em SEGUNDOS com a flag `s` na linha 1, exibido em minutos; em minutos no legado) · `tentativas/tempo*`=**first to solve** (★ + contorno; menor `first_ac_epoch` do problema entre os times do placar, na mesma visão frozen/full) · `tentativas/-`=tentou · `tentativas/-?`=tentou e há tentativa de resultado ESCONDIDO (só na visão **congelada**, com o freeze em vigor: submetida depois do `FREEZE_TIME` ou ainda em julgamento — o `?` do placar congelado do ICPC; é o que a cerimônia de revelação revela, e o AC pós-freeze sai com essa mesma cara; a visão completa nunca leva o `?`; leitores casam o prefixo `tentativas/-`) | **1º** acertos↓ · **2º** penalidade↑ (penalidade=(tent−1)·`PENALTY_MINUTES`+minuto; default 20 — SEMPRE em minutos ICPC, mesmo com célula em segundos) · **3º** minuto do ÚLTIMO problema resolvido↑ (`LastAC`) | ver **Balão × visibilidade** abaixo |
 | `obi` | pontos (0–100) | Total↓ | — |
 | `treino` | resolvidos / tentativas | resolvidos↓ | — |
 | `heuristic` | melhor Score | Score↓ (Score Ajustado como desempate) | — |
@@ -415,7 +425,14 @@ Em 28/09/2026, sobre os dados de produção (LATAM, mdp-teste e esquenta): **zer
   resolvida p/ o nó; sem nó correspondente, vale o casamento antigo (nome OU regex).
 - **Modo anônimo** (`SCORE_ANON=1` no conf, ou toggle local): esconde o desempenho individual e
   mostra agregado — participantes, **quartis** por nº de problemas resolvidos, distribuição e
-  resolvedores por problema. Forçado para não-admins quando `SCORE_ANON=1`.
+  resolvedores por problema. **Com `SCORE_ANON=1` o corte é da API** (03/10/2026): quem não é da organização
+  (o conjunto da estatística: admin, chefe, juiz, `.mon`, `.animeitor`) recebe do `/contest/score` SÓ o agregado
+  (`var/placar-anon.json`, `X-MOJ-Anon: 1`; antes do início `var/placar-prestart-anon.json`, só `n`) — nunca o TXT
+  com logins e nomes; `SCORE_FULL_USERS`, coorte e `scope=mine` não furam. O `build.sh` gera o agregado do placar
+  PÚBLICO (`gen_anon`, mesmo parser do `sc_board_rows`); o `aggregateOf` do `score.js` é o gêmeo p/ o "Anônimo" local
+  da organização (`smoke-score-anon.gjs.sh` compara os dois). Fecham junto: relatório publicado e rodada (409
+  `score_anon`), site da rodada arquivada (404 fora da organização), classificação pública (vazia) e participação
+  virtual (portão `score_anon`). O porteiro espelha (`smoke-porteiro.sh`). Teste: `smoke-score-anon.sh`.
 - **Cores dos balões** (`balloons.json`, `GET /contest/balloons`): mapa letra→cor (default ICPC
   A–O). Campo `enableSonic` ativa o **modo secreto do Sonic** (GIFs locais em `/shared/assets/sonic/`).
 - **Estatísticas** ricas em `/contest/statistics/` (admin/judge/mon) e similaridade em

@@ -121,8 +121,22 @@ reg_round_kind(){
 # no warmup vira atraso no dia da prova (decisão do Ribas, 2026-08-04, revendo a porta aberta).
 # REG_WARMUP_OPEN=y no conf restaura a porta aberta durante rodada warmup (o esquenta que
 # quiser atrair curiosos); nesse caso a varredura da promoção (reg_sweep_unregistered) limpa.
-reg_gate_active(){
+# reg_in_force <c> — a inscrição VALE: roster existe ∧ módulo `inscricoes` ligado ∧ o contest usa as contas do treino.
+# É a pergunta de quem MOSTRA ou ACEITA inscrição (o "Inscreva-se" da home, a rota do competidor) e a base do portão
+# do login (reg_gate_active). O `reg_enabled` (o arquivo existe) segue sendo o do painel do admin, que mostra o roster
+# guardado mesmo com o módulo desligado. 07/10/2026: o ta_fac_profs_202602 (contas próprias, módulo desligado, roster
+# guardado) mostrava "Inscreva-se" na home.
+reg_in_force(){
   reg_enabled "$1" || return 1
+  # o roster ("só inscrito entra") é do módulo `inscricoes`: DESLIGADO, a regra não vale (03/10/2026; o alias do
+  # time segue — é identidade, não regra de entrada)
+  { declare -F mod_on >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/modules.sh"; mod_on "$1" inscricoes; } || return 1
+  # sem as contas do TREINO a inscrição não tem como incluir ninguém (o aluno se inscreve com a conta do treino): o roster
+  # num contest de contas próprias só barraria todo mundo — a regra não vale (pré-requisito do módulo, 07/10/2026)
+  local _rg_uf; conf_value_to _rg_uf "$1" USERS_FROM; [[ -n "$_rg_uf" ]]
+}
+reg_gate_active(){
+  reg_in_force "$1" || return 1
   if [[ "$(reg_round_kind "$1")" == warmup ]]; then
     local v; v="$( ( REG_WARMUP_OPEN=""; source "$CONTESTSDIR/$1/conf" 2>/dev/null; printf '%s' "${REG_WARMUP_OPEN:-}" ) )"
     [[ "$v" == y ]] && return 1
@@ -252,11 +266,20 @@ reg_materialize_login(){
     name="$(jq -r '.fullname // ""' "$CONTESTSDIR/$src/users/$l/account.json" 2>/dev/null)"
     [[ -n "$name" ]] || name="$l"
     jq -n --arg l "$l" --arg n "$name" --arg co "$co" --argjson meta "$meta" \
-      --argjson t "$EPOCHSECONDS" \
+      --argjson t "$EPOCHSECONDS" --argjson keep "$(_reg_keep_marks "$f")" \
       '{login:$l, fullname:$n, status:"active", registered_at:$t, updated_at:$t,
-        team:({cohort:$co} + $meta)}' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f"
+        team:({cohort:$co} + $meta)} + $keep' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f"
   fi
   _score_dirty "$c"
+}
+
+# _reg_keep_marks <account.json> -> {disqualified?, disabled?} — as MARCAS do admin que a re-materialização reescreve
+# do zero: sem isto o Re-materializar, o rg_assign e o team-rename/team-meta do capitão DESFAZIAM a desclassificação
+# e o time se re-classificava sozinho (auditoria do painel, 03/10/2026)
+_reg_keep_marks(){
+  local k; k="$(jq -c '{} + (if .disqualified == true then {disqualified:true} else {} end)
+                         + (if .disabled == true then {disabled:true} else {} end)' "$1" 2>/dev/null)"
+  printf '%s' "${k:-{\}}"
 }
 
 # reg_unmaterialize_login <c> <login> — desfaz o overlay (só o NOSSO: sem senha e com
@@ -293,7 +316,7 @@ reg_materialize_team(){
   # Gravar o prefixo TAMBÉM no fullname duplicava a sigla na tela ("[UFSC] [UFSC] Nome" —
   # pago no 1º time inscrito do esquenta). A declaração de IA vai em .team.ai e sai no
   # diretório /contest/teams (o placar marca 🤖).
-  jq -n --argjson x "$j" --arg t "$t" --arg pw "$pw" --argjson ts "$EPOCHSECONDS" \
+  jq -n --argjson x "$j" --arg t "$t" --arg pw "$pw" --argjson ts "$EPOCHSECONDS" --argjson keep "$(_reg_keep_marks "$f")" \
     '($x.univ // "") as $u
      | {login:$t, password:$pw, fullname:($x.name),
         status:"active", is_team:true,
@@ -302,7 +325,7 @@ reg_materialize_team(){
               + (if $u != "" then {univ_short:$u} else {} end)
               + (if (($x.flag // "") != "") then {flag:$x.flag} else {} end)
               + (if ($x.ai != null) then {ai:$x.ai} else {} end)
-              + (if (($x.region // "") != "") then {region:$x.region} else {} end))}' \
+              + (if (($x.region // "") != "") then {region:$x.region} else {} end))} + $keep' \
     > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f"
   _score_dirty "$c"
 }
@@ -319,9 +342,13 @@ reg_unmaterialize_team(){
 # reg_team_slug <nome> -> slug canônico (sem acento, minúsculo, [a-z0-9-]). É ele que decide
 # se dois nomes são "o mesmo" (Os Três Ponteiros × Os Tres Ponteiros): dois times com nomes
 # que só diferem no acento seriam indistinguíveis no placar.
+# (quem sourceia sem o common.sh ainda tem o filtro do nome — o mesmo NAME_CLEAN_JQ de lib/common.sh)
+[[ -n "${NAME_CLEAN_JQ:-}" ]] || NAME_CLEAN_JQ='gsub(":"; "\u2236") | gsub("[\t\n\r]"; " ") | gsub("^ +| +$"; "")'
 reg_team_slug(){
   local base slug
-  base="$(printf '%s' "$1" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || printf '%s' "$1")"
+  # LC_ALL=C.UTF-8: a imagem de produção roda em locale POSIX, e lá o TRANSLIT troca a letra acentuada por
+  # '?' ("No Fundão" virava `no-fund-o`, e "Os Três" × "Os Tres" deixavam de colidir) — 04/10/2026
+  base="$(printf '%s' "$1" | LC_ALL=C.UTF-8 iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || printf '%s' "$1")"
   slug="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
           | sed 's/^-*//; s/-*$//' | cut -c1-24)"
   printf '%s' "${slug:-time}"
@@ -375,7 +402,7 @@ reg_team_create(){  # <c> <captain> <name> -> ecoa o login do time
   reg_teams_allowed "$c" || { printf 'teams_disabled'; return 1; }
   k="$(reg_kind_of "$c" "$cap")"
   [[ "$k" == team ]] && { printf 'in_team'; return 1; }
-  name="$(printf '%s' "$name" | tr -d '\t\n\r' | sed 's/^ *//; s/ *$//' | cut -c1-48)"
+  name="$(jq -rn --arg s "$name" '$s | '"$NAME_CLEAN_JQ"' | .[0:48] | gsub(" +$"; "")')"   # ':'→'∶'; 48 CARACTERES (não bytes)
   [[ ${#name} -ge 2 ]] || { printf 'bad_name'; return 1; }
   # colisão pelo SLUG (não pelo nome cru): "Os Três" e "Os Tres" são o mesmo time no placar
   reg_get "$c" | jq -e --arg t "$REG_TEAM_PREFIX$(reg_team_slug "$name")" '.teams | has($t)' \
@@ -472,7 +499,7 @@ reg_team_meta(){
   t="$(reg_team_of "$c" "$cap")"; [[ -n "$t" ]] || { printf 'no_team'; return 1; }
   reg_get "$c" | jq -e --arg t "$t" --arg l "$cap" '.teams[$t].captain == $l' >/dev/null 2>&1 \
     || { printf 'not_captain'; return 1; }
-  univ="$(printf '%s' "$univ" | tr -d ':\t\n\r' | sed 's/^ *//; s/ *$//' | cut -c1-20)"
+  univ="$(jq -rn --arg s "$univ" '$s | '"$NAME_CLEAN_JQ"' | .[0:20] | gsub(" +$"; "")')"     # ':'→'∶'; 20 CARACTERES
   flag="${flag,,}"; flag="${flag//_/-}"
   [[ -z "$flag" || "$flag" =~ ^[a-z]{2}(-[a-z]{2})?$ ]] || { printf 'flag_invalid'; return 1; }
   case "$ai" in yes) aiv=true;; no) aiv=false;; esac
@@ -489,7 +516,7 @@ reg_individual_meta(){
   k="$(reg_kind_of "$c" "$l")"
   [[ "$k" == team ]] && { printf 'in_team'; return 1; }
   [[ "$k" == individual ]] || { printf 'not_registered'; return 1; }
-  univ="$(printf '%s' "$univ" | tr -d ':\t\n\r' | sed 's/^ *//; s/ *$//' | cut -c1-20)"
+  univ="$(jq -rn --arg s "$univ" '$s | '"$NAME_CLEAN_JQ"' | .[0:20] | gsub(" +$"; "")')"     # ':'→'∶'; 20 CARACTERES
   flag="${flag,,}"; flag="${flag//_/-}"
   [[ -z "$flag" || "$flag" =~ ^[a-z]{2}(-[a-z]{2})?$ ]] || { printf 'flag_invalid'; return 1; }
   case "$ai" in yes) aiv=true;; no) aiv=false;; esac
@@ -503,7 +530,7 @@ reg_team_rename(){  # <c> <captain> <novo-nome>  (o LOGIN do time não muda)
   t="$(reg_team_of "$c" "$cap")"; [[ -n "$t" ]] || { printf 'no_team'; return 1; }
   reg_get "$c" | jq -e --arg t "$t" --arg l "$cap" '.teams[$t].captain == $l' >/dev/null 2>&1 \
     || { printf 'not_captain'; return 1; }
-  name="$(printf '%s' "$name" | tr -d '\t\n\r' | sed 's/^ *//; s/ *$//' | cut -c1-48)"
+  name="$(jq -rn --arg s "$name" '$s | '"$NAME_CLEAN_JQ"' | .[0:48] | gsub(" +$"; "")')"   # ':'→'∶'; 48 CARACTERES (não bytes)
   [[ ${#name} -ge 2 ]] || { printf 'bad_name'; return 1; }
   reg_get "$c" | jq -e --arg t "$t" --arg s "$REG_TEAM_PREFIX$(reg_team_slug "$name")" \
     'any(.teams | to_entries[]; .key != $t and .key == $s)' \
@@ -552,6 +579,8 @@ reg_rename_login(){
 reg_sweep_unregistered(){
   local c="$1" ns=0 nd=0 f d u
   reg_enabled "$c" || { printf '0\t0'; return 0; }
+  # módulo `inscricoes` desligado: não há roster valendo — ninguém é varrido por não estar nele
+  { declare -F mod_on >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/modules.sh"; mod_on "$c" inscricoes; } || { printf '0\t0'; return 0; }
   declare -A _REGOK=()
   while IFS= read -r u; do [[ -n "$u" ]] && _REGOK["$u"]=1; done \
     < <(reg_get "$c" | jq -r '((.entries // {}) | keys[]), ((.teams // {}) | keys[])' 2>/dev/null)

@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/
 FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; trap 'rm -rf "$FIX" "$SESS"' EXIT
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 T="$FIX/treino"; mkdir -p "$T/var/jsons"
-printf 'CONTEST_ID=treino\nCONTEST_TYPE=lista-publica\nUSER_STORE=v2\n' > "$T/conf"
+printf 'CONTEST_ID=treino\nCONTEST_TYPE=lista-publica\nUSER_STORE=v2\nSUPERADMINS=boss.admin\n' > "$T/conf"   # remover contest alheio é do super
 for u in boss.admin:Boss regular:"Regular User" nobody:"No Body" solver:"Sol Ver" banned:"Ban Ned"; do :; done
 fx_user "$T" boss.admin p "Boss"
 fx_user "$T" regular s "Regular User"
@@ -66,6 +66,10 @@ call /treino/contest-create/permission GET '' ban
 ck "banned bloqueado (deny)" '[[ "$(jq -r .can_create <<<"$BODY")" == false ]]'
 call /treino/contest-create/permission GET '' nob
 ck "nobody ainda não pode"  '[[ "$(jq -r .can_create <<<"$BODY")" == false ]]'
+
+echo "== id com ponto: recusado (o id vira o subdomínio <id>.moj…; com ponto seriam 2 rótulos — lib/team-host.sh) =="
+call /treino/contest-create/create POST "{\"id\":\"a.b\",\"name\":\"Ponto\",\"mode\":\"icpc\",\"end\":$FUT,\"problems\":[{\"bank_id\":\"bankprob\",\"name\":\"B1\",\"letter\":\"A\"}]}" reg
+ck "id a.b → 422 id_invalid" '[[ "$(jq -r .error.code <<<"$BODY")" == id_invalid && ! -d "$FIX/a.b" ]]'
 
 echo "== criação (banco + por-id + enunciado custom) =="
 SPEC="{\"id\":\"test-create\",\"name\":\"Test Create\",\"mode\":\"icpc\",\"end\":$FUT,\"problems\":[{\"bank_id\":\"bankprob\",\"name\":\"B1\",\"letter\":\"A\"},{\"source\":\"cdmoj\",\"problem_id\":\"secret/foo\",\"name\":\"Foo\",\"letter\":\"B\"},{\"problem_id\":\"x/custom\",\"name\":\"Cust\",\"letter\":\"C\",\"statement_b64\":\"PHA+Y3VzdDwvcD4=\"}]}"
@@ -192,7 +196,7 @@ ck "import: enunciado do tar" '[[ -f "$FIX/imp-contest/enunciados/a#b.html" ]]'
 echo "== moderação (admin lista/remove) =="
 call /treino/admin/contests GET '' adm
 ck "lista criados (>=2)"    '[[ "$(jq -r ".count" <<<"$BODY")" -ge 2 ]]'
-call /treino/admin/contest-remove POST '{"contest":"imp-contest"}' adm
+call /treino/admin/contest-remove POST '{"contest":"imp-contest","confirm":"imp-contest"}' adm
 ck "removeu"                '[[ "$(jq -r .removed <<<"$BODY")" == true && ! -d "$FIX/imp-contest" ]]'
 mkdir -p "$FIX/legacy"; printf 'CONTEST_ID=legacy\n' > "$FIX/legacy/conf"
 call /treino/admin/contest-remove POST '{"contest":"legacy"}' adm

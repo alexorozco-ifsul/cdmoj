@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ADMIN.md blob:27e561a21f8dba0c537439c957b577344a1bdae9 -->
+<!-- i18n-source: MANUAL-ADMIN.md blob:b87068a22730e67281ffea5b3ebfa00ae3082219 -->
 # MOJ: Organizer manual (the contest .admin panel)
 
 > **Translation note.** This manual is a translation of the Portuguese original. The command-line tools (`moj`, `moj-contest`, `moj-comp`) print their messages in Portuguese, and the command examples below are identical to the original.
@@ -42,7 +42,7 @@ turn on.
 
 | Block | What it does |
 |---|---|
-| **🚦 Before you start** | The pre-contest checklist (green/yellow/red), with a **button that opens the exact panel** of each open item. Red is **critical**: check it before the start. The checklist is only a warning. MOJ does not block login or submissions because of it. The items that are already correct stay collapsed. It checks the window, the judging log, the freeze, the judges, the languages, the calibrated TL, the pool, the accounts, the staff and the daemon. It also checks if **each judge has already calibrated each problem** (*Judges warmed up*). The time limit is measured per machine. A judge that did not calibrate a problem yet does it on the 1st submission of that problem, and that submission waits for minutes. When a judge is cold, the item shows the **🔥 Warm up judges** button, which tells only the cold judges to calibrate. Do this **before the start** (each calibration uses one slot of the judge for some minutes). Then run the checklist again (↻) to see "warming up" change to "warmed up". **Only with the module on**, it also checks cohorts, browser gate, site lock, next round, documents, balloons and extensions. The **modules** check warns when a module is off but the contest has data for it. |
+| **🚦 Before you start** | The pre-contest checklist (green/yellow/red), with a **button that opens the exact panel** of each open item. Red is **critical**: check it before the start. The checklist is only a warning. MOJ does not block login or submissions because of it. The items that are already correct stay collapsed. It checks the window, the judging log, the freeze, the judges, the languages, the calibrated TL, the pool, the accounts, the staff and the daemon. It checks if a problem of an ICPC contest **keeps judging after the 1st failure** (*Judging stops at the 1st failure*: the TLE of a problem with hundreds of tests takes minutes — tick "stop at first" TLE/WA in the Limits tab of the problem editor). It also checks if **each judge has already calibrated each problem** (*Judges warmed up*). The time limit is measured per machine. A judge that did not calibrate a problem yet does it on the 1st submission of that problem, and that submission waits for minutes. When a judge is cold, the item shows the **🔥 Warm up judges** button, which tells only the cold judges to calibrate. Do this **before the start** (each calibration uses one slot of the judge for some minutes). Then run the checklist again (↻) to see "warming up" change to "warmed up". The same button is also always in **Operation › Status**, and, in a contest with the **Contest** priority (or Super), the warm-up also runs **by itself**: when a round is promoted and about 15 minutes before the start of each round (it goes to the audit as `warm-judges`). A class list has only the button. **Only with the module on**, it also checks cohorts, browser gate, site lock, next round, documents, balloons and extensions. The **modules** check warns when a module is off but the contest has data for it. *No freeze* and *shared accounts* are a warning only in a contest with the **Contest** priority (in a list they are normal). |
 | **🧰 Generate** | One card per artifact, with the current state. Always: credential badges, contest report and jplag (jplag also opens for the chief judge, who can run it, and for the judge, who can only see it). With the module: documents (`documentos`), promote round (`rodadas`), reveal ceremony and big screen (`telao`). |
 | **📡 Live** | A short summary (pending, submissions, online judges, p95 response, manual review). It refreshes automatically. The full panel is **Operations › Status**. |
 | **⏱️ Contest rules** | Start, end and freeze, which you can edit there. The mode and the languages, read-only. The **modules that are on** (with a shortcut to turn them on/off). All other options are in **Home › Rules**. |
@@ -56,7 +56,7 @@ turn on.
 
 | Panel | What it does |
 |---|---|
-| **Problems** | The contest itself: rename/reorder/remove problems. **Edit the identifier** (the "letter": it can be `W1`, `Q`…; reordering keeps a custom identifier, and the balloon color moves with it). Restrict the languages or the judge pool PER problem. Update the statement from the bank (or send HTML/PDF, **per language**). The **🌐 Statement languages** panel (below) and **🏦 Add from bank** (search and random draw). |
+| **Problems** | The contest itself: rename/reorder/remove problems. **Edit the identifier** (the "letter": it can be `W1`, `Q`…; reordering keeps a custom identifier, and the balloon color moves with it. With the automatic letters A, B, C…, reordering changes the letters, and the balloon color and the clarifications follow each problem. When the contest is live, the panel asks for confirmation). Restrict the languages or the judge pool PER problem. Update the statement from the bank (MOJ reindexes the problem and replaces the statement in a few seconds; the current one stays until then). Send or remove HTML/PDF **per language**. The **🌐 Statement languages** panel (below) and **🏦 Add from bank** (search and random draw). |
 | **Report** | The static contest report in one place: download the browsable `tar.gz`, **publish it as history** at `/relatorio/<contest>/` (republish, unpublish) and publish the report of each archived round. Section 6½ explains it. |
 
 **🌐 Statement languages.** A problem from the bank can have its statement in Portuguese, English
@@ -78,11 +78,31 @@ the **🌐 Languages** tab of the chief judge panel) has two modes:
 - The problem set and the editorial in EN/ES use the translation of each problem. A problem
   without a translation is in Portuguese in the problem set. The problem title is also translated.
 
+**Problem name in the contest.** The name in the problem list, in the clarifications, in the
+submissions and in the report is ONE name per problem. When you insert a problem and do not type
+a name, MOJ uses the bank title in the language that the accordion opens (the `LOCALE`, if the
+contest offers it). If the problem has no title in that language, MOJ uses the Portuguese title.
+
+- When the problem has a title in more than one language, the bank search shows the titles (🌐)
+  and the name field shows the **PT · EN · ES** buttons. Click a button to use the title in that
+  language. This applies in the creation wizard, in **Rename** (Contest › Problems) and in **Round
+  problems**.
+- In the wizard, an empty name is automatic: the Review step shows the title that MOJ will use with
+  the language from step 5.
+- The Central shows a warning (**Problem name in a language other than the contest's**) when the
+  name is the bank title in another language and a title in the contest language exists. This
+  occurs in a contest created before this rule, or in a contest that changed its language after
+  the problems were inserted. The **🌐 Use the titles in the contest language** button changes only
+  these names. A custom name does not change. If you want the name in another language, save it in
+  **Rename** and the warning goes away.
+- In the CLI: `moj-contest -c <cid> problems titles` shows the titles of each problem, and
+  `problems apply-titles` does the same as the Central button.
+
 ### 👥 People: who gets in, who is who
 
 | Panel | What it does |
 |---|---|
-| **Accounts** | Create/reset/disable/remove accounts (one by one, or in bulk from a .txt/.csv file). Change the password of all accounts. The shortcut to the **Credential badges**. You create the role accounts HERE (section 3). In a contest with users **shared with Free Training**, the **🔗 Shared accounts** card converts all of them into own accounts (section 8¾). |
+| **Accounts** | Create/reset/disable/remove accounts (one by one, or in bulk from a .txt/.csv file). Change the password of all accounts. The shortcut to the **Credential badges**. You create the role accounts HERE (section 3). In a contest with users **shared with Free Training**, the **🔗 Shared accounts** card converts all of them into own accounts (section 8¾). In a batch, **Process** shows how each line was read (login, password, name, email) and the result says **why** each line was left out. A line with `:` and no header is always `login:password:name:email` — `localhost:6767` on its own becomes a login + password; a name with `:` or `,` goes in the **CSV with a header**. A `:` in a team (or school) name is saved as `∶` (looks the same): the scoreboard uses `:` as a separator. This holds everywhere a name is saved (here, Teams, contest creation and the students' registration). |
 | **Registrations** (module `inscricoes`) | The contest **roster** (only registered persons get in) and the **window**: when it opens, when it closes (default: the contest start) and how many minutes of late entry. It lists teams and individuals. It can dissolve a team, register a person manually, **nudge a pending invitation by DM** (🔔) and export CSV. Section 8½ explains it. |
 | **Sessions** | Who is logged in now, with logout. **🚪 Mass logout and login lock**: close the login, log everybody out, reopen. This is the end of a room exam and the round change. It also has the access log per day. It applies to any contest. |
 
@@ -90,7 +110,7 @@ the **🌐 Languages** tab of the chief judge panel) has two modes:
 
 | Panel | What it does |
 |---|---|
-| **Status** | The live dashboard (it refreshes in place every ~12 s): logged-in users, online/busy judges, queue, pending, latency, timeline, manual evaluation, and the **suggested actions** when something is wrong. Pending/held balloons only with the `baloes` module. |
+| **Status** | The live dashboard (it refreshes in place every ~12 s): logged-in users, online/busy judges, queue, pending, latency, timeline, manual evaluation, the **suggested actions** when something is wrong and the **🔥 Warm up judges** button. Pending/held balloons only with the `baloes` module. |
 | **Staff** | Overview of the print queue, and actions on it (+ balloons with the module). Performance per staff member, and the **scope** of each staff member / site chief (regex or `region:<site>`). `region:<name>` covers everything that is **in that node** of Event › Sites & schools: the site and, if it is a parent node, all the sites below it (`region:Nordeste` sees the sites of Nordeste), and also a cut (`view`) by its name. The site stored on the team applies or, without it, the regex. A regex in the scope is tested on the login. |
 | **Judges** | The manual review queue: who claimed each submission, votes, age. Decide/resolve immediately. It also has the manual verdict configuration: the label options and **🔎 What goes to review**. This is a problem × verdict table: a checked cell goes to the judges, and the rest goes out automatically. With no cell checked, everything goes out automatically. The table has exceptions per language, and a button to release the held submissions that the new table no longer holds. |
 | **Audit** | A unified feed of all events (admin actions, logins, submissions, verdicts) with filters and CSV. It also has the **backups** that the users uploaded (per user, with ZIP). |
@@ -101,9 +121,9 @@ the **🌐 Languages** tab of the chief judge panel) has two modes:
 |---|---|
 | **Rounds** (`rodadas`) | **Warm-up and official contest in the SAME contest**: plans each round (window + problems), shows the checklist and promotes. The promotion archives all that happened. Section 6 explains it. |
 | **Documents** (`documentos`) | Generates the contest documents, in PDF and HTML, in the three languages (pt/en/es): **Judging environment** (info sheet), **problem set** (cover + statements), **time limits sheet** and the **editorial** (it is published only after the END of the contest). Section 5 explains it. |
-| **Balloons** (`baloes`) | The color of each letter. This is the color on the balloon sheet. The default covers A–O. With more than 15 problems, set the other colors (if not, they are gray). These are the colors of the live round. To give its own colors to another round, use Event › Rounds. |
+| **Balloons** (`baloes`) | The color of each letter. This is the color on the balloon sheet. The default covers A–O. With more than 15 problems, set the other colors (if not, they are gray). These are the colors of the live round. To give its own colors to another round, use Event › Rounds. When you change a color, the balloon tasks that are not printed yet get the new color; the screen tells how many sheets were already printed with the old color. |
 | **Qualification** (`classificacao`) | Who qualifies for the next stages. Each **stage** (Brazilian Final, PDA, World Finals) has its own engine, which you select in the panel: preview, draft, publication (one 🎓 chip per stage on the scoreboard) and the **manual override** — exclude from the computation, withdraw without recomputing, promote by hand, always with a reason. For smaller contests (a selection contest), the **Manual** engine: you set how many teams advance and what the next stage is, and you click on the scoreboard to promote teams (reason optional). `docs/CLASSIFICACAO.md` explains it. |
-| **Teams** (`sedes` or `telao`) | The identity of each account on the scoreboard: team name, country/flag, site, university, crest and photo. Load from CSV and "materialize matches". |
+| **Teams** (`sedes` or `telao`) | The identity of each account on the scoreboard: team name, country/flag, site, university, crest and photo. Load from CSV and "materialize matches". A `:` in a name or school becomes `∶` (looks the same; the screen tells you). |
 | **Cohorts** (`coortes`) | **Guest** teams (unofficial, "CCL") separated from the official teams: who appears on the public scoreboard, who sees whom, and the **🔓 Release results** of the post-ceremony. Section 8 explains it. |
 | **Sites & schools** (`sedes`) | The sites (name + regex on the login). The sites feed the scoreboard filter, the staff scope, the badges, **the photos/music that each site chief manages on the big screen** and the gate by site. It also has the country/school rules by regex and the **⏱ extension by site/group** (regex → new end; it only extends, it never shortens). In **three modes** (Simple, Intermediate, Advanced) with a preview — section 7¼. |
 
@@ -111,9 +131,9 @@ the **🌐 Languages** tab of the chief judge panel) has two modes:
 
 | Panel | What it does |
 |---|---|
-| **Gate & lock** | Where each team logged in from (IP and browser) in each round, with CSV. The configuration of the **browser gate by site** (expected × seen per team) and the **per-site IP lock** (pinned IPs, blocks, pin/release). Section 7 explains it. |
-| **Anomalies** | What is wrong in the use of the machines **during the contest** (only with the UA gate on): a team with 2 live sessions, a machine shared by 2 teams, a submission from another machine, a UA outside the site, a site with fewer machines than teams, machine changes, the **single session** trail and the lock blocks. Timeline, table per team, CSV, logout, **log out mismatched UA**. Section 7½ explains it. |
-| **mlinux** | The overview of the machines per site that nutellaboot collects: hardware and equipment model, RAM, editors, memory pressure with PSI, health during the contest (restarts, processes killed for lack of memory, wrong clock, idle time). It also has the collection and the remote commands. The health and PSI data appear only for machines with the new mlinux agent; the screen tells how many there are. The **Machine-team link** card shows how many machines MOJ has already linked to a team in nutellaboot. This occurs automatically when the team logs in, with the new mlinux agent. The card has the **send roster** and **republish links** buttons. Use the two, in this order, when the card says "team not in the image roster". The **Real-time machine alerts** card installs the nutellaboot notification. When a machine raises an alert (USB drive, mobile phone, network over USB, repeated identity), the alert appears in Machines › Anomalies. During the contest, the contest owner also gets it on Telegram. To install or remove it, the saved key must be the nutellaboot administration key. `docs/NUTELLABOOT.md` explains it. |
+| **Gate & lock** | Where each team logged in from (IP and browser) in each round, with CSV. The configuration of the **browser gate by site** (expected × seen per team) and the **per-site IP lock** (pinned IPs, blocks, pin/release). Section 7 explains it. The map counts logins from the round's login opening (without taking the previous round's), not only those after the start. |
+| **Anomalies** | What is wrong in the use of the machines **during the contest** (when the MLinux browser identifies the machine, with or without the gate; "UA off-site" needs the gate in Block or Observe): a team with 2 live sessions, a machine shared by 2 teams, a submission from another machine, a UA outside the site, a site with fewer machines than teams, machine changes, the **single session** trail and the lock blocks. Timeline, table per team, CSV, logout, **log out mismatched UA** and **explain** a case. Section 7½ explains it. A team that logged in **before the start** (login opens before the contest) shows the machine of its last login before the start, marked "before the start": that is the session the team starts with; switching machines before the start is not an anomaly. |
+| **mlinux** | The overview of the machines per site that nutellaboot collects: hardware and equipment model, RAM, editors, memory pressure with PSI, health during the contest (restarts, processes killed for lack of memory, wrong clock, idle time). It also has the collection and the remote commands. The health and PSI data appear only for machines with the new mlinux agent; the screen tells how many there are. The **Machine-team link** card shows how many machines MOJ has already linked to a team in nutellaboot. This occurs automatically when the team logs in, with the new mlinux agent. The card has the **send roster** and **republish links** buttons. Use the two, in this order, when the card says "team not in the image roster". Saving the key (or turning the link back on) with teams already logged in republishes the links of those logins by itself. The **Real-time machine alerts** card installs the nutellaboot notification. When a machine raises an alert (USB drive, mobile phone, network over USB, repeated identity), the alert appears in Machines › Anomalies. During the contest, the contest owner also gets it on Telegram. To install or remove it, the saved key must be the nutellaboot administration key. `docs/NUTELLABOOT.md` explains it. |
 
 > **Balloons and the freeze.** By default, an accepted submission made while the scoreboard is
 > **frozen does not create a balloon task**. These balloons are **not delivered later**: the task
@@ -145,6 +165,13 @@ anomalies). The Maratona turns on all of them. When you turn on a module, MOJ sh
 panels, Home checks and cards. **When you turn it off, MOJ hides them and deletes nothing.** When
 you turn it on again, all comes back.
 
+**While a module is off, its rule does NOT apply**, also with the configuration saved: **Machines** turns off the
+browser gate, the single session and the site lock (the pinned IPs are released at once); **Sites** turns off the
+per-site extension; **Registration** lets in persons who did not register (a team member still enters as the team), removes the **Register** button from the home page and nobody can register;
+**Cohorts** puts all teams on the public scoreboard; **Balloons** stops creating balloon tasks (turning it on again
+creates the missing ones). Before you turn off a module of a contest that is running, make sure that this is what you
+want.
+
 | Module | What it turns on | Detected by |
 |---|---|---|
 | `sedes` | Event › Sites & schools, Event › Teams (identity), extension by site, staff scope by site | `regions.json`, `teams-meta.json`, extensions |
@@ -169,6 +196,34 @@ one JSON creates the full contest, with the data of each module (sites, colors, 
 rounds, documents, registration window, big screen, qualification). The `export` gives back the
 same section, without secrets. For contests created before the modules, MOJ detects the modules
 one time from the files that they already have (`server/bin/contest-modules-detect.sh`).
+
+**Prerequisites.** Two modules only work with another contest setting, so they only turn on with it (virtual participation has its own conditions, in §6¾; the cheat sheet below shows all of them): **`inscricoes`**
+(registration) needs the **Free Training accounts** (a contest created with shared users): each student registers with
+their own training account. In a contest with its own accounts, registration would block every student, so it does not
+turn on (not from the panel, not when saving the registration window, not at creation, when duplicating or from a
+template). With own accounts, hand out the credentials in **People › Accounts**. **`esqueletos`** (code skeletons) needs
+the in-browser code editor (Rules). The module card shows a lock and what is missing. If a contest already had the module
+on without the prerequisite, the **Home** checklist warns (and, without the training accounts, the "registered only" rule
+does not apply). Converting shared accounts into own accounts (section 8¾) turns registration off as well.
+
+**Cheat sheet: what each module needs.** On the left, what MOJ requires to turn the module on (↔ = it applies in both
+directions); on the right, what the module needs, when it is on, to do something.
+
+<div class="deps">
+<div class="deps-row deps-hrow"><div class="deps-h r">To turn on, it needs</div><div></div><div class="deps-h c">Module</div><div></div><div class="deps-h">When on, it acts with</div></div>
+<div class="deps-row"><div class="deps-req"><span class="deps-b req">the Free Training accounts (<code>USERS_FROM</code>)</span><span class="deps-note">converting to own accounts turns the module off</span></div><div class="deps-ar">→</div><div class="deps-mod"><span class="deps-b mod"><code>inscricoes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">registration on (People › Registrations)</span></div></div>
+<div class="deps-row"><div class="deps-req"><span class="deps-b req">the in-browser code editor (Rules)</span><span class="deps-note">while the module is on, the editor stays on</span></div><div class="deps-ar">↔</div><div class="deps-mod"><span class="deps-b mod"><code>esqueletos</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-none">nothing: the default skeleton of each language</span></div></div>
+<div class="deps-row"><div class="deps-req"><span class="deps-b req">ICPC mode</span><span class="deps-b req">not secret</span><span class="deps-b req">scoreboard not anonymous</span><span class="deps-b req">start and end</span><span class="deps-b req">all problems public in the training</span><span class="deps-note">at creation, it starts off and the screen tells why (§6¾)</span></div><div class="deps-ar">→</div><div class="deps-mod"><span class="deps-b mod"><code>virtual</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">contest ended for all sites</span><span class="deps-b act">scoreboard unfrozen (Finish event)</span></div></div>
+<div class="deps-sep"></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>sedes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">the site tree (Event › Sites & schools)</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>maquinas</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">gate: a rule</span><span class="deps-b act">mlinux: the NutellaBoot key</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>rodadas</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">the round plan (Event › Rounds)</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>documentos</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-none">nothing: made from what the contest has</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>baloes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-none">nothing: ICPC colors by default</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>coortes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">the cohorts (Event › Cohorts)</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>telao</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">big screen: the event published in Animeitor</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>classificacao</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">the engine of each stage (Event › Qualification)</span></div></div>
+</div>
 
 ### Code skeletons (module `esqueletos`)
 
@@ -202,9 +257,9 @@ in a course list or a course exam, when the skeleton helps the student.
 
 - **Name**: the displayed title. The *id* (which becomes the subdomain) does not change.
 - **Start / End**: the contest window. Before the start: a countdown. After the end: nobody can submit (except judge roles). For a fine-grained extension, use the ⏱ section (by login regex, for example only one room that lost power).
-- **Login opening (waiting screen)**: the time from which the student can LOG IN (before it, the login screen shows a countdown). Use it to open the login some minutes before the start.
-- **Scoreboard freeze**: freezes the public scoreboard from this time (ICPC style). Judges and the admin continue to see all. The reveal occurs in the ceremony.
-- **Language**: Portuguese, English or Spanish. It sets the screen language of all persons in the contest (with no selector). It also sets the language of the **printed paper** (print cover sheet and balloon sheet), of the final **report** and of the invitation messages on Telegram (in English or Spanish, the message also includes the Portuguese text). The statements and documents have their own language (🌐 Statement languages, Event › Documents).
+- **Login opening (waiting screen)**: the time from which the student can LOG IN (before it, the login screen shows a countdown). Use it to open the login some minutes before the start. The API also blocks teams before this time (the organization can always log in). **Changing the round does not change this field**: with a warm-up and an official contest, set the opening before the start of the warm-up. The **🏁 Central** warns when the opening is after the start (warning) or after the end (critical) of the round on the air. To remove the opening, clear the field and save: the login then opens at the start of the round.
+- **Scoreboard freeze**: freezes the public scoreboard from this time (ICPC style). Judges and the admin continue to see all. The reveal occurs in the ceremony. Before the freeze starts, you can change or clear the field freely. After it starts, the scoreboard unfreezes only from the end of the contest for all sites + 1 minute.
+- **Language**: **Automatic** (each person sees the screens in the language of their browser; it is the default of a contest with no saved language), Portuguese, English or Spanish. A selected language sets the screen language of all persons in the contest (with no selector). It also sets the language of the **printed paper** (print cover sheet and balloon sheet), of the final **report** and of the invitation messages on Telegram (in English or Spanish, the message also includes the Portuguese text). The statements and documents have their own language (🌐 Statement languages, Event › Documents).
 
 **👁 What the team sees during the contest**
 
@@ -213,18 +268,26 @@ in a course list or a course exam, when the skeleton helps the student.
 - **In-browser code editor available**: the editor side by side with the statement.
 - **Show problems' time limit to users**: shows the TLs per language in the statement.
 - **Allow file backup by users** / **Allow print requests by users (.staff)**: enable the backup upload by the student and the print requests (which go to the staff queue).
-- **Anonymous scoreboard**: hides the individual performance (the student sees only his or her own position).
+- **Anonymous scoreboard**: hides the individual performance: a person who is not in the organization gets from MOJ
+  only the summary (how many solved how many problems, solvers per problem, quartiles), with no name and no score of
+  any team. The organization (admin, chief judge, judges, `.mon`, `.animeitor`) sees the full scoreboard. While it is
+  on, you cannot publish the report, the archived round site stays closed, the qualification does not show and
+  virtual participation does not open.
 - **Login gate by UA substring**: only browsers whose identification contains the substring can log in (locked contest machine). Privileged roles are exempt.
 - **🕵️ SUPER SECRET**: the contest disappears from home/archive/status, and even the scoreboard requires login. For contests that must not even be known to exist.
 
 **⚖️ Judging (languages, pool, manual verdict)**
 
-- **💻 Languages allowed in the contest**: the list of allowed languages in the contest (each problem can restrict it more, in Contest › Problems).
+- **💻 Languages allowed in the contest**: the list of allowed languages in the contest. A problem can have its own list, in Contest › Problems: that list applies INSTEAD of this one.
 - **🖥️ Judge machines (pool)**: which judging MACHINES serve this contest (empty = any online judge). Do not confuse them with HUMAN judges (section 4).
+- **Judging priority and submissions in the queue**: decides the contest's turn in the judging queue and the submission rule. You select it at creation. It is **required in the creation wizard**, which has no default (in TCP 2026 the official contest started as Public list and nobody chose it; through the API or the CLI, without the field, Public list applies). You can change it here at any time, at the end of the **⚖️ Judging** section. With **Public list** or **Private list**, each team has at most **3 submissions waiting for a verdict**: the 4th one is refused until a result comes out. This protects the judge from accounts that resubmit without a stop. With **Contest**, the contest is judged before the lists and there is no limit: from the **6th submission waiting for a verdict**, the next submissions of that team go further back in the queue (as if they arrived 2 minutes later). Nothing is refused. A submission held for manual verdict does not count. The change applies to the next submissions. Only the **training super-admin** gives or removes **Super** (it jumps the whole queue), in Training panel › Contests: Super does not show here, and a contest on Super has a locked field. Every priority change goes to the contest **Audit** log and to the training trail, with who changed it, from which to which, and through which screen. The **🏁 Central** shows the rule in effect (item "Submissions in the queue") and warns when an ICPC contest has no selected priority. The MOJ operator changes the limit of 3 in the conf: `SUBMIT_MAX_INFLIGHT=<n>` (`0` turns it off).
 - **Manual verdict**: turns on **grading validated by human judges** (section 4).
 - **Judges required to validate each verdict**: the quorum of the manual review: **1 to 5, default 2**. With 1, one vote decides (single review). With N≥2, the verdict goes out only with N **unanimous** votes. Any disagreement becomes a conflict for the chief judge.
 - **⏱ Penalty (ICPC scoreboard)**: the minutes added per non-accepted attempt before the Accepted (default 20), and WHICH verdicts count as penalty (default wa/tle/mle/rte: **Compilation Error is OUT** by default; empty = nothing counts).
 - **👁️ Full scoreboard (no freeze)**: an allowlist of logins that see the scoreboard without the freeze (in addition to admin/judges).
+
+**Save** writes only what changed (the Audit log records only that). If an option is wrong (for example, a time
+zone that does not exist), nothing is written and the message tells which option to correct.
 
 In the CLI, all of this is `moj contest -c <cid> settings set chave=valor` (for example:
 `settings set manual_verdict=true review_judges=3`).
@@ -248,6 +311,14 @@ privileged accounts on purpose.
 
 Golden rule: **no account with a role suffix goes to the scoreboard or to the statistics**. Create
 as many as you need: they do not change the result.
+
+**Alert for the organization on any page.** Admin, chief judge, judge and `.mon` get, on any page of the
+contest, a bar at the top with a sound: **💬 unanswered clarification** (all these roles), **⚖ verdict
+awaiting your vote** (admin, chief and judge, when manual verdict is on) and **⚠ conflict** (admin and
+chief). The count also shows in the title of the tab. The sound plays again every 2 minutes while items are
+pending. The bar has the buttons to enable or mute the sound and to ask for the system notification. The
+scoreboard reveal, the Animeitor big screen and the editor window do not show the bar. More information in
+`MANUAL-JUIZ.md`.
 
 > Contest with users **shared with Free Training**: a role account of the training site does **not**
 > get in with its role here. Only the `.admin` of the person who created the contest and the
@@ -328,8 +399,11 @@ documents, each in **PDF and HTML**, in **Portuguese, English and Spanish**:
 4. **Generate** (the button of each line, or *⚙️ Generate all (pt+en+es)*), **or upload a finished
    PDF** (the *upload PDF* button of the line). The uploaded PDF is a complete document. It
    overrides the generated one in all that MOJ serves, and you can publish it without generating.
-   *back to generated* deletes only the uploaded file. The conversion to PDF takes some seconds.
-   The problem set takes the longest, because it joins one PDF per problem.
+   *back to generated* deletes only the uploaded file (on a published document with no generated
+   PDF, MOJ refuses: generate first or unpublish). The conversion to PDF takes some seconds.
+   The problem set takes the longest, because it joins one PDF per problem. If the conversion to
+   PDF fails, the message tells which document failed, and the previous PDF (if there was one)
+   stays the file that all persons download.
 5. **Check**: each line has **PDF**, **HTML** and **open**. Review before you publish.
    **Something wrong in the generated PDF**, such as too much or too little space between the
    elements, or a large image, caused by the Markdown of the statement? Each generated document
@@ -339,7 +413,7 @@ documents, each in **PDF and HTML**, in **Portuguese, English and Spanish**:
    problem set has the cover as an editable page, followed by the statements. If the cover is an
    uploaded PDF, or a problem has its own PDF statement, the `.odt` marks the place, and you join
    the PDF when you export. Only the admin and the chief judge can download the `.odt`.
-6. **Publish**. Publishing does two things: the document appears in the **Contest** section of
+6. **Publish** (only a document with a PDF, generated or uploaded). Publishing does two things: the document appears in the **Contest** section of
    the contest page and in **Documents**. Who sees what:
    - **Judging environment**: published = visible to all roles (it is logistics).
    - **Problem set and time limits sheet**: before the START of the contest, only `.admin`,
@@ -349,9 +423,10 @@ documents, each in **PDF and HTML**, in **Portuguese, English and Spanish**:
      documents is refused before the start, because the news item attaches the PDF).
    - **Editorial**: it is published only after the end, and only the judges can download it
      before the contest ends for ALL sites.
-   If you check **+ news**, MOJ also creates a news item with the PDF attached.
-   **Unpublish** undoes this (the link disappears; the news item, if MOJ created one, stays:
-   delete it in the news tab if necessary).
+   If you check **+ news**, MOJ also creates a news item with the PDF attached (the PDF that all
+   persons download: the uploaded one, if there is one).
+   **Unpublish** undoes this: the link disappears, and the news item with the attachment of that
+   document disappears too.
 
 **Did you generate again? You do not need to publish again.** The published link points to the
 current document, so a new generation delivers the new version to the next person who downloads
@@ -460,10 +535,19 @@ planned round that starts before the live round):
 | `review_pending` | there is a submission in the manual review without a released verdict: the judge vote would go to the contest scoreboard |
 | `judged_down` | the judging daemon is not alive, so the queue does not drain |
 | `no_next_round` | there is no planned round |
+| `official_over` | the live round is the **official contest** and it has ended: promoting archives its result and the visible scoreboard goes back to zero. To **show the result**, do not promote: turn the secret off in Rules and publish the report |
 
 There is a `--force` (the "ignore blockers" checkbox) for emergencies. It does **not** remove the
 risk: it only assumes that you know what you do. The only blocker that `--force` does **not**
 ignore is `no_next_round` (without a planned round, there is no round to promote to).
+
+**Did you promote by mistake? Undo it.** In Event › Rounds, the card **↩ Undo the last promotion**
+(or `moj-contest rounds undo`) brings the archived round back live with everything it had —
+submissions, verdicts, clarifications, prints, scoreboard — and the round that went live goes back
+to planned. It works only while the round that went live has had **no activity** (no submission,
+clarification, print or notice); if not, the card tells what happened in it. You type the contest
+id to confirm, and it goes to the audit. This was the case at TCP 2026: after the contest, the
+organizer created an extra round and promoted it, and the scoreboard went back to zero.
 
 > A contest that uses the accounts of another contest (`USERS_FROM`) **promotes normally**: the
 > archive changes only the local `users/`. This was a blocker before. It is not a blocker now,
@@ -520,6 +604,15 @@ cards. The **archived rounds** (warm-up, for example) have their own button in C
 `/relatorio/<contest>/rodada/<slug>/`. When the main report is (re)published, its home page links
 the public rounds in "Earlier rounds of this event".
 
+MOJ refuses to publish the report when it would show what is not public yet:
+
+- **Before the contest starts.** The report contains the statements.
+- **With the scoreboard frozen, until the end of the contest for all sites + 1 minute.** The report shows the
+  full scoreboard. After that, if the scoreboard is still frozen (the reveal did not occur), the panel asks for
+  confirmation.
+- **With a PRIVATE cohort and the results not released.** The report shows all the teams. This also applies to
+  the report of an archived round. Release the results in Event › Cohorts.
+
 ## 6¾. Virtual participation (Event › Virtual — module `virtual`)
 
 After the contest ends, any Free Training account can **do the contest again one time**, in its
@@ -530,13 +623,20 @@ reference: `docs/VIRTUAL.md`.
 
 1. the contest **is not secret**;
 2. the mode is **ICPC**;
-3. **all the problems are already public in the training**. If one is not, the response is an
+3. the scoreboard **is not anonymous**;
+4. the contest has a **start and an end**;
+5. **all the problems are already public in the training**. If one is not, the response is an
    error that tells how many are missing. Publish the problems first (problem management) and turn
    the module on again.
 
-You can turn on the module before the end of the contest. It stays **inactive** and opens
-automatically when the contest ends for all sites **and** the scoreboard is unfrozen (the
-**Finish event** button).
+The module card shows a lock and what is missing, and the **Home** checklist warns about a module that is already on
+without it. At creation (spec, template or copy), a contest that does not meet these conditions starts with the module
+**off**, and the result screen (or the CLI) tells why: turn it on later in Home › Modules.
+
+You can turn on the module before the end of the contest (with the problems already public). It stays **inactive** and
+opens automatically when the contest ends for all sites **and** the scoreboard is unfrozen (the **Finish event**
+button). The **Virtual** button on the contest card and the notice on the scoreboard show only when virtual
+participation is possible.
 
 **Caution:** this module makes the final scoreboard and the problem list visible to training
 accounts. A contest that must not be seen from outside must not turn on this module.
@@ -586,11 +686,16 @@ When each site runs **its own** image, the UA of each machine contains a part of
 `teambrspso001` (Brazil/BR, `São Paulo`/SP, Sorocaba/SO) runs on an image whose UA contains
 `brspso`. One substring is not sufficient, so MOJ **derives the expected value from the login**.
 
-**On the web** (🔒 section of Machines › Gate & lock): the **"Block anyone not coming from the site
-image"** switch turns it on/off. Below it are the **login regex (with capture)** and the **expected
-UA** (`\1`), with a **live tester** ("test with login" → *UA must contain `brspso` · site
-Sorocaba*), and three collapsible lists: **per-site overrides**, **login regex rules** and
-**exempt**. When you save, it applies from the next login.
+**On the web** (🔒 section of Machines › Gate & lock): the **mode** is **Off**, **Observe** or **Block**.
+**Observe** shows the expected × seen UA and "UA off-site" in Anomalies, **without blocking anyone or ending
+a session**: you can turn it on during the contest to check the room. **Block** makes the login return 403.
+Below are the **login regex (with capture)** and the **expected UA** (`\1`), with a **live tester**
+("test with login" → *UA must contain `brspso` · site Sorocaba*), and three collapsible lists:
+**per-site overrides**, **login regex rules** and **exempt**. When you save, it applies from the next
+login. **With no rule, the gate does nothing**: the panel says "no rule: nobody is blocked or observed",
+MOJ refuses to save Block or Observe without a rule, and the 🏁 Home warns when the `maquinas` module is on
+with no saved gate (save **Off** if this is intentional). This occurred in TCP 2026: the old panel showed
+"active" with no rule at all.
 
 **In the CLI**, the same:
 
@@ -598,6 +703,7 @@ Sorocaba*), and three collapsible lists: **per-site overrides**, **login regex r
 moj contest -c <cid> ua-gate set --from-login '^team([a-z]{6})[0-9]{3}$' --expect '\1'
 moj contest -c <cid> ua-gate set --region 'Sorocaba=brspso-v2'     # site outside the pattern
 moj contest -c <cid> ua-gate set --exempt '^ccl' --exempt time-reserva-07
+moj contest -c <cid> ua-gate set --mode observe                     # look without blocking (enforce = block, off = turn off)
 moj contest -c <cid> ua-gate check teambrspso001                   # what MOJ expects from it
 moj contest -c <cid> ua-gate show
 ```
@@ -606,26 +712,38 @@ One rule covers **all sites at one time**. The resolution order is: **exempt** �
 (always gets in) › regex rule › **site override** › capture in the login › single substring (the
 usual `login_ua_substring`, which continues to apply as the last option).
 
-- A login that does not match is **blocked at login** (403). The decision was to block, with the
-  **exempt** list as the margin. `--mode off` turns off the gate without deleting the
-  configuration.
+- In **Block** mode, a login that does not match is **blocked at login** (403), with the **exempt**
+  list as the margin. In **Observe** mode nobody is blocked: a login outside the pattern shows up in
+  Machines › Anomalies. A safe procedure is **Observe during the warm-up** (check the room) and **Block
+  during the contest**. `--mode off` turns off the gate without deleting the configuration.
 - The Machines › Gate & lock panel shows the **expected UA × seen UA** per team, and counts how
   many are outside the site image. This is how you fix the room **in the warm-up**, before the
-  gate blocks a team in the contest.
+  gate blocks a team in the contest. The ✓ means that ALL browsers seen for that team are the site
+  image; with one outside, it shows "partly off-image".
+- With team registration, the gate checks a **member** against the expected UA of the **team** (the site
+  and the login pattern belong to the team account).
 - To log out a team that is already logged in with the wrong browser, use **"Log out mismatched
   UA"** (Machines › Anomalies). It compares each session with the expected value of **that** team.
 - **Per-site IP lock** (switch in the same 🔒 section, OFF by default; turn it on for the contest):
   the gate and the subdomain isolation do not stop `curl --resolve moj…:443:<IP>` from the contest
   machine to the base site (training, backups that the student uploaded before, another contest).
   With the lock, each competitor login **pins the source IP** (the exit of the site) to this
-  contest until the end + a margin. From that IP, any other target responds **403 `site_locked`**,
+  contest until the end + a margin (with rounds, until the end of the last planned round: an IP pinned in the
+  warm-up stays pinned in the official round). From that IP, any other target responds **403 `site_locked`**,
   also a training session opened before. Role accounts are exempt. **Every claim and every block
   goes to the audit** (`site-lock-claim`, `site-lock-block`). They appear in Machines › Gate &
   lock (site lock), with "release" per IP and "🔒 Pin IPs already seen" (useful on the morning of
   the contest). An accepted side effect: during the window, all persons behind that public IP
   lose access to the training.
+- **Teams only at the contest address** (always on, there is no switch in the panel): a team logs in and uses the
+  contest only at its address, `https://<id>.moj.naquadah.com.br`. At another address (the MOJ IP, the main site or
+  the address of another contest), the login and each request of the team are refused, and the screen shows the
+  correct address. The old link `/contest/?c=<id>` takes the user to the contest address. Role accounts and the
+  training are exempt. Each refusal goes to the audit (`team-host-block`) and appears in Machines › Anomalies
+  ("outside the contest address"). This pins the team SESSION to the contest. The site lock above pins the MACHINE.
+  On Maratona Linux, use both.
 - **Single session per team** (switch in the same 🔒 section, on by default): with the gate in
-  effect, a new login on **another machine ends the previous session** of the team. A change of
+  **Block** mode, a new login on **another machine ends the previous session** of the team. A change of
   machine because of a defect continues to work (the team logs in on the new machine, and the old
   one loses the session). A page reload on the same machine ends nothing. Each ended session
   becomes an event in Machines › Anomalies.
@@ -650,7 +768,9 @@ any time. A mode that does not fit the current tree is disabled and tells you wh
 - **Simple** — a list of sites. Each site has "logins that start with" (comma-separated). To assign teams,
   paste the list of logins and choose the site, or choose the site of each team without a site. When you
   rename a site, the teams stored with the old name move with it (the preview shows how many before you
-  save). By the IP of the contest machine: Machines › Gate.
+  save), and so do the staff scope (`region:`), the browser gate of the site and the big-screen site. When you
+  save, the screen warns if something still points to a site that does not exist. By the IP of the contest
+  machine: Machines › Gate.
 - **Intermediate** — groups (country, region) › sites. Each site has rules: starts with, contains, ends with,
   or is one of (list).
 - **Advanced** — the whole tree: sub-regions, `view` cuts and free regex.
@@ -675,11 +795,12 @@ In the CLI: `moj-contest -c <id> regions show|who|assign|set|map`.
 In the Maratona 2026, the question "did a team use two machines?" had an answer only after the
 contest, with a manual cross-check of logs. The **Machines › Anomalies** panel answers it
 **during** the contest (the active sessions, the mass logout and the access log, which apply to
-ANY contest, are in **People › Sessions**). It applies only with the **UA gate on**: the browser of
-the mlinux image identifies the machine (`machine_id/boot_id`). A login from a common browser has
-only the IP, and behind NAT the IP is the full site. These logins stay out of the machine
-anomalies (they appear only in "UA off-site" and in the session list). With the gate off, the
-panel shows a warning and shows only the sessions and the access log.
+ANY contest, are in **People › Sessions**). The **browser of the mlinux image** identifies the
+machine (`machine_id/boot_id`), **with or without the gate**. A login from a common browser has only
+the IP, and behind NAT the IP is the full site. These logins stay out of the machine anomalies (they
+appear only in "UA off-site" and in the session list). **"UA off-site"** needs the expected UA of each
+team, that is, the gate in **Block** or **Observe** mode. When no machine is identified, the panel shows
+a warning and shows only the sessions and the access log.
 
 - **Cards** (click = filter): active sessions, 👥 **2 live sessions** (the same team on two
   machines; with single session on, this occurs only with a copied token), 🖥 **shared machine**
@@ -690,6 +811,10 @@ panel shows a warning and shows only the sessions and the access log.
   machine** (info: normal when a machine fails) and the **revocations** of the single session.
 - **Timeline**: each event with time, type, team, machine and detail; filters by type and text;
   CSV; a **log out** button for the team.
+- **Explain** (admin and chief judge): a case that is already clear (e.g. "switched machine after a
+  failure, confirmed by the site") gets the reason, **leaves the counts** and stays in the list, dimmed,
+  with who explained it, when and why (**✓ explained** card; **undo** counts it again). If the case
+  changes (the team goes to a third machine), it comes back. Each mark goes to the audit.
 - **Teams**: only the teams with an anomaly (or all with a session): live sessions and on how many
   machines, the machines used in the contest in order, the last submission (✓ came from the
   machine of the session; ✗ did not) and the anomalies as tags.
@@ -826,7 +951,11 @@ below. But the times that **MOJ writes for people** (the mojinho DM, the pre-con
 the date of the problem set, the final report) use the **contest timezone**. You set it in
 *Home › Rules → 🕒 Identity and window → 🌎 Contest timezone* (empty = `America/Sao_Paulo`). When
 the two clocks are different, the window box also shows the time in the contest timezone, so
-there is no doubt.
+there is no doubt. Type the name of any timezone (`America/Santiago`, `America/Mexico_City`…). The list
+suggests all of them, starting with your browser's. Use your own city's timezone, not another one that has the
+same time today: daylight saving time changes on different dates in each country, and the texts would be 1 h
+off after the change. You can also select the timezone in the creation wizard, and it goes with the contest
+when you export, duplicate or save a template. From the CLI: `moj-contest -c <cid> settings set tz=America/Santiago`.
 
 **Scoreboard:** registration creates the `individual` and `times` cohorts, each with **its own
 scoreboard**. The "Board: Overall | Times | Individual" selector appears automatically on the
@@ -944,8 +1073,8 @@ or her role.
 ## 9½. Training panel › Contests and who can create them
 
 The administration panel of the Free Training (`/treino/admin/`, `.admin` account) has the
-**🏆 Contests** tab. It lists the contests created with the interface, and it controls who can
-create contests and problems.
+**🏆 Contests** group, with two panels. **Contests** lists the contests created with the interface.
+**Who can create** controls who can create contests and problems.
 
 **Who sees what.** The rule applies in the API, not only on the screen.
 
@@ -954,8 +1083,10 @@ create contests and problems.
   spaces). Only persons with access to the server edit this list. There is no screen for it.
 - A **regular admin** sees his or her own contests and the contests of creators without an admin
   role (students and allowed monitors). A regular admin does not see the contest of another
-  administrator. Remove, duplicate and export follow the same rule: a contest outside your scope
+  administrator. Duplicate and export follow the same rule: a contest outside your scope
   responds "not found".
+- Only the contest owner or the super-admin can **remove** a contest. To confirm, type the contest
+  id. The API also requires the id: an admin who sees a student's contest cannot remove it.
 
 **List filters.** Search by name, id or owner. Filter by owner, mode and state (upcoming, in
 progress, ended). Sort by creation date, start, name or owner. Check **only mine** to see only
@@ -963,6 +1094,13 @@ what you created. The owner appears with photo, name and a link to the profile.
 
 **Reserved id.** An id that starts with `icpc` belongs to the Maratona organization. Only a
 super-admin can create a contest with this id. The wizard warns before, and the API refuses.
+
+**Priority (Priority column).** The super-admin changes the priority of any contest directly in the table,
+including **Super**, which jumps the whole queue. This is the only place to give or remove Super. The
+wizard offers Super only to the super-admin, and a copy (**duplicate**) of a Super contest made by another
+account starts as **Contest**. The other administrators only see the column: the admin of each contest
+changes the other priorities in Central › Rules. Every change goes to the contest Audit log and to the
+training trail (📜 Activity feed, action `contest-priority`). From the CLI: `moj contest priority <cid> <priority>`.
 
 **Who can create contests and problems.** The same permission applies to creating contests and to
 creating problems and collections in Problem Management. `.admin` accounts can always create

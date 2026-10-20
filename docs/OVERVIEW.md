@@ -77,6 +77,11 @@ moj/
   instrução, sem dado de treino/problema/contest, liberada porque o competidor precisa dela na LAN
   isolada; lá dentro ela veste o topbar do contest e obedece o LOCALE dele. Página nova só entra
   nessa lista se não falar com a API do treino.
+- **Time só pelo subdomínio** (16/10/2026, `lib/team-host.sh`): a conta de TIME de um contest só loga e só usa o
+  contest pelo subdomínio dele — fora dele, 403 `host_required` com o endereço certo (login E toda requisição com o
+  token; papel e treino ficam de fora; o porteiro declina). A página de contest aberta no site principal pula p/ o
+  subdomínio (`shared/contest-host.js` `subdomainRedirect`, no `contest-guard.js`), e o `moj-comp` fala com ele
+  sozinho. No nginx, Host desconhecido (o IP cru) recebe 421 (`install-nginx.sh --close-unknown`).
 - **jq para todo JSON**; `contests/<c>/conf` é *sourced* — por isso a criação de contest
   escreve tudo com `printf %q`.
 
@@ -312,7 +317,10 @@ só admin; o placar aceita `&view=public` p/ o privilegiado obter a visão conge
 do admin). O **`.cstaff`** conduz a **cerimônia POR SEDE**: a mesma página com `&scope=mine` — a API
 recorta frozen+full aos usuários do escopo dele (staff-filters) e só libera o full quando o contest
 terminou p/ **todas** as sedes (`contest_over_for_all`: fim do conf + o maior `end` de
-`time-overrides.json`; admin pode antecipar via allowlist `SCORE_FULL_USERS`),
+`time-overrides.json`; admin pode antecipar via allowlist `SCORE_FULL_USERS`) e, com o telão do
+Animeitor em uso, depois que o `.animeitor` libera a revelação (`site_reveal_open`, `ANIMEITOR.md`). O
+congelado marca `tentativas/-?` em toda célula com resultado escondido, então a cerimônia põe "?" no
+erro pós-freeze também (antes só o AC difere entre as visões),
 tempo de solução **relativo ao início** (não EPOCH), e nav por papel. Contest **🕵️ SUPER
 SECRETO** (conf `SECRET=1`, marcável na criação e no admin): **fora** das listagens públicas (home,
 arquivo `/contests/`, `/status/`) e o **placar deixa de ser público** — `score`/`balloons`/`regions`/
@@ -350,7 +358,8 @@ na aba Configurações do admin e por `moj-contest extend --group`, auditado). T
   vive em **`nav.js`** (puro, testável): **4 grupos comuns** (🏁 Central · 🧩 Prova · 👥 Pessoas ·
   🎛️ Operação) sempre, e os grupos de EVENTO (🏟️ Evento · 🖥️ Máquinas) só quando o contest liga
   o **MÓDULO** correspondente (`basic.modules` ← `CONTEST_MODULES` do conf; catálogo em
-  `lib/modules.sh` ⇄ `modules.js`; painel **Central › Módulos**; spec de criação `modules{}`).
+  `lib/modules.sh` ⇄ `modules.js`; painel **Central › Módulos**; spec de criação `modules{}`). Desligado, a
+  REGRA do módulo também não vale (gate/trava, prorrogação, roster, coortes, balões — 03/10/2026; `lib/modules.sh`).
   Hash `#grupo/painel` resolve pelo id do painel em qualquer grupo visível; `ALIAS` cobre TODOS os
   hashes antigos (13 abas planas E os 4 grupos de agosto: `#settings`→`central/regras`,
   `#pessoas/maquinas`→`maquinas/gate`, `#prova/rodadas`→`evento/rodadas`, …); painel de módulo
@@ -482,8 +491,12 @@ na aba Configurações do admin e por `moj-contest extend --group`, auditado). T
   avaliação usa o **mesmo board** da aba "Tarefas do judge" do admin (`shared/review-board.js`:
   cards, fila completa com idade/quem pegou/votos, ação Decidir/Resolver e desempenho por juiz,
   via `review/{list,stats,resolve}`), **Conflitos** e a config do veredicto manual (opções +
-  matriz). O **alerta de conflito** (banner + bip) é **global** (`shared/chief-alert.js`): segue o
-  chief/admin em **qualquer página** do contest e abre a fila já filtrada em conflitos.
+  matriz). O **alerta da organização** é **global** (`shared/staff-alert.js`, 03/10/2026; o
+  `chief-alert.js` virou apelido dele): faixa no topo + som + `(N)` no título, em **qualquer página** do
+  contest, p/ clarification sem resposta (juiz/chefe/admin/`.mon`), veredicto esperando o voto do login
+  (juiz/chefe/admin, com `MANUAL_VERDICT`) e conflito (chefe/admin — abre a fila já filtrada em conflitos).
+  Uma aba por navegador consulta `/contest/staff-alerts` (só contagens, servida pelo porteiro) e conta às
+  outras por BroadcastChannel.
 
 ### Telão: o MOJ alimenta o Animeitor pela API (`docs/ANIMEITOR.md`)
 O sistema do telão (Animeitor 2.1.0) deixou de puxar o zip no protocolo do BOCA (`docs/WEBCAST.md`, legado): agora
@@ -593,8 +606,9 @@ auto-verdicts-set`, `review-claim/extend/giveup/vote/agree/conflict/resolve`, `v
     `print-action`/`print-pdf`/`print-file` com 403) e é o **único papel além do admin** que vê as
     **Etiquetas de credenciais** (`/contest/badges`, senha **sempre** presente — o `.staff`
     perdeu o acesso e o antigo toggle `staff_password` foi extinto). Vê o placar **congelado** como
-    usuário normal (admin libera o completo via `SCORE_FULL_USERS`) e, pós-fim p/ todas as sedes,
-    abre a **cerimônia de revelação da sede** (navbutton 🏆). O escopo (mesmo `staff-filters.json`,
+    usuário normal (admin libera o completo via `SCORE_FULL_USERS`) e, pós-fim p/ todas as sedes
+    (e, com o telão do Animeitor em uso, depois da liberação do `.animeitor`), abre a **cerimônia de
+    revelação da sede** (navbutton 🏆). O escopo (mesmo `staff-filters.json`,
     entradas `region:<nome>`/regex) governa fila, etiquetas e cerimônia — **configure-o sempre**
     (vazio = vê tudo, inclusive todas as senhas). Baixa também os **Documentos publicados**
     da prova (`/contest/docs/`) para imprimir na sede.

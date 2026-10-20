@@ -88,7 +88,9 @@ máquina↔time** (roster/binding).
   `nb_staff_regions`) — sourceada POR HANDLER (rota fria, fora do prelúdio do MOLDE).
 - **Coletor**: `server/score/nutella-gen.sh <c> [out] [--reaggregate]` (standalone,
   destacado pelo painel) — baixa imagens/roster/máquinas (xargs -P) e as séries **em lote, 1 request
-  por sede** (`limit=5000`, `active_since` = início da janela; janela = [início−1h, fim+1h]). Era 1 request
+  por sede** (`limit=5000`, `active_since` = início da janela; janela = [início−1h, fim+1h]; **antes do início** a
+  janela é a ÚLTIMA HORA e o cache sai com `prestart:true` — inventário, não a prova; a janela de antes saía invertida
+  e a coleta dizia "ok" com uso/carga zerados, 03/10/2026). Era 1 request
   POR MÁQUINA: ~1.700 na Maratona, 1 min 16 s; o lote de uma sede de 29 máquinas volta em 0,15 s e a
   coleta inteira dela em 0,6 s (medido em 21/09/2026). Guarda o BRUTO em `var/nutella-raw/`
   (`samples/<sede>.ndjson`; `--reaggregate` refaz tudo dali, sem rede — mudança de view/agregado não
@@ -194,11 +196,16 @@ máquina↔time** (roster/binding).
   CONTEST (`NUTELLABOOT_IMAGES` ∪ sedes da última coleta) — o UA é entrada do cliente e a chave admin alcança
   outros eventos. **404 = time fora do roster da imagem** (`noroster`): `push-roster` e depois
   **`push-bindings`**, que é o REPLAY do `access.log` pela mesma fila (serve também p/ quem logou antes do
-  deploy). O UA pode ser forjado — quem barra isso é o gate de UA por sede; o binding é informação p/ o staff,
+  deploy). O `config` faz o MESMO replay sozinho (07/10/2026) quando grava a chave, religa o vínculo (`bind:true`)
+  ou muda as sedes com logins já feitos — pela fila do drenador destacado, deduplicado contra o já publicado
+  (`bindings_replayed` na resposta). Antes, chave gravada depois da largada = "0 máquinas vinculadas" até alguém
+  achar o botão. O UA pode ser forjado — quem barra isso é o gate de UA por sede; o binding é informação p/ o staff,
   não controle de acesso. `nutella-bind.log` e `nutella-macs.tsv` atravessam as rodadas (cópia no arquivo).
 - **Roster**: `POST {action:"push-roster"}` PUBLICA o roster do STORE nas imagens (user_id=login, nome do
-  time, universidade, país; os times de cada sede vêm da última coleta — que, com roster vazio, os tira do
-  UA dos logins) — sem `force` ele NUNCA atropela roster já povoado (o da Maratona veio do ICPC).
+  time, universidade, país; os times de cada imagem = os da SEDE no store — regra única de sedes, pelo nome da sede
+  do cache — ∪ os da última coleta que são conta do contest) — sem `force` ele NUNCA atropela roster já povoado (o da
+  Maratona veio do ICPC). Sede sem time nenhum NÃO recebe roster vazio: vai p/ `empty` na resposta (03/10/2026: na
+  véspera, só com o cache, todo roster saía vazio e a tela dizia "enviadas").
 - **Alertas em tempo real (webhooks, 21/09)**: o serviço avisa por `POST` assinado (`X-NB-Signature:
   sha256=<HMAC-SHA256 do corpo cru>`; até 3 tentativas, 5 s cada) — o MOJ recebe em **`POST /api/v1/hooks/
   nutella?contest=<c>`** (`handlers/hooks/nutella.sh`), sem Bearer. Segredo POR CONTEST em
@@ -235,6 +242,9 @@ máquina↔time** (roster/binding).
   gravar o MESMO UA em **`/etc/moj/user-agent`** (uma linha, legível por todos). É de lá que a
   `moj-comp` (e as outras CLIs) o lê e o manda na frente do seu marcador `moj-comp/<build>` —
   passa no gate por sede, herda a chave de máquina do browser e o servidor separa web × CLI.
+  O navegador da imagem abre o ENDEREÇO DO CONTEST (`https://<id>.moj.naquadah.com.br/`), e o filtro de rede libera
+  esse nome: desde 16/10/2026 o time só entra por ele (403 `host_required` no IP ou no site principal), e o IP cru do
+  MOJ responde 421 no nginx (`install-nginx.sh --close-unknown`). O `moj-comp` usa o endereço do contest sozinho.
 - **Quando coletar**: logo depois da prova (com `limit=5000` a janela vem SEM reamostragem — ~500 pontos
   nativos por máquina em 7 h; máquinas religadas muito depois podem perder histórico). Recoletar é
   barato (1 request por sede); o bruto fica guardado p/ `--reaggregate`.

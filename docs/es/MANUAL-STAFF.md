@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-STAFF.md blob:016b73d234918e33061a6d4c6e244f75a31bea40 -->
+<!-- i18n-source: MANUAL-STAFF.md blob:925b645d2465c91a33dbe510315a130be7abb5e0 -->
 # MOJ: Manual del personal de sala (.staff y .cstaff)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -52,7 +52,8 @@ La pantalla de impresión es una tabla con **dos cosas en la misma cola**:
 > que cruza la sala le cuenta al público exactamente lo que el freeze existe para esconder: quién acaba de
 > resolver. Por eso, un acierto hecho con el marcador congelado **no se convierte en tarea** y **no se entrega después**;
 > la tarea simplemente no existe. Si la organización prefiere lo clásico (globos circulando durante el
-> freeze), el `.admin` lo activa en **Central › Reglas** — y entonces aparecen normalmente.
+> freeze), el `.admin` lo activa en **Central › Reglas** — y entonces aparecen normalmente. La página de
+> **Impresión** avisa la hora del congelamiento en una franja 🧊 (antes y durante), para que nadie piense que la cola se trabó.
 >
 > **Las solicitudes de impresión no cambian**: el equipo sigue imprimiendo en cualquier momento, con freeze o sin él.
 
@@ -139,7 +140,7 @@ Supervisas una sede. Sigues la cola de tu sede, imprimes las etiquetas con las c
 | **Documentos** | Los documentos publicados de la competencia, para descargarlos e imprimirlos en la sede. |
 | **Rondas** | El marcador y los envíos de las rondas ya terminadas. |
 | **Salir** | Cierra tu sesión. |
-| **Revelación** | La ceremonia de revelación de tu sede. Solo aparece **después de que la competencia termina para todas las sedes**. |
+| **Revelación** | La ceremonia de revelación de tu sede. Solo aparece **después de que la competencia termina para todas las sedes** y, cuando el evento usa la pantalla del Animeitor, **después de que el operador de la pantalla libera la revelación**. |
 
 ### Impresión, solo lectura (`/contest/staff/`)
 
@@ -185,7 +186,11 @@ Conduces la ceremonia de revelación de tu sede, al estilo ICPC (de abajo hacia 
 
 1. La pantalla filtra los equipos que puedes ver (tu sede).
 2. Solo se desbloquea **después de que la competencia termina para todas las sedes** (el horario base más las prórrogas).
+   Cuando el evento usa la **pantalla del Animeitor**, también espera que el operador de la pantalla **libere la
+   revelación** (el mismo botón que libera el **Reveleitor**). Antes de eso, la pantalla dice que la revelación todavía no fue liberada.
 3. Revelas posición por posición, del último al primero.
+4. Toda celda con un intento después del congelamiento aparece con **?** (acierto o error), hasta que la revelas.
+   Después de revelada, el error queda en **rojo** y el acierto toma el color del globo.
 
 Descongelar todo y publicar el marcador global son acciones del **administrador**, no tuyas (lo hace con el botón **🏁 Terminar evento**, en la Central del panel — ver `MANUAL-ADMIN.md` §6½).
 
@@ -238,7 +243,7 @@ mientras nadie está bajo presión.
 | Ver las etiquetas con contraseña (Etiquetas) | No (acceso denegado) | Sí (solo tu sede) |
 | Descargar los documentos publicados (Documentos) | Sí | Sí |
 | Generar/publicar documentos | No (es del admin/juez principal) | No (es del admin/juez principal) |
-| Conducir la revelación de tu sede (🏆) | No | Sí (después de que terminen todas las sedes) |
+| Conducir la revelación de tu sede (🏆) | No | Sí (después de que terminen todas las sedes y, con la pantalla del Animeitor, después de la liberación) |
 | Ver la mesa de la pantalla (Animeitor) de tu sede | Sí (solo mirar/escuchar) | Sí |
 | Enviar/cambiar la foto y la música de los equipos de la sede | No (acceso denegado) | Sí (solo tu sede) |
 | Descargar el paquete .zip de la pantalla | No | Sí (recortado a la sede) |

@@ -12,7 +12,7 @@ FIX="$(mktemp -d)"; trap 'rm -rf "$FIX"' EXIT
 export CONTESTSDIR="$FIX"
 C="$FIX/cb"; mkdir -p "$C/var" "$C/enunciados"
 NOW=$(date +%s); T0=$(( NOW - 7200 ))
-{ printf 'CONTEST_ID=cb\nCONTEST_TYPE=icpc\nCONTEST_NAME=Classify\n'
+{ printf 'CONTEST_ID=cb\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_NAME=Classify\n'
   printf 'CONTEST_START=%s\nCONTEST_END=%s\n' "$T0" "$(( NOW + 3600 ))"
   printf 'PROBS=( x col#p1 P1 A col#p1 x col#p2 P2 B col#p2 x col#p3 P3 C col#p3 x col#p4 P4 D col#p4 x col#p5 P5 E col#p5 )\n'
 } > "$C/conf"
@@ -84,6 +84,16 @@ ck(){ if jq -e "$1" "$OUT" >/dev/null 2>&1; then PASS=$((PASS+1)); else FAIL=$((
 via(){ jq -r --arg l "$1" '.classified[] | select(.login==$l) | .via' "$OUT"; }
 
 ck '.total == 10' "total de classificados = 10 (veio $(jq -r .total "$OUT"))"
+ck '[.warnings[]? | select(.code == "sede_missing" or .code == "supersede_missing")] | length == 0' "config com sedes que existem: sem aviso de sede ausente"
+# região que NÃO existe no regions.json: erro de config (rc 2), nunca classificação vazia calada (auditoria, 03/10/2026)
+jq '.region = "Brasl"' "$FIX/cfg.json" > "$FIX/cfg-bad.json"
+bash "$ROOT/score/classify-br.sh" cb "$FIX/cfg-bad.json" "$FIX/out-bad.json" 2>"$FIX/err-bad"; rcb=$?
+[[ "$rcb" == 2 ]] && grep -q 'Brasl' "$FIX/err-bad" && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FALHOU: região inexistente devia dar rc 2 (deu $rcb)"; }
+# sede/supersede com vaga que não existe na árvore: aviso (a vaga não vai a ninguém)
+jq '.sedes["XX, Lugar Nenhum"] = 1 | .supersedes["Supersede Fantasma"] = 1' "$FIX/cfg.json" > "$FIX/cfg-miss.json"
+bash "$ROOT/score/classify-br.sh" cb "$FIX/cfg-miss.json" "$FIX/out-miss.json" 2>/dev/null
+jq -e '([.warnings[] | select(.code == "sede_missing") | .data.sites[]] == ["XX, Lugar Nenhum"]) and ([.warnings[] | select(.code == "supersede_missing") | .data.sites[]] == ["Supersede Fantasma"])' \
+  "$FIX/out-miss.json" >/dev/null 2>&1 && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FALHOU: aviso de sede/supersede inexistente"; }
 [[ "$(via teamsp01)" == regra1 ]] && ok=1 || ok=0; (( ok )) && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FALHOU sp01 regra1"; }
 [[ "$(via teamsp02)" == regra1 ]] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FALHOU sp02 regra1"; }
 [[ "$(via teamrj01)" == regra1 ]] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FALHOU rj01 regra1 (cap USP devia pular sp03)"; }
@@ -131,7 +141,7 @@ jq -cn '{login:"cb.admin", fullname:"Admin", password:"x"}' > "$C/users/cb.admin
 NOWE=$(date +%s)
 mktok(){ printf 'CONTEST=%q\nLOGIN=%q\nUSERFULLNAME=%q\nLOGINAT=%q\n' cb "$1" "$1" "$NOWE" > "$SESS/$2"; }
 mktok cb.admin t-adm; mktok teamsp01 t-team
-callc(){ PATH_INFO=/contest/classification REQUEST_METHOD=GET QUERY_STRING="contest=cb" \
+callc(){ PATH_INFO=/contest/classification REQUEST_METHOD=GET QUERY_STRING="contest=cb" CONTEST_HOST=cb \
     HTTP_AUTHORIZATION="${1:+Bearer $1}" \
     CONTESTSDIR="$FIX" SESSIONDIR="$SESS" bash "$ROUTER" 2>/dev/null | awk 'f{print} /^\r?$/{f=1}'; }
 # estado atual do fixture: stage em DRAFT (parte 2 terminou assim)
@@ -151,7 +161,7 @@ jq -e '(.stages[0].draft // false) == false and (.stages[0].teams | length) == 1
 # não existe: `$NF` virava o LastAC (time com LastAC=1 era tomado por convidado e SUMIA) e o "Total" vinha
 # de uma célula de problema. Agora o placar sai pelo cabeçalho (sc_board_rows).
 C2="$FIX/cb2"; mkdir -p "$C2/var" "$C2/enunciados"
-{ printf 'CONTEST_ID=cb2\nCONTEST_TYPE=icpc\nCONTEST_NAME=Classify2\n'
+{ printf 'CONTEST_ID=cb2\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_NAME=Classify2\n'
   printf 'CONTEST_START=%s\nCONTEST_END=%s\n' "$T0" "$(( NOW + 3600 ))"
   printf 'PROBS=( x col#p1 P1 A col#p1 x col#p2 P2 B col#p2 x col#p3 P3 C col#p3 x col#p4 P4 D col#p4 x col#p5 P5 E col#p5 )\n'
 } > "$C2/conf"
@@ -255,6 +265,31 @@ calla POST '{"action":"delete","stage":"final-br"}'
 hk '.error.code == "stage_published"' "publicado não se apaga"
 calla POST '{"action":"delete","stage":"legado"}'
 fk '[.stages[] | select(.id=="legado")] | length == 0' "rascunho apagado"
+
+# PLACAR CONGELADO (auditoria do painel, 03/10/2026): o motor lê o placar completo e o público vê o estágio
+# publicado — publicar/recalcular um publicado com o freeze valendo vazaria o resultado antes da revelação
+cp "$C/conf" "$FIX/conf.bak"
+printf 'FREEZE_TIME=%s\n' "$T0" >> "$C/conf"
+calla POST "$(jq -cn --argjson c "$CFGJ" '{action:"apply", config:$c}')"
+hk '.error.code == "freeze_locked" and (.error.release_at > 0)' "congelado e antes do fim+1min: recalcular o PUBLICADO = 409 freeze_locked"
+calla POST '{"action":"withdraw","login":"teamrj03","reason":"x"}'
+hk '.error.code == "freeze_locked"' "…override no publicado também"
+calla POST '{"action":"unpublish","stage":"final-br"}'
+hk '.status == "draft"' "despublicar é livre"
+calla POST '{"action":"publish","stage":"final-br"}'
+hk '.error.code == "freeze_locked"' "publicar congelado antes do fim+1min = 409 freeze_locked (sem saída)"
+calla POST '{"action":"publish","stage":"final-br","force_frozen":true}'
+hk '.error.code == "freeze_locked"' "…nem com force_frozen"
+calla POST "$(jq -cn --argjson c "$CFGJ" '{action:"apply", config:$c}')"
+hk '.applied == true' "rascunho segue recalculável com o freeze (ninguém vê)"
+sed -i "s/^CONTEST_END=.*/CONTEST_END=$((NOW - 120))/" "$C/conf"
+calla POST '{"action":"publish","stage":"final-br"}'
+hk '.error.code == "board_frozen" and .error.can_force == true' "depois do fim+1min com o placar AINDA congelado = 409 board_frozen (pede confirmação)"
+calla POST '{"action":"publish","stage":"final-br","force_frozen":true}'
+hk '.status == "published"' "…e com force_frozen publica"
+cp "$FIX/conf.bak" "$C/conf"
+calla POST '{"action":"unpublish","stage":"final-br"}'; calla POST '{"action":"publish","stage":"final-br"}'
+hk '.status == "published"' "sem freeze: publica direto (como antes)"
 
 # a composição não depende do motor pular o time: linha do motor de quem tem override add/exclude é descartada
 CLJQ="$(_DIR="$ROOT/api/v1" bash -c 'source "$_DIR/lib/classify.sh"; printf "%s" "$CL_JQ"')"

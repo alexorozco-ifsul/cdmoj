@@ -39,6 +39,21 @@ RUNDIR = os.environ.get("RUNDIR", "/data/run")
 SESSIONDIR = os.environ.get("SESSIONDIR", os.path.join(RUNDIR, "sessions"))
 MOJ_HOME = os.environ.get("MOJ_HOME", "/opt/moj/cdmoj")
 
+# TIME SÓ PELO SUBDOMÍNIO DO PRÓPRIO CONTEST (lib/team-host.sh): a MESMA chave e o mesmo padrão do bash (1); 0 desliga.
+TEAM_HOST_LOCK = os.environ.get("TEAM_HOST_LOCK") or "1"
+SUBDOMAINABLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+
+
+def _read_word(path):
+    """1ª palavra de um arquivo pequeno ('' se não existe/ilegível)."""
+    try:
+        with open(path, errors="replace") as f:
+            w = f.read(64).split()
+            return w[0] if w else ""
+    except OSError:
+        return ""
+
+
 def _env_int(name, dflt):
     v = os.environ.get(name, "")
     return int(v) if v.isdigit() else dflt
@@ -101,17 +116,36 @@ def cache_fresh(cf, ttl, inputs):
     return True
 
 
+def q_unescape(v):
+    """O escape do `printf %q` sai (`\\X` -> `X`), como no conf_value do bash; `$'…'` fica como está."""
+    if "\\" not in v or v.startswith("$"):
+        return v
+    out, i = [], 0
+    while i < len(v):
+        c = v[i]
+        if c == "\\":
+            i += 1
+            c = v[i] if i < len(v) else ""
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def conf_value(contest, key):
-    """Espelho do conf_value: PRIMEIRA linha `KEY=...`, aspas removidas."""
+    """Espelho do conf_value (lib/common.sh): a ÚLTIMA linha `KEY=...` (como o `source`), aspas removidas e o
+    escape do %q desfeito — `SCORE_FULL_USERS=alice\\ bob` dava ['alice\\', 'bob'] (auditoria 03/10/2026)."""
     pref = key + "="
+    val = None
     try:
         with open(os.path.join(CONTESTSDIR, contest, "conf"), errors="replace") as f:
             for line in f:
                 if line.startswith(pref):
-                    return line[len(pref):].rstrip("\n").replace("'", "").replace('"', "")
+                    val = line[len(pref):].rstrip("\n")
     except OSError:
         pass
-    return ""
+    if val is None:
+        return ""
+    return q_unescape(val.replace("'", "").replace('"', ""))
 
 
 def read_json(path):
@@ -157,6 +191,17 @@ def load_session(params):
         if not (src and valid_id(src) and src != contest and os.path.isfile(
                 os.path.join(CONTESTSDIR, src, "users", login, "account.json"))):
             raise Decline("conta não-viva")
+        # conta de PAPEL que só existe na fonte: o bash aplica o _shared_role_ok (SHARED_ADMIN/dono/super-admin) e
+        # derruba a sessão (401) quando não vale — o porteiro não tem essa regra, então devolve ao bash (sessão aberta
+        # antes do corte de papéis de 28/09 recebia aqui o placar descongelado; auditoria 03/10/2026)
+        if role_of(login) != "time":
+            raise Decline("papel de conta só da fonte")
+    # TIME FORA DO SUBDOMÍNIO DO PRÓPRIO CONTEST (router.sh th_guard + lib/team-host.sh): o 403 host_required e o
+    # registro são do bash — mexeu numa regra, mexa na outra. O arquivo de override só é lido nesse caso.
+    if (TEAM_HOST_LOCK not in ("0", "off", "n", "no", "false") and contest != "treino" and role_of(login) == "time"
+            and params.get("CONTEST_HOST", "") != contest and SUBDOMAINABLE.match(contest)
+            and _read_word(os.path.join(RUNDIR, "team-host-lock")) not in ("0", "off")):
+        raise Decline("time fora do subdomínio do contest")
     return contest, login
 
 
@@ -197,8 +242,17 @@ def conf_int(contest, key):
     return int(v) if v.isdigit() else 0
 
 
+def mod_on(contest, m):
+    """Espelho do mod_on (lib/modules.sh): o módulo está em CONTEST_MODULES. DESLIGAR DESLIGA A REGRA (03/10/2026):
+    prorrogação por sede só com `sedes`, coortes só com `coortes` — como no bash."""
+    v = conf_value(contest, "CONTEST_MODULES").replace("\\", "")
+    return m in [x.strip() for x in v.split(",")]
+
+
 def override_end(contest, login):
     """Espelho do time_override_end: PRIMEIRA entrada cujo regex casa o login."""
+    if not mod_on(contest, "sedes"):
+        return None
     data = read_json(os.path.join(CONTESTSDIR, contest, "time-overrides.json"))
     if not isinstance(data, list) or not login:
         return None
@@ -225,6 +279,8 @@ def end_effective(contest, login):
 
 def end_all(contest):
     end = conf_int(contest, "CONTEST_END")
+    if not mod_on(contest, "sedes"):
+        return end
     data = read_json(os.path.join(CONTESTSDIR, contest, "time-overrides.json"))
     if isinstance(data, list) and end > 0:
         ends = [int(e["end"]) for e in data if isinstance(e, dict) and (e.get("regex") or "")
@@ -242,6 +298,8 @@ def over_for_all(contest):
 # ---------------------------------------------------------------- coortes (lib/cohorts.sh)
 def ch_ctx(contest, login):
     """Espelho do jq de ch_ctx: (enabled, cohort_id, view)."""
+    if not mod_on(contest, "coortes"):
+        return False, "", "public"
     j = read_json(os.path.join(CONTESTSDIR, contest, "cohorts.json")) or {}
     cohorts = []
     for c in (j.get("cohorts") or []):
@@ -286,6 +344,8 @@ def ch_ctx(contest, login):
 
 
 def ch_is_ranking_view(contest, view):
+    if not mod_on(contest, "coortes"):
+        return False
     j = read_json(os.path.join(CONTESTSDIR, contest, "cohorts.json")) or {}
     return any(isinstance(c, dict) and c.get("id") == view and c.get("public") is not False
                and c.get("ranking") is True for c in (j.get("cohorts") or []))
@@ -326,11 +386,28 @@ def r_score(contest, q, params):
     slogin = sess[1] if (sess and sess[0] == contest) else ""
     var = os.path.join(CONTESTSDIR, contest, "var")
 
+    start = conf_int(contest, "CONTEST_START")
+    now = time.time()
+    # PLACAR ANÔNIMO (espelho do score.sh, 03/10/2026): fora da organização (admin/chefe/juiz/.mon/.animeitor) só o
+    # AGREGADO — nenhum login nem nome; SCORE_FULL_USERS não fura, coorte e scope=mine colapsam no público.
+    anon = conf_value(contest, "SCORE_ANON") == "1"
+    org = bool(slogin) and (is_judge(slogin) or slogin.endswith((".mon", ".animeitor")))
+    if anon and not org:
+        pre = start > 0 and now < start
+        txt = os.path.join(var, "placar-prestart.txt" if pre else "placar.txt")
+        aj = os.path.join(var, "placar-prestart-anon.json" if pre else "placar-anon.json")
+        _score_freshness_or_decline(contest, txt)
+        ma, mt = mtime_ns(aj), mtime_ns(txt)
+        if ma is None or (mt is not None and mt > ma):
+            raise Decline("agregado anônimo ausente/velho")   # o bash refaz
+        fz = conf_int(contest, "FREEZE_TIME")
+        frozen = b"1" if (not pre and fz > 0 and now >= fz) else b"0"
+        with open(aj, "rb") as fh:
+            return cgi(fh.read(), extra=b"X-MOJ-Anon: 1\r\nX-MOJ-Frozen: " + frozen + b"\r\n")
+
     if q.get("scope") == "mine":
         raise Decline("scope=mine é recorte do bash")
 
-    start = conf_int(contest, "CONTEST_START")
-    now = time.time()
     if start > 0 and now < start:                       # pré-início: vitrine
         if slogin and (is_judge(slogin) or slogin.endswith(".animeitor")):
             raise Decline("privilegiado no pré-início")
@@ -426,8 +503,11 @@ def r_navbuttons(contest, q, params):
         raise Decline("nav exige sessão do contest")
     role = role_of(sess[1])
     cf = os.path.join(CONTESTSDIR, contest, "var", f"nav-cache.{role}.json")
+    # as MESMAS entradas do resp_cache_fresh do navbuttons.sh: o interruptor da revelação às sedes
+    # grava o animeitor.json e o evento publicado mora no managed (botão Revelação do .cstaff)
     inputs = [os.path.join(CONTESTSDIR, contest, p) for p in
-              ("conf", "users", "time-overrides.json")]
+              ("conf", "users", "time-overrides.json", "animeitor.json",
+               "var/animeitor-managed.json")]
     if not cache_fresh(cf, TTL_NAV, inputs):
         raise Decline("nav-cache frio")
     with open(cf, "rb") as f:
@@ -540,6 +620,72 @@ def r_updates(contest, q, params):
 
 
 
+def _pick_task(t):
+    """A linha da fila de UMA tarefa (o PICK do bash) — None se não é tarefa (sem `id`)."""
+    if not isinstance(t, dict):
+        t = {}
+    tid = t.get("id")                            # .id // "" : null e false contam como vazio
+    if tid is None or tid is False or tid == "":
+        return None
+    g = t.get
+    kind = g("kind")
+    return {
+        "id": g("id"), "seq": g("seq"), "login": g("login"), "fullname": g("fullname"),
+        "team": g("team"), "univ": g("univ"),
+        "kind": kind if kind not in (None, False) else "print",
+        "short": g("short"), "color_hex": g("color_hex"), "color_name": g("color_name"),
+        "first_site": g("first_site") is True,
+        "filename": g("filename"), "mime": g("mime"), "size": g("size"), "time": g("time"),
+        "status": g("status"), "pages": g("pages"), "build_ok": g("build_ok"),
+        "claimed_by": g("claimed_by"), "claimed_at": g("claimed_at"),
+        "processed_by": g("processed_by"), "processed_at": g("processed_at"),
+        "delivered_by": g("delivered_by"), "delivered_at": g("delivered_at")}
+
+
+# MEMO DAS TAREFAS, POR WORKER (15/10/2026, ensaio de 800 times). Cada consulta da fila lia e parseava
+# TODAS as tarefas de TODAS as sedes p/ depois recortar as do escopo: 746 tarefas = 10 ms, ~4.500 (12
+# problemas, prova grande) = 63 ms — e com ~550 abas de staff (29/08) são ~30 consultas/s, ~2 núcleos
+# lendo tarefa de outra sede. Agora cada worker guarda a linha já recortada de cada arquivo e só relê o
+# que MUDOU: a assinatura é (inode, mtime, ctime, tamanho) do stat — gravação por tmp+mv troca o inode,
+# gravação no lugar troca mtime/ctime. 4.470 tarefas: 63 → 10,6 ms. Continua LEITOR PURO (memória do
+# processo, nada no disco); JSON inválido declina e não entra no memo. Sem atalho por mtime do DIRETÓRIO
+# de propósito: ele dependeria de todo escritor trocar o mtime do dir e de duas mudanças nunca caírem no
+# mesmo tique do relógio do kernel.
+_TASK_MEMO = {}          # pdir -> {nome: (assinatura, linha|None)}
+_TASK_MEMO_MAX = 8       # contests distintos por worker (o mais antigo sai)
+
+
+def _task_rows(pdir):
+    try:
+        names = sorted(f for f in os.listdir(pdir) if f.endswith(".json"))
+    except OSError:
+        names = []
+    old = _TASK_MEMO.pop(pdir, None) or {}
+    new, rows = {}, []
+    for fn in names:
+        path = os.path.join(pdir, fn)
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            continue                             # sumiu entre o listdir e o stat
+        sig = (st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+        hit = old.get(fn)
+        if hit is not None and hit[0] == sig:
+            row = hit[1]
+        else:
+            t = read_json(path)
+            if t is None:
+                raise Decline("tarefa com JSON inválido")
+            row = _pick_task(t)
+        new[fn] = (sig, row)
+        if row is not None:
+            rows.append(row)
+    _TASK_MEMO[pdir] = new                       # reinsere no fim: ordem de uso (LRU)
+    while len(_TASK_MEMO) > _TASK_MEMO_MAX:
+        _TASK_MEMO.pop(next(iter(_TASK_MEMO)))
+    return rows
+
+
 def r_staff_queue(contest, q, params):
     """Espelho de handlers/contest/staff/queue.sh — a LISTAGEM é computada aqui; o RECONCILE
     de balões é ESCRITA e fica no bash: quando ele está DEVIDO (mesmo gate do
@@ -583,35 +729,7 @@ def r_staff_queue(contest, q, params):
                     vis = {ln for ln in fh.read().split("\n") if ln}
         # filters inválido/sem entrada => vê tudo (mesmo rc!=0 do bash)
 
-    rows = []
-    try:
-        names = sorted(f for f in os.listdir(pdir) if f.endswith(".json"))
-    except OSError:
-        names = []
-    for fn in names:
-        t = read_json(os.path.join(pdir, fn))
-        if t is None:
-            raise Decline("tarefa com JSON inválido")
-        if not isinstance(t, dict):
-            t = {}
-        tid = t.get("id")                        # .id // "" : null e false contam como vazio
-        if tid is None or tid is False or tid == "":
-            continue
-        if vis is not None and (t.get("login") or "") not in vis:
-            continue
-        g = t.get
-        kind = g("kind")
-        rows.append({
-            "id": g("id"), "seq": g("seq"), "login": g("login"), "fullname": g("fullname"),
-            "team": g("team"), "univ": g("univ"),
-            "kind": kind if kind not in (None, False) else "print",
-            "short": g("short"), "color_hex": g("color_hex"), "color_name": g("color_name"),
-            "first_site": g("first_site") is True,
-            "filename": g("filename"), "mime": g("mime"), "size": g("size"), "time": g("time"),
-            "status": g("status"), "pages": g("pages"), "build_ok": g("build_ok"),
-            "claimed_by": g("claimed_by"), "claimed_at": g("claimed_at"),
-            "processed_by": g("processed_by"), "processed_at": g("processed_at"),
-            "delivered_by": g("delivered_by"), "delivered_at": g("delivered_at")})
+    rows = [r for r in _task_rows(pdir) if vis is None or (r["login"] or "") in vis]
 
     def _key(r):
         st = r["status"]
@@ -679,7 +797,89 @@ def r_summary(contest, q, params):
     return cgi(b"{}\n")
 
 
+def r_staff_alerts(contest, q, params):
+    """Espelho COMPUTADO de handlers/contest/staff-alerts.sh (o alerta global de juiz/chefe/admin/.mon):
+    contagens de clarifications abertas e da fila de revisão, lidas cruas dos dois diretórios.
+    Declina (o bash decide) com JSON inválido em qualquer arquivo — o bash refaz arquivo a arquivo e
+    avisa no error.log — e com conta de PAPEL que não seja local: o porteiro aceita conta só da fonte
+    (USERS_FROM) sem o _shared_role_ok do bash, e esta rota é gated por papel."""
+    sess = load_session(params)
+    if not (sess and sess[0] == contest):
+        raise Decline("staff-alerts exige sessão do contest")
+    login = sess[1]
+    judge = is_judge(login)
+    if not (judge or login.endswith(".mon")):
+        raise Decline("papel sem alerta: o 403 é do bash")
+    if not os.path.isfile(os.path.join(CONTESTSDIR, contest, "users", login, "account.json")):
+        raise Decline("papel de conta não-local: _shared_role_ok é do bash")
+    now = int(time.time())
+
+    def _num(x):
+        return x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0
+
+    def _items(sub):
+        d = os.path.join(CONTESTSDIR, contest, sub)
+        try:
+            names = sorted(f for f in os.listdir(d) if f.endswith(".json") and not f.startswith("."))
+        except OSError:
+            return []
+        out = []
+        for fn in names:
+            v = read_json(os.path.join(d, fn))
+            if v is None:
+                raise Decline(sub + " com JSON inválido")
+            out.append(v)
+        return out
+
+    opn = unc = last = 0
+    for c in _items("clarifications"):
+        if not isinstance(c, dict) or (c.get("answer") or "") != "":
+            continue
+        opn += 1
+        last = max(last, _num(c.get("time")))
+        cl = c.get("answer_claim")
+        if cl is None or _num((cl or {}).get("expires_at") if isinstance(cl, dict) else 0) < now:
+            unc += 1
+    clar = {"open": opn, "unclaimed": unc, "last": last}
+
+    review = None
+    if judge:
+        manual = conf_value(contest, "MANUAL_VERDICT") == "1"
+        qv = "".join(ch for ch in conf_value(contest, "REVIEW_JUDGES") if ch.isdigit())
+        quorum = int(qv) if qv in ("1", "2", "3", "4", "5") else 2
+        chief = login.endswith((".admin", ".cjudge"))
+        need = mine = conf = mlast = 0
+        for it in _items("review"):
+            if not isinstance(it, dict):
+                continue
+            votes = it.get("votes") or []
+            claim = [c for c in (it.get("claimants") or []) if _num(c.get("expires_at")) > now]
+            status = it.get("status") or "open"
+            # rv_recompute: liberado mantém o conflict gravado; o resto recalcula pelos votos
+            if status == "released":
+                conflict = it.get("conflict") is True
+            else:
+                conflict = len(votes) >= quorum and len({v.get("verdict") for v in votes}) > 1
+            if conflict:
+                conf += 1
+            n = status != "released" and not conflict and len(votes) < quorum
+            if n:
+                need += 1
+                if (not any(v.get("by") == login for v in votes)
+                        and (any(c.get("by") == login for c in claim) or len(claim) < quorum)):
+                    mine += 1
+                    mlast = max(mlast, _num(it.get("created_at")))
+        review = {"manual": manual, "quorum": quorum,
+                  "needing": need if manual else 0, "mine_todo": mine if manual else 0,
+                  "mine_last": mlast if manual else 0, "conflicts": conf if chief else None}
+
+    body = json.dumps({"success": True, "now": now, "clar": clar, "review": review},
+                      separators=(",", ":")) + "\n"
+    return cgi(body.encode())
+
+
 ROUTES = {
+    "/contest/staff-alerts": r_staff_alerts,
     "/contest/score": r_score,
     "/contest/updates": r_updates,
     "/contest/basic": r_basic,
@@ -709,6 +909,12 @@ def handle_request(params):
     if not contest:
         raise Decline("sem contest")
     require_contest(contest)
+    # TRAVA DE SEDE (router.sh + lib/site-lock.sh): IP preso a um contest ⇒ quem decide (403 site_locked, papel
+    # isento, auditoria) é o bash. Um stat por requisição; o porteiro servia o placar/problemas de OUTRO contest a
+    # uma máquina presa (auditoria do painel, 03/10/2026). O IP é o da conexão (client_ip: REMOTE_ADDR, nunca XFF).
+    ip = "".join(ch for ch in params.get("REMOTE_ADDR", "") if ch in "0123456789abcdefABCDEF.:")
+    if ip and os.path.exists(os.path.join(RUNDIR, "site-lock", ip)):
+        raise Decline("IP preso pela trava de sede")
     # isolamento por subdomínio (router.sh:57-64): rota de contest é permitida; só o mismatch cai
     ch = params.get("CONTEST_HOST", "")
     if ch and valid_id(ch) and q.get("contest") and q["contest"] != ch:
@@ -863,10 +1069,12 @@ def master(sock_path, nworkers, backlog):
 # ---------------------------------------------------------------- selftest (fixture própria)
 def selftest():
     import tempfile
-    global CONTESTSDIR, SESSIONDIR
+    global CONTESTSDIR, SESSIONDIR, RUNDIR, TEAM_HOST_LOCK
     tmp = tempfile.mkdtemp(prefix="porteiro-st.")
     CONTESTSDIR = os.path.join(tmp, "contests")
     SESSIONDIR = os.path.join(tmp, "sessions")
+    RUNDIR = os.path.join(tmp, "run")
+    TEAM_HOST_LOCK = "1"
     cdir = os.path.join(CONTESTSDIR, "st", "var")
     os.makedirs(cdir)
     os.makedirs(SESSIONDIR)
@@ -882,9 +1090,9 @@ def selftest():
     with open(os.path.join(cdir, "placar.txt"), "w") as f:
         f.write("icpc\nlinha\n")
 
-    def req(path, qs, auth=""):
+    def req(path, qs, auth="", host="st"):   # host = CONTEST_HOST (o subdomínio por onde o pedido chegou)
         p = {"PATH_INFO": path, "REQUEST_METHOD": "GET", "QUERY_STRING": qs,
-             "HTTP_AUTHORIZATION": auth}
+             "HTTP_AUTHORIZATION": auth, "CONTEST_HOST": host}
         try:
             return handle_request(p)
         except Decline as d:
@@ -895,10 +1103,26 @@ def selftest():
     ok &= b'"rounds"' in r or print("rounds FALHOU: %r" % r[:80]) is not None
     r = req("/contest/score", "contest=st", "")
     ok &= b"linha" in r or print("score FALHOU: %r" % r[:80]) is not None
+    # time fora do subdomínio do contest dele (IP / site principal): o bash recusa (host_required)
+    r = req("/contest/rounds", "contest=st", "Bearer tok1", host="")
+    ok &= r.startswith(b"DECLINE") or print("time fora do subdominio FALHOU: %r" % r[:80]) is not None
     r = req("/contest/rounds", "contest=st", "Bearer NAOEXISTE")
     ok &= r.startswith(b"DECLINE") or print("decline FALHOU: %r" % r[:80]) is not None
     r = req("/contest/score", "contest=../etc", "")
     ok &= r.startswith(b"DECLINE") or print("traversal FALHOU: %r" % r[:80]) is not None
+    # alerta da organização: juiz vê a clarification aberta; time é do bash (403)
+    os.makedirs(os.path.join(CONTESTSDIR, "st", "users", "j1.judge"))
+    with open(os.path.join(CONTESTSDIR, "st", "users", "j1.judge", "account.json"), "w") as f:
+        f.write('{"login":"j1.judge"}')
+    with open(os.path.join(SESSIONDIR, "tokj"), "w") as f:
+        f.write("CONTEST=st\nLOGIN=j1.judge\n")
+    os.makedirs(os.path.join(CONTESTSDIR, "st", "clarifications"))
+    with open(os.path.join(CONTESTSDIR, "st", "clarifications", "c1.json"), "w") as f:
+        f.write('{"id":"c1","time":5,"answer":""}')
+    r = req("/contest/staff-alerts", "contest=st", "Bearer tokj")
+    ok &= b'"open":1' in r or print("staff-alerts FALHOU: %r" % r[:120]) is not None
+    r = req("/contest/staff-alerts", "contest=st", "Bearer tok1")
+    ok &= r.startswith(b"DECLINE") or print("staff-alerts time FALHOU: %r" % r[:80]) is not None
     import shutil
     shutil.rmtree(tmp)
     if not ok:

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/
 FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; trap 'rm -rf "$FIX" "$SESS"' EXIT
 source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 C="$FIX/lc"; mkdir -p "$C/var"
-printf 'CONTEST_ID=lc\nCONTEST_TYPE=icpc\nLOGIN_UA_SUBSTRING=MOJBOX\nUSER_STORE=v2\n' > "$C/conf"
+printf 'CONTEST_ID=lc\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nLOGIN_UA_SUBSTRING=MOJBOX\nUSER_STORE=v2\n' > "$C/conf"
 fx_user "$C" lc.admin p "Admin"
 fx_user "$C" alice a "Alice"
 b64(){ printf '%s' "$1" | base64 -w0; }
@@ -70,6 +70,11 @@ jq -n '{mode:"enforce", fallback:"MOJBOX", single_session:false}' > "$C/ua-gate.
 call /auth/login POST '{"username":"alice","password":"a"}' '' 'contest=lc' 'Mozilla MOJBOX-7 X' 8.8.8.8
 ck "single_session:false ⇒ login em outra máquina NÃO revoga" '[[ "$(jq -r .revoked <<<"$BODY")" == 0 && "$(grep -c . "$SESS/.idx/lc/alice")" -ge 2 ]]'
 TOKF="$(jq -r .token <<<"$BODY")"
+# modo OBSERVAR (TCP 2026): resolve o esperado (painel/anomalias), mas o login NÃO barra e NÃO derruba sessão
+jq -n '{mode:"observe", fallback:"MOJBOX"}' > "$C/ua-gate.json"
+call /auth/login POST '{"username":"alice","password":"a"}' '' 'contest=lc' 'Mozilla de casa' 4.4.4.4
+ck "observe: UA errado ENTRA (não barra)"           '[[ "$(jq -r .logged_in <<<"$BODY")" == "true" ]]'
+ck "observe: login em outra máquina NÃO revoga"     '[[ "$(jq -r .revoked <<<"$BODY")" == 0 && -f "$SESS/$TOKF" ]]'
 rm -f "$C/ua-gate.json"
 call /auth/login POST '{"username":"alice","password":"a"}' '' 'contest=lc' 'Mozilla outro'
 ck "alice com UA errado 403"   '[[ "$OUT" == *"Status: 403"* ]] && [[ "$(jq -r .error.code <<<"$BODY")" == "ua_gate" ]]'
@@ -79,5 +84,12 @@ ck "admin isento do gate"      '[[ "$(jq -r .logged_in <<<"$BODY")" == "true" ]]
 echo "== proteção: não-admin =="
 call /contest/admin/sessions GET '' "$TOKF" 'contest=lc'
 ck "alice (não-admin) 403"     '[[ "$OUT" == *"Status: 403"* ]]'
+
+echo "== gate legado com ESPAÇO na substring (gravada com %q: MOJ\\ Box) — auditoria do painel, 03/10/2026 =="
+sed -i '/^LOGIN_UA_SUBSTRING=/d' "$C/conf"; printf 'LOGIN_UA_SUBSTRING=%q\n' "MOJ Box" >> "$C/conf"
+call /auth/login POST '{"username":"alice","password":"a"}' '' 'contest=lc' 'Mozilla MOJ Box/3' 8.8.8.8
+ck "UA com 'MOJ Box' entra (o escape do %q não vai p/ a comparação)" '[[ "$(jq -r .logged_in <<<"$BODY")" == true ]]'
+call /auth/login POST '{"username":"alice","password":"a"}' '' 'contest=lc' 'Mozilla Firefox' 8.8.8.8
+ck "…e UA sem a substring continua barrado"                          '[[ "$OUT" == *"Status: 403"* ]]'
 
 echo ""; echo "RESULT: $pass passed, $fail failed"; exit $(( fail>0?1:0 ))

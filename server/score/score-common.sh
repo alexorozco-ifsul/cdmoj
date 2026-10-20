@@ -169,7 +169,8 @@ _sc_users_compute() {
   # de sempre). É deste funil que saem o rank (ordem das linhas) e a ESTRELA de first-to-solve,
   # e é por isso que o corte por coorte tem de ser aqui e não no TXT pronto.
   local CH_JSON='{"cohorts":[]}'
-  if [[ -s "$CONTESTDIR/cohorts.json" ]]; then
+  # só com o módulo `coortes` ligado (o conf já foi sourceado no sc_load; desligar desliga a regra, 03/10/2026)
+  if [[ -s "$CONTESTDIR/cohorts.json" && ",${CONTEST_MODULES:-}," == *",coortes,"* ]]; then
     CH_JSON="$(jq -c '{cohorts:[ (.cohorts // [])[] | {id:(.id//""), regex:(.regex//""),
                        default:(.default == true)} | select(.id != "") ]}' \
                  "$CONTESTDIR/cohorts.json" 2>/dev/null)" || CH_JSON='{"cohorts":[]}'
@@ -210,8 +211,9 @@ _sc_users_compute() {
         [[ "$want" == *" ${coh:-} "* ]] || continue
       fi
       [[ -z "$tn" ]] && tn="$full"
-      # strip any stray ':' that would break the field layout
-      full="${full//:/ }"; tn="${tn//:/ }"; us="${us//:/ }"; uf="${uf//:/ }"; flag="${flag//:/}"
+      # ':' quebraria as colunas do TXT: nos NOMES vira '∶' (U+2236, igual na tela — o mesmo que a gravação faz
+      # desde 04/10/2026, lib/common.sh name_clean; aqui cobre o dado antigo); na bandeira (código) some
+      full="${full//:/$'\xe2\x88\xb6'}"; tn="${tn//:/$'\xe2\x88\xb6'}"; us="${us//:/$'\xe2\x88\xb6'}"; uf="${uf//:/$'\xe2\x88\xb6'}"; flag="${flag//:/}"
       printf '%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n' \
         "$login" "$full" "$tn" "$us" "$uf" "$flag" "${coh:-}"
     done

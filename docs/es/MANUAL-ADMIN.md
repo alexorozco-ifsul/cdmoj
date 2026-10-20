@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ADMIN.md blob:27e561a21f8dba0c537439c957b577344a1bdae9 -->
+<!-- i18n-source: MANUAL-ADMIN.md blob:b87068a22730e67281ffea5b3ebfa00ae3082219 -->
 # MOJ: Manual del organizador (el panel .admin de la competencia)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -41,7 +41,7 @@ panel de un módulo **desactivado** lleva a **Central › Módulos**, con un avi
 
 | Bloque | Qué hace |
 |---|---|
-| **🚦 Antes de empezar** | El checklist previo a la competencia (verde/amarillo/rojo), con un **botón que abre el panel exacto** de cada pendiente. El rojo es **crítico**: revísalo antes de empezar. El checklist es un aviso: el MOJ no impide el inicio de sesión ni los envíos por su causa; los ítems ya revisados quedan plegados. Revisa la ventana, el registro de evaluación, el congelamiento, los jueces, los lenguajes, el TL calibrado, el pool, las cuentas, el staff y el daemon, y si **cada juez ya calibró cada problema** (*Jueces calentados*): el tiempo límite se mide por máquina, y el juez que todavía no calibró un problema lo hace en el 1.er envío de ese problema, que espera minutos. Cuando hay un juez frío, el ítem trae el botón **🔥 Calentar jueces**, que manda calibrar solo a los jueces fríos. Hazlo **antes del inicio** (cada calibración ocupa un lugar del juez por algunos minutos) y vuelve a ejecutar el checklist (↻) para ver cómo "calentando" pasa a "calentados". Además, **solo con el módulo activado**: cohortes, gate de navegador, bloqueo de sede, ronda siguiente, documentos, globos y prórroga. La revisión **módulos** avisa cuando un módulo está desactivado pero tiene datos en la competencia. |
+| **🚦 Antes de empezar** | El checklist previo a la competencia (verde/amarillo/rojo), con un **botón que abre el panel exacto** de cada pendiente. El rojo es **crítico**: revísalo antes de empezar. El checklist es un aviso: el MOJ no impide el inicio de sesión ni los envíos por su causa; los ítems ya revisados quedan plegados. Revisa la ventana, el registro de evaluación, el congelamiento, los jueces, los lenguajes, el TL calibrado, el pool, las cuentas, el staff y el daemon, si algún problema de una competencia ICPC **sigue evaluando después del 1.er error** (*La evaluación se detiene en el 1.er error*: el TLE de un problema con cientos de pruebas tarda minutos — marca "detener en el primer" TLE/WA en la pestaña Límites del editor del problema), y si **cada juez ya calibró cada problema** (*Jueces calentados*): el tiempo límite se mide por máquina, y el juez que todavía no calibró un problema lo hace en el 1.er envío de ese problema, que espera minutos. Cuando hay un juez frío, el ítem trae el botón **🔥 Calentar jueces**, que manda calibrar solo a los jueces fríos. Hazlo **antes del inicio** (cada calibración ocupa un lugar del juez por algunos minutos) y vuelve a ejecutar el checklist (↻) para ver cómo "calentando" pasa a "calentados". El mismo botón está fijo en **Operación › Situación**, y, en una competencia con prioridad **Competencia** (o Super), el calentamiento también corre **solo**: al promover una ronda y unos 15 minutos antes del inicio de cada ronda (queda en el audit como `warm-judges`). Una lista de clase queda solo con el botón. Además, **solo con el módulo activado**: cohortes, gate de navegador, bloqueo de sede, ronda siguiente, documentos, globos y prórroga. La revisión **módulos** avisa cuando un módulo está desactivado pero tiene datos en la competencia. *Sin congelamiento* y *cuentas compartidas* solo son aviso en una competencia de prioridad **Competencia** (en una lista son lo normal). |
 | **🧰 Generar** | Una tarjeta por artefacto, con el estado actual: etiquetas de credenciales, informe de la competencia y jplag siempre (el jplag también abre para el juez principal, que puede ejecutarlo, y para el juez, que solo lo ve); documentos (`documentos`), promover ronda (`rodadas`), ceremonia de revelación y pantalla (`telao`) con el módulo. |
 | **📡 En vivo** | Resumen corto (pendientes, envíos, jueces en línea, respuesta p95, corrección manual). Se actualiza solo; el panel completo es **Operación › Situación**. |
 | **⏱️ Reglas de la competencia** | Inicio, fin y congelamiento, editables ahí mismo; el modo y los lenguajes, en solo lectura; y los **módulos activados** (con un atajo para activarlos/desactivarlos). El resto está en **Central › Reglas**. |
@@ -55,7 +55,7 @@ panel de un módulo **desactivado** lleva a **Central › Módulos**, con un avi
 
 | Panel | Qué hace |
 |---|---|
-| **Problemas** | La competencia en sí: renombrar/reordenar/quitar, **editar el identificador** (la "letra": puede ser `W1`, `Q`…; reordenar conserva el identificador personalizado y el color del globo se mueve con él), restringir lenguajes o el pool de jueces POR problema, actualizar el enunciado desde el banco (o enviar HTML/PDF, **por idioma**), el panel **🌐 Idiomas del enunciado** (abajo) y **🏦 Agregar del banco** (búsqueda y sorteo). |
+| **Problemas** | La competencia en sí: renombrar/reordenar/quitar, **editar el identificador** (la "letra": puede ser `W1`, `Q`…; reordenar conserva el identificador personalizado y el color del globo se mueve con él; con las letras automáticas A, B, C…, reordenar cambia las letras, y el color del globo y las aclaraciones acompañan a cada problema; con la competencia en curso, el panel pide confirmación), restringir lenguajes o el pool de jueces POR problema, actualizar el enunciado desde el banco (el MOJ reindexa el problema y cambia el enunciado en unos segundos; el actual queda hasta entonces), enviar o quitar HTML/PDF **por idioma**, el panel **🌐 Idiomas del enunciado** (abajo) y **🏦 Agregar del banco** (búsqueda y sorteo). |
 | **Informe** | El informe estático de la competencia en un solo lugar: descargar el `tar.gz` navegable, **publicar como histórico** en `/relatorio/<contest>/` (republicar, despublicar) y publicar el informe de cada ronda archivada. La sección 6½ lo explica. |
 
 **🌐 Idiomas del enunciado.** Un problema del banco puede tener el enunciado en portugués, inglés y
@@ -76,11 +76,32 @@ su panel) tiene dos modos:
 - El cuadernillo y el editorial en EN/ES usan la traducción de cada problema. Un problema sin traducción sale
   en portugués en el cuadernillo. El título del problema también sale traducido.
 
+**Nombre del problema en la competencia.** El nombre que aparece en la lista de problemas, en las
+aclaraciones, en los envíos y en el informe es UN nombre por problema. Al insertar un problema sin
+escribir el nombre, MOJ usa el título del banco en el idioma en que se abre el acordeón (el
+`LOCALE`, si se ofrece). Si el problema no tiene título en ese idioma, MOJ usa el título en
+portugués.
+
+- Cuando el problema tiene título en más de un idioma, la búsqueda del banco muestra los títulos
+  (🌐) y el campo del nombre muestra los botones **PT · EN · ES**. Haz clic en un botón para usar el
+  título de ese idioma. Esto vale en el asistente de creación, en **Renombrar** (Competencia ›
+  Problemas) y en **Problemas de la ronda**.
+- En el asistente, el nombre vacío es automático: la Revisión muestra el título que se usará con el
+  idioma elegido en el paso 5.
+- La Central avisa (**Nombre de problema en otro idioma que el de la competencia**) cuando el nombre
+  es el título del banco en otro idioma y existe el título en el idioma de la competencia. Esto
+  ocurre en una competencia creada antes de esta regla o en una competencia que cambió de idioma
+  después de insertar los problemas. El botón **🌐 Usar los títulos en el idioma de la competencia**
+  cambia solo esos nombres. Un nombre personalizado no cambia. Si quieres el nombre en otro idioma,
+  guárdalo en **Renombrar** y el aviso desaparece.
+- En la CLI: `moj-contest -c <cid> problems titles` muestra los títulos de cada problema, y
+  `problems apply-titles` hace lo mismo que el botón de la Central.
+
 ### 👥 Personas: quién entra, quién es quién
 
 | Panel | Qué hace |
 |---|---|
-| **Cuentas** | Crear/restablecer/deshabilitar/quitar cuentas (individualmente y en lote por .txt/.csv), cambiar la contraseña de todos y el atajo a las **Etiquetas de credenciales**. AQUÍ creas las cuentas de rol (sección 3). En una competencia con usuarios **compartidos con Entrenamiento libre**, la tarjeta **🔗 Cuentas compartidas** convierte todo en cuentas propias (sección 8¾). |
+| **Cuentas** | Crear/restablecer/deshabilitar/quitar cuentas (individualmente y en lote por .txt/.csv), cambiar la contraseña de todos y el atajo a las **Etiquetas de credenciales**. AQUÍ creas las cuentas de rol (sección 3). En una competencia con usuarios **compartidos con Entrenamiento libre**, la tarjeta **🔗 Cuentas compartidas** convierte todo en cuentas propias (sección 8¾). En el lote, **Procesar** muestra cómo se leyó cada línea (login, contraseña, nombre, email) y el resultado dice **por qué** quedó fuera cada línea. Una línea con `:` sin encabezado es siempre `login:contraseña:nombre:email` — `localhost:6767` solo se vuelve login + contraseña; un nombre con `:` o `,` va en el **CSV con encabezado**. Un `:` en el nombre del equipo (o de la escuela) se guarda como `∶` (se ve igual): el marcador usa `:` como separador. Vale en todo lugar que guarda un nombre (aquí, Equipos, la creación de la competencia y la inscripción de los alumnos). |
 | **Inscripciones** (módulo `inscricoes`) | El **roster** de la competencia (solo entra quien está inscrito) y la **ventana**: cuándo abre, cuándo cierra (predeterminado: el inicio de la competencia) y cuántos minutos de entrada tardía. Lista equipos e individuales, disuelve equipos, inscribe a mano, **recuerda por DM las invitaciones pendientes** (🔔) y exporta CSV. La sección 8½ lo explica. |
 | **Sesiones** | Quién tiene la sesión iniciada ahora, con la opción de cerrarla; **🚪 salir en masa y bloqueo de login** (cerrar el login, desconectar a todos, reabrir: es el final de una competencia en sala y el cambio de ronda); y el registro de accesos por día. Vale para cualquier competencia. |
 
@@ -88,7 +109,7 @@ su panel) tiene dos modos:
 
 | Panel | Qué hace |
 |---|---|
-| **Situación** | El tablero en vivo (se actualiza en su lugar cada ~12 s): sesiones iniciadas, jueces en línea/ocupados, cola, pendientes, latencia, línea de tiempo, evaluación manual y las **acciones sugeridas** cuando algo no está bien. Globos pendientes/retenidos solo con el módulo `baloes`. |
+| **Situación** | El tablero en vivo (se actualiza en su lugar cada ~12 s): sesiones iniciadas, jueces en línea/ocupados, cola, pendientes, latencia, línea de tiempo, evaluación manual, las **acciones sugeridas** cuando algo no está bien y el botón **🔥 Calentar jueces**. Globos pendientes/retenidos solo con el módulo `baloes`. |
 | **Staff** | Panorama y acciones sobre la cola de impresión (+ globos con el módulo), desempeño por miembro del staff y el **alcance** de cada staff/jefe de sede (regex o `region:<sede>`). `region:<nombre>` cubre todo lo que está **en ese nodo** de Evento › Sedes y escuelas: la sede y, si es un nodo padre, todas las sedes debajo de él (`region:Nordeste` ve las sedes del Nordeste), y también un recorte (`view`) por su nombre. Vale la sede grabada en el equipo o, sin ella, la regex. Una regex en el alcance se prueba en el usuario. |
 | **Jueces** | La cola de la corrección manual: quién reservó cada envío, votos, antigüedad; decidir/resolver en el momento; y la configuración del veredicto manual (opciones de etiqueta + **🔎 Qué va a revisión**: una tabla problema × veredicto; lo marcado va a los jueces y el resto sale automático; sin nada marcado, todo sale automático; con excepciones por lenguaje y el botón para liberar los retenidos que la tabla nueva deja salir). |
 | **Auditoría** | Feed unificado de todo lo que pasó (acciones de admin, inicios de sesión, envíos, veredictos) con filtros y CSV, más los **respaldos** que subieron los usuarios (por usuario, con ZIP). |
@@ -99,9 +120,9 @@ su panel) tiene dos modos:
 |---|---|
 | **Rondas** (`rodadas`) | **Calentamiento y competencia oficial en la MISMA competencia**: planifica cada ronda (ventana + problemas), muestra el checklist y promueve, archivando todo lo que pasó. La sección 6 lo explica. |
 | **Documentos** (`documentos`) | Genera, en PDF y HTML en los tres idiomas (pt/en/es), los documentos de la competencia: **Entorno de evaluación** (info sheet), **Cuadernillo de la competencia** (portada + enunciados), **Hoja de límites de tiempo** y el **editorial** (solo se publica después del FIN de la competencia). La sección 5 lo explica. |
-| **Globos** (`baloes`) | El color de cada letra: es lo que sale dibujado en la hoja del globo. El predeterminado cubre A–O; con más de 15 problemas, define los demás (si no, salen grises). Son los colores de la ronda en vivo. Para dar colores propios a otra ronda, usa Evento › Rondas. |
+| **Globos** (`baloes`) | El color de cada letra: es lo que sale dibujado en la hoja del globo. El predeterminado cubre A–O; con más de 15 problemas, define los demás (si no, salen grises). Son los colores de la ronda en vivo. Para dar colores propios a otra ronda, usa Evento › Rondas. Cambiar un color pasa al color nuevo las tareas de globo todavía no impresas; la pantalla avisa cuántas hojas ya se imprimieron con el color anterior. |
 | **Clasificación** (`classificacao`) | Quién se clasifica para las próximas etapas. Cada **etapa** (Final Brasileña, PDA, Mundial) tiene su motor, elegido en el panel: vista previa, borrador, publicación (un chip 🎓 por etapa en el marcador) y el **override manual** — excluir del cálculo, retirar sin recalcular, promover a mano, siempre con motivo. Para competencias menores (una selectiva), el motor **Manual**: indicas cuántos equipos avanzan y cuál es la próxima etapa, y haces clic en el marcador en quién promover (motivo opcional). `docs/CLASSIFICACAO.md` lo explica. |
-| **Equipos** (`sedes` o `telao`) | Identidad de cada cuenta en el marcador: nombre del equipo, país/bandera, sede, universidad, escudo y foto. Carga por CSV y "materializar coincidencias". |
+| **Equipos** (`sedes` o `telao`) | Identidad de cada cuenta en el marcador: nombre del equipo, país/bandera, sede, universidad, escudo y foto. Carga por CSV y "materializar coincidencias". Un `:` en el nombre o la escuela pasa a `∶` (se ve igual; la pantalla avisa). |
 | **Cohortes** (`coortes`) | Equipos **invitados** (extraoficiales, "CCL") separados de los oficiales: quién aparece en el marcador público, quién ve a quién, y el **🔓 Liberar resultados** de después de la ceremonia. La sección 8 lo explica. |
 | **Sedes y escuelas** (`sedes`) | Las sedes (nombre + regex sobre el login), que alimentan el filtro del marcador, el alcance del staff, las etiquetas, **las fotos/músicas que cada jefe de sede gestiona en la pantalla** y el gate por sede; las reglas de país/escuela por regex; y la **⏱ prórroga por sede/grupo** (regex → nuevo fin; solo extiende, nunca acorta). En **tres modos** (Simple, Intermedio, Avanzado) con vista previa — sección 7¼. |
 
@@ -109,9 +130,9 @@ su panel) tiene dos modos:
 
 | Panel | Qué hace |
 |---|---|
-| **Gate y bloqueo** | Desde dónde inició sesión cada equipo (IP y navegador) en cada ronda, con CSV; la configuración del **gate de navegador por sede** (esperado × visto por equipo) y el **bloqueo de sede por IP** (IP fijados, bloqueos, fijar/soltar). La sección 7 lo explica. |
-| **Anomalías** | Lo que no está bien en el uso de las máquinas **durante la competencia** (solo con el gate de UA activado): equipo con 2 sesiones activas, máquina compartida por 2 equipos, envío desde otra máquina, UA fuera de la sede, sede con menos máquinas que equipos, cambios de máquina, el rastro de la **sesión única** y los bloqueos del bloqueo de sede. Línea de tiempo, tabla por equipo, CSV, cerrar sesión, **desconectar UA divergente**. La sección 7½ lo explica. |
-| **mlinux** | El panorama de las máquinas por sede que recoge el nutellaboot (hardware y modelo del equipo, RAM, editores, presión de memoria con PSI, salud en la competencia: reinicios, procesos terminados por falta de memoria, reloj desfasado, inactividad), con la recolección y los comandos remotos. Los datos de salud y PSI solo aparecen para las máquinas con el agente nuevo del mlinux; la pantalla dice cuántas son. La tarjeta **Vínculo máquina-equipo** muestra cuántas máquinas el MOJ ya vinculó a un equipo en el nutellaboot (ocurre solo, en el inicio de sesión del equipo, con el agente nuevo del mlinux), y tiene los botones **enviar roster** y **republicar vínculos**: usa los dos, en este orden, cuando la tarjeta diga "equipo fuera del roster de la imagen". La tarjeta **Alertas de máquinas en tiempo real** instala el aviso del nutellaboot: cuando una máquina levanta una alerta (pendrive, celular, red por USB, identidad repetida), aparece en Máquinas › Anomalías y, durante la competencia, el dueño de la competencia la recibe en Telegram. Para instalarlo o quitarlo, la clave guardada tiene que ser la de administración del nutellaboot. `docs/NUTELLABOOT.md` lo explica. |
+| **Gate y bloqueo** | Desde dónde inició sesión cada equipo (IP y navegador) en cada ronda, con CSV; la configuración del **gate de navegador por sede** (esperado × visto por equipo) y el **bloqueo de sede por IP** (IP fijados, bloqueos, fijar/soltar). La sección 7 lo explica. El mapa cuenta los inicios de sesión desde la apertura del login de la ronda (sin tomar los de la ronda anterior), no solo los posteriores al inicio. |
+| **Anomalías** | Lo que no está bien en el uso de las máquinas **durante la competencia** (con el navegador del MLinux identificando la máquina, con o sin gate; el "UA fuera de la sede" necesita el gate en Bloquear u Observar): equipo con 2 sesiones activas, máquina compartida por 2 equipos, envío desde otra máquina, UA fuera de la sede, sede con menos máquinas que equipos, cambios de máquina, el rastro de la **sesión única** y los bloqueos del bloqueo de sede. Línea de tiempo, tabla por equipo, CSV, cerrar sesión, **desconectar UA divergente** y **explicar** un caso. La sección 7½ lo explica. Un equipo que inició sesión **antes del inicio** (el login abre antes de la competencia) aparece con la máquina de su último login antes de empezar, marcada "antes del inicio": es la sesión con la que el equipo empieza; cambiar de máquina antes de empezar no es anomalía. |
+| **mlinux** | El panorama de las máquinas por sede que recoge el nutellaboot (hardware y modelo del equipo, RAM, editores, presión de memoria con PSI, salud en la competencia: reinicios, procesos terminados por falta de memoria, reloj desfasado, inactividad), con la recolección y los comandos remotos. Los datos de salud y PSI solo aparecen para las máquinas con el agente nuevo del mlinux; la pantalla dice cuántas son. La tarjeta **Vínculo máquina-equipo** muestra cuántas máquinas el MOJ ya vinculó a un equipo en el nutellaboot (ocurre solo, en el inicio de sesión del equipo, con el agente nuevo del mlinux), y tiene los botones **enviar roster** y **republicar vínculos**: usa los dos, en este orden, cuando la tarjeta diga "equipo fuera del roster de la imagen". Guardar la clave (o reactivar el vínculo) con equipos que ya iniciaron sesión vuelve a publicar automáticamente los vínculos de esos logins. La tarjeta **Alertas de máquinas en tiempo real** instala el aviso del nutellaboot: cuando una máquina levanta una alerta (pendrive, celular, red por USB, identidad repetida), aparece en Máquinas › Anomalías y, durante la competencia, el dueño de la competencia la recibe en Telegram. Para instalarlo o quitarlo, la clave guardada tiene que ser la de administración del nutellaboot. `docs/NUTELLABOOT.md` lo explica. |
 
 > **Globo y congelamiento.** Por defecto, un acierto logrado con el marcador **congelado no genera tarea de
 > globo**, y esos globos **no se entregan después**: la tarea no existe. Es la regla de
@@ -141,6 +162,12 @@ de curso en laboratorio con **Maratona Linux** activa `maquinas` (gate de máqui
 anomalías). La Maratona activa todos. Activar muestra los paneles, las revisiones de la Central y las tarjetas
 correspondientes; **desactivar oculta, sin borrar nada**: reactivar restaura todo.
 
+**Desactivado, la regla del módulo NO se aplica**, aunque la configuración esté guardada: **Máquinas** desactiva el
+gate de navegador, la sesión única y el bloqueo de sede (las IP fijadas se sueltan de inmediato); **Sedes** desactiva
+la prórroga por sede; **Inscripciones** deja entrar a quien no se inscribió (el miembro de equipo sigue entrando como el
+equipo), quita el botón **Inscríbete** de la página de inicio y nadie puede inscribirse; **Cohortes** pone a todos en el marcador público; **Globos** deja de crear tareas de globo (reactivarlo crea
+las que faltaron). Antes de desactivar un módulo de una competencia en curso, confirma que eso es lo que quieres.
+
 | Módulo | Qué activa | Detectado por |
 |---|---|---|
 | `sedes` | Evento › Sedes y escuelas, Evento › Equipos (identidad), prórroga por sede, alcance del staff por sede | `regions.json`, `teams-meta.json`, prórrogas |
@@ -164,6 +191,35 @@ Solo desactivar es manual. También vale para el spec de creación: un solo JSON
 colores, cohortes, gate, rondas, documentos, ventana de inscripción, pantalla, clasificación); el `export`
 devuelve la misma sección, sin secretos. Las competencias creadas antes de los módulos se detectan una vez
 por los archivos que ya tienen (`server/bin/contest-modules-detect.sh`).
+
+**Requisitos.** Dos módulos solo funcionan con otra configuración de la competencia, y por eso solo se activan con ella (la participación virtual tiene sus propias condiciones, en la §6¾; la guía rápida de abajo las reúne todas):
+**`inscricoes`** (inscripción) necesita las **cuentas del Entrenamiento Libre** (competencia creada con usuarios
+compartidos): cada alumno se inscribe con su cuenta del entrenamiento. En una competencia con cuentas propias, la
+inscripción bloquearía a todos los alumnos, así que no se activa (ni desde el panel, ni al guardar la ventana de
+inscripción, ni en la creación, al duplicar o desde una plantilla). Con cuentas propias, entrega las credenciales en
+**Personas › Cuentas**. **`esqueletos`** (esqueletos de código) necesita el editor de código en el navegador (Reglas).
+La tarjeta del módulo muestra un candado y lo que falta. Si una competencia ya tenía el módulo activado sin el requisito,
+la **Central** avisa (y, sin las cuentas del entrenamiento, la regla "solo inscritos entran" no se aplica). Convertir las
+cuentas compartidas en propias (sección 8¾) también desactiva la inscripción.
+
+**Guía rápida: lo que necesita cada módulo.** A la izquierda, lo que el MOJ exige para activar el módulo (↔ = vale en
+los dos sentidos); a la derecha, lo que el módulo necesita, ya activado, para hacer algo.
+
+<div class="deps">
+<div class="deps-row deps-hrow"><div class="deps-h r">Para activarlo, necesita</div><div></div><div class="deps-h c">Módulo</div><div></div><div class="deps-h">Activado, actúa cuando hay</div></div>
+<div class="deps-row"><div class="deps-req"><span class="deps-b req">las cuentas del Entrenamiento Libre (<code>USERS_FROM</code>)</span><span class="deps-note">convertir a cuentas propias desactiva el módulo</span></div><div class="deps-ar">→</div><div class="deps-mod"><span class="deps-b mod"><code>inscricoes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">la inscripción activada (Personas › Inscripciones)</span></div></div>
+<div class="deps-row"><div class="deps-req"><span class="deps-b req">el editor de código en el navegador (Reglas)</span><span class="deps-note">con el módulo activado, el editor no se desactiva</span></div><div class="deps-ar">↔</div><div class="deps-mod"><span class="deps-b mod"><code>esqueletos</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-none">nada: el esqueleto predeterminado de cada lenguaje</span></div></div>
+<div class="deps-row"><div class="deps-req"><span class="deps-b req">modo ICPC</span><span class="deps-b req">no secreta</span><span class="deps-b req">marcador no anónimo</span><span class="deps-b req">inicio y fin</span><span class="deps-b req">todos los problemas públicos en el entrenamiento</span><span class="deps-note">al crear, nace desactivado y la pantalla dice por qué (§6¾)</span></div><div class="deps-ar">→</div><div class="deps-mod"><span class="deps-b mod"><code>virtual</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">competencia terminada en todas las sedes</span><span class="deps-b act">marcador descongelado (Terminar evento)</span></div></div>
+<div class="deps-sep"></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>sedes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">el árbol de sedes (Evento › Sedes y escuelas)</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>maquinas</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">gate: una regla</span><span class="deps-b act">mlinux: la clave de NutellaBoot</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>rodadas</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">el plan de rondas (Evento › Rondas)</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>documentos</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-none">nada: se generan de lo que la competencia ya tiene</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>baloes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-none">nada: colores del ICPC por defecto</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>coortes</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">las cohortes (Evento › Cohortes)</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>telao</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">pantalla: el evento publicado en Animeitor</span></div></div>
+<div class="deps-row"><div class="deps-req nil"><span class="deps-none">—</span></div><div class="deps-ar empty"></div><div class="deps-mod"><span class="deps-b mod"><code>classificacao</code></span></div><div class="deps-ar">→</div><div class="deps-act"><span class="deps-b act">el motor de cada etapa (Evento › Clasificación)</span></div></div>
+</div>
 
 ### Esqueletos de código (módulo `esqueletos`)
 
@@ -197,9 +253,9 @@ habituales). Úsalo en una lista o un examen de curso, cuando el esqueleto ayuda
 
 - **Nombre**: el título que se muestra; el *id* (que se convierte en el subdominio) no cambia.
 - **Inicio / Fin**: la ventana de la competencia. Antes del inicio: cuenta regresiva; después del fin: nadie más envía (excepto los roles de juez). La prórroga fina está en la sección ⏱ (por regex de login; ej.: solo una sala que se quedó sin luz).
-- **Apertura del login (pantalla de espera)**: desde cuándo el alumno puede INICIAR SESIÓN (antes de eso, cuenta regresiva en la pantalla de inicio de sesión). Sirve para liberar el inicio de sesión minutos antes del inicio.
-- **Congelamiento del marcador**: congela el marcador público a partir de esta hora (estilo ICPC). Los jueces y el admin siguen viendo todo; la revelación ocurre en la ceremonia.
-- **Idioma**: portugués, inglés o español. Fija el idioma de las pantallas de todos en la competencia (sin selector) y también el del **papel impreso** (portada de la impresión y hoja del globo), del **informe** final y de los mensajes de invitación en Telegram (en inglés o español, el mensaje lleva también el portugués). Los enunciados y los documentos tienen su propio idioma (🌐 Idiomas del enunciado, Evento › Documentos).
+- **Apertura del login (pantalla de espera)**: desde cuándo el alumno puede INICIAR SESIÓN (antes de eso, cuenta regresiva en la pantalla de inicio de sesión). Sirve para liberar el inicio de sesión minutos antes del inicio. La API también bloquea al equipo antes de ese horario (la organización entra siempre). **Cambiar de ronda no cambia este campo**: con calentamiento y competencia oficial, pon la apertura antes del inicio del calentamiento. La **🏁 Central** avisa cuando la apertura cae después del inicio (aviso) o después del fin (crítico) de la ronda en curso. Vaciar el campo y guardar borra la apertura: el inicio de sesión vuelve a abrir al inicio de la ronda.
+- **Congelamiento del marcador**: congela el marcador público a partir de esta hora (estilo ICPC). Los jueces y el admin siguen viendo todo; la revelación ocurre en la ceremonia. Antes de que el congelamiento empiece, puedes cambiar o vaciar el campo libremente. Después de que empezó, el marcador solo se descongela a partir del fin de la competencia para todas las sedes + 1 minuto.
+- **Idioma**: **Automático** (cada persona ve las pantallas en el idioma de su navegador; es el valor por defecto de una competencia sin idioma guardado), portugués, inglés o español. Un idioma elegido fija el idioma de las pantallas de todos en la competencia (sin selector) y también el del **papel impreso** (portada de la impresión y hoja del globo), del **informe** final y de los mensajes de invitación en Telegram (en inglés o español, el mensaje lleva también el portugués). Los enunciados y los documentos tienen su propio idioma (🌐 Idiomas del enunciado, Evento › Documentos).
 
 **👁 Lo que el equipo ve durante la competencia**
 
@@ -208,18 +264,26 @@ habituales). Úsalo en una lista o un examen de curso, cuando el esqueleto ayuda
 - **Editor de código en el navegador disponible**: el editor lado a lado con el enunciado.
 - **Mostrar el tiempo límite de los problemas a los usuarios**: muestra los TL por lenguaje en el enunciado.
 - **Permitir el backup de archivos por los usuarios** / **Permitir solicitudes de impresión por los usuarios (.staff)**: habilitan la subida de respaldos por el alumno y las solicitudes de impresión (que van a la cola del staff).
-- **Marcador anónimo**: oculta el desempeño individual (solo la posición del propio alumno).
+- **Marcador anónimo**: oculta el desempeño individual: quien no es de la organización recibe del MOJ solo el resumen
+  (cuántos resolvieron cuántos problemas, solucionadores por problema, cuartiles), sin nombre ni nota de nadie. La
+  organización (admin, juez principal, jueces, `.mon`, `.animeitor`) ve el marcador completo. Activado, el informe no
+  se puede publicar, el sitio de la ronda archivada queda cerrado, la clasificación no aparece y la participación
+  virtual no se abre.
 - **Filtro de inicio de sesión por substring de UA**: solo los navegadores cuya identificación contiene la substring pueden iniciar sesión (máquina de competencia bloqueada). Los roles privilegiados están exentos.
 - **🕵️ SUPER SECRETO**: la competencia desaparece de la página de inicio/archivo/estado e incluso el marcador exige iniciar sesión. Para competencias de las que ni siquiera puede constar que existen.
 
 **⚖️ Evaluación (lenguajes, pool, veredicto manual)**
 
-- **💻 Lenguajes permitidos en la competencia**: la lista permitida en la competencia (cada problema puede restringir más, en Competencia › Problemas).
+- **💻 Lenguajes permitidos en la competencia**: la lista permitida en la competencia. Un problema puede tener su propia lista, en Competencia › Problemas: esa lista vale EN LUGAR de esta.
 - **🖥️ Máquinas de juez (pool)**: qué MÁQUINAS de evaluación atienden esta competencia (vacío = cualquier juez en línea). No confundir con los jueces HUMANOS (sección 4).
+- **Prioridad en la evaluación y envíos en la cola**: decide el turno de la competencia en la cola de evaluación y la regla de envíos. Se elige al crear — **obligatoria en el asistente**, que no tiene valor por defecto (en el TCP 2026 la competencia oficial nació como Lista pública sin que nadie la eligiera; por la API o la CLI, sin el campo, vale Lista pública) — y se cambia aquí, en cualquier momento, al final de la sección **⚖️ Evaluación**. Con **Lista pública** o **Lista privada**, cada equipo tiene como máximo **3 envíos esperando veredicto**: el 4.º se rechaza hasta que salga un resultado. Eso protege al juez de quien reenvía sin parar. Con **Competencia**, se evalúa antes que las listas y no hay límite: a partir del **6.º envío esperando veredicto**, los siguientes de ese equipo entran más atrás en la cola (como si llegaran 2 minutos después), sin rechazar nada. Un envío retenido en el veredicto manual no cuenta. El cambio vale para los próximos envíos. La **Super** (salta toda la cola) solo la da o quita el **superadministrador del entrenamiento**, en Panel del entrenamiento › Competencias: aquí no aparece, y una competencia en Super queda con el campo bloqueado. Todo cambio de prioridad va a la **Auditoría** de la competencia y a la traza del entrenamiento, con quién lo cambió, de cuál a cuál y por dónde. La **🏁 Central** muestra la regla vigente (ítem "Envíos en la cola") y avisa cuando una competencia ICPC quedó sin prioridad elegida. El operador del MOJ cambia el límite de 3 en el conf: `SUBMIT_MAX_INFLIGHT=<n>` (`0` lo desactiva).
 - **Veredicto manual**: activa la **corrección validada por jueces humanos** (sección 4).
 - **N.º de jueces que validan cada veredicto**: el quórum de la corrección manual: **de 1 a 5, predeterminado 2**. Con 1, un único voto decide (revisión simple); con N≥2, el veredicto solo sale con N votos **unánimes**: cualquier divergencia se convierte en conflicto para el juez principal.
 - **⏱ Penalización (marcador ICPC)**: minutos sumados por cada intento no aceptado antes del Accepted (predeterminado 20) y QUÉ veredictos penalizan (predeterminado wa/tle/mle/rte: **Compilation Error queda FUERA** por defecto; vacío = nada penaliza).
 - **👁️ Marcador completo (sin congelamiento)**: lista de usuarios permitidos que ven el marcador sin congelamiento (además de admin/jueces).
+
+**Guardar** escribe solo lo que cambió (la Auditoría registra solo eso). Si una opción está mal (por ejemplo, una
+zona horaria que no existe), no se guarda nada y el mensaje dice qué opción corregir.
 
 Por la CLI, todo esto es `moj contest -c <cid> settings set chave=valor` (ej.:
 `settings set manual_verdict=true review_judges=3`).
@@ -242,6 +306,14 @@ operaciones en masa (restablecer contraseña, deshabilitar) **se saltan** las cu
 
 Regla de oro: **ninguna cuenta con sufijo de rol entra en el marcador ni en las estadísticas**:
 crea todas las que necesites sin miedo de ensuciar el resultado.
+
+**Aviso de la organización en cualquier página.** Admin, juez principal, juez y `.mon` reciben, en cualquier
+página de la competencia, una franja arriba con sonido: **💬 clarification sin respuesta** (todos esos roles),
+**⚖ veredicto esperando tu voto** (admin, juez principal y juez, con la corrección manual activada) y **⚠
+conflicto** (admin y juez principal). La cantidad aparece también en el título de la pestaña. El sonido se
+repite cada 2 minutos mientras haya pendientes; la franja tiene los botones para activar o silenciar el sonido
+y para pedir la notificación del sistema. La revelación del marcador, la pantalla del Animeitor y la ventana de
+editor no muestran la franja. Detalles en `MANUAL-JUIZ.md`.
 
 > Competencia con usuarios **compartidos con Entrenamiento libre**: una cuenta de rol del
 > entrenamiento **no** entra con el rol aquí. Solo entran el `.admin` de quien creó la competencia y
@@ -315,9 +387,11 @@ competencia, cada uno en **PDF y HTML**, en **portugués, inglés y español**:
    modificados; *restaurar predeterminado* devuelve el idioma de la pestaña al texto del MOJ.
 4. **Genera** (botón de cada fila, o *⚙️ Generar todo (pt+en+es)*), **o sube un PDF listo**
    (botón *subir PDF* de la fila). El PDF subido es un documento completo: gana al generado en
-   todo lo que el MOJ sirve y se puede publicar sin generar. *volver al generado* borra solo el subido.
+   todo lo que el MOJ sirve y se puede publicar sin generar. *volver al generado* borra solo el subido
+   (en un documento publicado sin PDF generado, el MOJ lo rechaza: genera antes o despublica).
    Convertir los PDF lleva algunos segundos; el cuadernillo es el que más tarda, porque junta un PDF
-   por problema.
+   por problema. Si falla la conversión a PDF, el mensaje dice qué documento falló y el PDF anterior
+   (si había) sigue siendo el que todos descargan.
 5. **Revisa**: cada fila tiene **PDF**, **HTML** y **abrir**. Revísalo antes de publicar.
    ¿**Algo torcido en el PDF generado** (demasiado espacio o muy poco entre los elementos, una imagen
    grande) que causó el Markdown del enunciado? Cada documento generado tiene también el **✎ .odt**,
@@ -326,7 +400,7 @@ competencia, cada uno en **PDF y HTML**, en **portugués, inglés y español**:
    del cuadernillo trae la portada como página editable seguida de los enunciados; si la portada es un PDF
    subido, o un problema tiene el enunciado en un PDF propio, el `.odt` marca el lugar y tú unes el
    PDF al exportar. Solo el admin y el juez principal descargan el `.odt`.
-6. **Publica**. Publicar hace dos cosas: el documento pasa a aparecer en la sección **Competencia** de la
+6. **Publica** (solo un documento con PDF, generado o subido). Publicar hace dos cosas: el documento pasa a aparecer en la sección **Competencia** de la
    página de la competencia y en **Documentos**. Quién ve qué:
    - **Entorno de evaluación**: publicado = visible para todos los roles (es logística).
    - **Cuadernillo y hoja de límites de tiempo**: antes del INICIO de la competencia solo los descargan `.admin`, `.cjudge` y
@@ -336,9 +410,9 @@ competencia, cada uno en **PDF y HTML**, en **portugués, inglés y español**:
      noticia adjunta el PDF).
    - **Editorial**: solo se publica después del fin, y solo los jueces lo descargan antes de que la competencia termine
      para TODAS las sedes.
-   Si marcas **+ noticia**, el MOJ además crea una noticia con el PDF adjunto.
-   **Despublicar** lo deshace (el enlace desaparece; la noticia, si se creó, sigue; bórrala en la pestaña de
-   noticias si corresponde).
+   Si marcas **+ noticia**, el MOJ además crea una noticia con el PDF adjunto (el PDF que todos
+   descargan: el subido, si lo hay).
+   **Despublicar** lo deshace: el enlace desaparece y la noticia con el adjunto de ese documento también.
 
 **¿Lo regeneraste? No hace falta publicar de nuevo**: el enlace publicado apunta al documento actual,
 así que generar de nuevo ya entrega la versión nueva a quien lo descargue. Pero **avisa a la sede**: quien ya
@@ -438,10 +512,19 @@ competencia, vacía), y el archivo es inmutable. Lo correcto es **invertir edita
 | `review_pending` | hay envíos en la corrección manual sin veredicto liberado: el voto del juez caería en el marcador de la competencia |
 | `judged_down` | el daemon de evaluación no está vivo, así que la cola no se vacía |
 | `no_next_round` | no hay ronda planificada |
+| `official_over` | la ronda en vivo es la **competencia oficial** y ya terminó: promover archiva su resultado y el marcador visible vuelve a cero. Para **mostrar el resultado**, no promuevas: desactiva el secreto en Reglas y publica el informe |
 
 Hay un `--force` (casilla "ignorar los bloqueadores"), para emergencias: **no** elimina el
 riesgo, solo asume que sabes lo que estás haciendo. El único que el `--force` **no** ignora es
 `no_next_round` (sin ronda planificada no hay adónde promover).
+
+**¿Promoviste sin querer? Deshazlo.** En Evento › Rondas, la tarjeta **↩ Deshacer la última promoción**
+(o `moj-contest rounds undo`) vuelve a poner en vigor la ronda archivada con todo lo que tenía —
+envíos, veredictos, clarifications, impresiones, marcador — y la ronda que entró vuelve a
+planificada. Solo funciona mientras la ronda que entró **no haya tenido ninguna actividad** (ningún
+envío, clarification, impresión o aviso); si no, la tarjeta dice qué pasó en ella. Escribes el id de
+la competencia para confirmar, y queda en el audit. Fue el caso del TCP 2026: después de la
+competencia, el organizador creó una ronda extra y la promovió, y el marcador volvió a cero.
 
 > Una competencia que usa las cuentas de otra (`USERS_FROM`) **promueve normalmente**: el archivado solo
 > toca el `users/` local. Antes era un bloqueador; dejó de serlo porque es justamente el caso de uso
@@ -497,6 +580,15 @@ pone el informe generado en la promoción en
 `/relatorio/<contest>/rodada/<slug>/`, y la página de inicio del informe principal, al ser
 (re)publicada, pasa a enlazar las rondas públicas en "Rondas anteriores de este evento".
 
+MOJ se niega a publicar el informe cuando mostraría lo que todavía no es público:
+
+- **Antes del inicio de la competencia.** El informe trae los enunciados.
+- **Con el marcador congelado, hasta el fin de la competencia para todas las sedes + 1 minuto.** El informe
+  muestra el marcador completo. Después de eso, si el marcador sigue congelado (la revelación no ocurrió), el
+  panel pide confirmación.
+- **Con una cohorte PRIVADA y los resultados no liberados.** El informe muestra todos los equipos. Vale también
+  para el informe de una ronda archivada. Libera los resultados en Evento › Cohortes.
+
 ## 6¾. Participación virtual (Evento › Virtual, módulo `virtual`)
 
 Con la competencia terminada, cualquier cuenta del Entrenamiento libre puede **rehacer la competencia una vez**, en su propio
@@ -506,11 +598,19 @@ tiempo, contra el marcador oficial. El marcador oficial **no cambia**. Referenci
 
 1. la competencia **no es secreta**;
 2. el modo es **ICPC**;
-3. **todos los problemas ya son públicos en el entrenamiento**. Si alguno no lo es, la respuesta es un error que dice
+3. el marcador **no es anónimo**;
+4. la competencia tiene **inicio y fin**;
+5. **todos los problemas ya son públicos en el entrenamiento**. Si alguno no lo es, la respuesta es un error que dice
    cuántos faltan. Publica los problemas primero (gestión de problemas) y actívalo de nuevo.
 
-Puedes activar el módulo antes del fin de la competencia. Queda **inactivo** y se abre solo cuando la competencia
-termina para todas las sedes **y** el marcador se descongela (botón **Terminar evento**).
+La tarjeta del módulo muestra el candado y lo que falta, y la **Central** avisa si ya está activado sin eso. Al crear
+(spec, plantilla o copia), una competencia que no cumple estas condiciones nace con el módulo **desactivado**, y la
+pantalla del resultado (o la CLI) dice por qué: actívalo después en Central › Módulos.
+
+Puedes activar el módulo antes del fin de la competencia (con los problemas ya públicos). Queda **inactivo** y se abre
+solo cuando la competencia termina para todas las sedes **y** el marcador se descongela (botón **Terminar evento**). El
+botón **Virtual** en la tarjeta de la competencia y el aviso en el marcador solo aparecen cuando la participación
+virtual se puede hacer.
 
 **Atención:** activar este módulo hace que el marcador final y la lista de problemas sean visibles para las cuentas del
 entrenamiento. Una competencia que no puede verse desde fuera no debe activar el módulo.
@@ -556,11 +656,16 @@ Cuando cada sede corre **su propia** imagen, el UA de cada máquina lleva un ped
 del equipo: `teambrspso001` (Brasil/BR, `São Paulo`/SP, Sorocaba/SO) corre en una imagen cuyo UA contiene
 `brspso`. Una substring única no sirve, así que el MOJ **deriva lo esperado del login**.
 
-**En la web** (sección 🔒 de Máquinas › Gate y bloqueo): el interruptor **"Bloquear a quien no venga de la imagen de la
-sede"** lo activa/desactiva; debajo van la **regex del login (con captura)** y el **UA esperado** (`\1`),
+**En la web** (sección 🔒 de Máquinas › Gate y bloqueo): el **modo** — **Desactivado**, **Observar** (muestra el
+esperado × visto y el "UA fuera de la sede" en las Anomalías, **sin bloquear a nadie ni cerrar sesiones**: se puede
+activar en medio de la competencia para revisar la sala) o **Bloquear** (el inicio de sesión devuelve 403); debajo van la
+**regex del login (con captura)** y el **UA esperado** (`\1`),
 con un **probador en vivo** ("probar con el login" → *UA debe contener `brspso` · sede Sorocaba*),
 y tres listas plegables: **overrides por sede**, **reglas regex de login** y **exentos**.
-Guardar ya vale para el próximo inicio de sesión.
+Guardar ya vale para el próximo inicio de sesión. **Sin ninguna regla el gate no hace nada**: el panel dice
+"ninguna regla: nadie es bloqueado ni observado", guardar Bloquear u Observar sin regla se rechaza, y la 🏁 Central
+avisa cuando el módulo `maquinas` está activado sin ningún gate guardado (guarda **Desactivado** si es a propósito).
+Fue lo que pasó en el TCP 2026: el panel antiguo marcaba "activo" sin ninguna regla.
 
 **En la CLI**, lo mismo:
 
@@ -568,6 +673,7 @@ Guardar ya vale para el próximo inicio de sesión.
 moj contest -c <cid> ua-gate set --from-login '^team([a-z]{6})[0-9]{3}$' --expect '\1'
 moj contest -c <cid> ua-gate set --region 'Sorocaba=brspso-v2'     # sede fuera del patrón
 moj contest -c <cid> ua-gate set --exempt '^ccl' --exempt time-reserva-07
+moj contest -c <cid> ua-gate set --mode observe                     # mirar sin bloquear (enforce = bloquear, off = desactivar)
 moj contest -c <cid> ua-gate check teambrspso001                   # lo que se espera de él
 moj contest -c <cid> ua-gate show
 ```
@@ -576,23 +682,36 @@ Una regla cubre **todas las sedes de una vez**. El orden de resolución es: **ex
 rol (siempre entra) › regla por regex › **override de la sede** › captura en el login › substring
 única (el `login_ua_substring` de siempre, que sigue valiendo como último recurso).
 
-- Quien no coincide queda **bloqueado en el inicio de sesión** (403): la decisión fue bloquear, con la lista de **exentos**
-  como margen. `--mode off` desactiva el gate sin borrar la configuración.
+- En el modo **Bloquear**, quien no coincide queda **bloqueado en el inicio de sesión** (403), con la lista de **exentos**
+  como margen. En el modo **Observar** nadie es bloqueado: quien entra fuera del patrón aparece en Máquinas › Anomalías.
+  Un camino seguro es **Observar en el calentamiento** (revisar la sala) y **Bloquear en la competencia**. `--mode off`
+  desactiva el gate sin borrar la configuración.
 - El panel Máquinas › Gate y bloqueo muestra **UA esperado × UA visto** por equipo y cuenta cuántos están fuera de la
   imagen de la sede: así se arregla la sala **en el calentamiento**, antes de que el gate bloquee
-  a alguien en la competencia.
+  a alguien en la competencia. El ✓ quiere decir que TODOS los navegadores vistos de ese equipo son el
+  de la imagen; con alguno fuera aparece "parte fuera de la imagen".
+- Con inscripción por equipos, al **miembro** se le exige el esperado del **equipo** (la sede y el patrón de
+  login son de la cuenta del equipo).
 - Quien ya tiene la sesión iniciada con el navegador equivocado sale con **"Desconectar UA divergente"** (Máquinas ›
   Anomalías), que compara cada sesión con lo esperado para **ese** equipo.
 - **Bloqueo de sede por IP** (interruptor en la misma sección 🔒, DESACTIVADO por defecto; actívalo en la competencia): el gate
   y el aislamiento por subdominio no frenan `curl --resolve moj…:443:<IP>` desde la máquina de competencia al
   sitio base (entrenamiento, respaldos que el alumno subió antes, otra competencia). Con el bloqueo, cada inicio de sesión de un
-  competidor **fija el IP de origen** (la salida de la sede) a esta competencia hasta el fin + margen; desde ese IP
+  competidor **fija el IP de origen** (la salida de la sede) a esta competencia hasta el fin + margen (con rondas,
+  hasta el fin de la última ronda planificada: la IP fijada en el calentamiento sigue fijada en la oficial); desde ese IP
   cualquier otro destino responde **403 `site_locked`**, incluida una sesión del entrenamiento abierta antes. Las cuentas
   de rol están exentas. **Toda reivindicación y todo bloqueo van a la auditoría** (`site-lock-claim`,
   `site-lock-block`) y aparecen en Máquinas › Gate y bloqueo (bloqueo de sede), con "soltar" por IP y "🔒 Fijar IPs
   ya vistos" (útil en la mañana de la competencia). Efecto secundario aceptado: durante la ventana, todos los que estén detrás
   de ese IP público pierden el entrenamiento.
-- **Sesión única por equipo** (interruptor en la misma sección 🔒, activado por defecto): con el gate vigente, un
+- **Equipos solo por la dirección de la competencia** (siempre activo, no hay interruptor en el panel): el equipo solo
+  inicia sesión y usa la competencia por su dirección, `https://<id>.moj.naquadah.com.br`. Por otra dirección (la IP
+  del MOJ, el sitio principal o la dirección de otra competencia), el inicio de sesión y cada pedido del equipo se
+  rechazan, y la pantalla muestra la dirección correcta. El enlace antiguo `/contest/?c=<id>` lleva a la dirección de
+  la competencia. Las cuentas de rol y el entrenamiento están exentos. Cada rechazo va a la auditoría
+  (`team-host-block`) y aparece en Máquinas › Anomalías ("fuera de la dirección de la competencia"). Esto fija la
+  SESIÓN del equipo a la competencia; el bloqueo de sede de arriba fija la MÁQUINA. En el Maratona Linux, usa los dos.
+- **Sesión única por equipo** (interruptor en la misma sección 🔒, activado por defecto): con el gate en **Bloquear**, un
   nuevo inicio de sesión en **otra máquina cierra la sesión anterior** del equipo. Cambiar de máquina por una falla
   sigue funcionando (el equipo inicia sesión en la nueva y la vieja pierde la sesión); recargar la página en la misma
   máquina no cierra nada. Cada cierre se convierte en un evento en Máquinas › Anomalías.
@@ -617,7 +736,9 @@ momento. Un modo que no cabe en el árbol actual queda deshabilitado y dice por 
 - **Simple** — una lista de sedes. Cada sede tiene "usuarios que empiezan con" (separados por coma). Para
   asignar equipos, pega la lista de usuarios y elige la sede, o elige la sede de cada equipo sin sede.
   Renombrar una sede se lleva los equipos grabados con el nombre viejo (la vista previa muestra cuántos antes
-  de guardar). Por la IP de la máquina de la competencia: Máquinas › Gate.
+  de guardar), el alcance del staff (`region:`), el gate de navegador de la sede y la sede de la pantalla. Al
+  guardar, la pantalla avisa si algo todavía apunta a una sede que ya no existe. Por la IP de la máquina de la
+  competencia: Máquinas › Gate.
 - **Intermedio** — grupos (país, región) › sedes. Cada sede tiene reglas: empieza con, contiene, termina
   con, o es uno de (lista).
 - **Avanzado** — el árbol completo: subregiones, recortes `view` y regex libre.
@@ -640,11 +761,12 @@ En la CLI: `moj-contest -c <id> regions show|who|assign|set|map`.
 ## 7½. Anomalías de máquina (Máquinas › Anomalías) y Sesiones (Personas › Sesiones)
 
 En la Maratona 2026 solo se pudo responder "¿algún equipo usó dos máquinas?" después de la competencia, cruzando
-registros a mano. El panel **Máquinas › Anomalías** responde **durante** la competencia (las sesiones activas, la salida en masa y el registro de accesos, que valen para CUALQUIER competencia, están en **Personas › Sesiones**). Solo vale con el **gate de UA activado**: es el
-navegador de la imagen del mlinux el que identifica la máquina (`machine_id/boot_id`). El inicio de sesión desde un navegador
-común solo tiene el IP, y detrás de un NAT el IP es la sede entera: esos inicios de sesión quedan fuera de las anomalías de
-máquina (solo aparecen en "UA fuera de la sede" y en la lista de sesiones). Con el gate desactivado el panel
-avisa y muestra solo las sesiones y el registro de accesos.
+registros a mano. El panel **Máquinas › Anomalías** responde **durante** la competencia (las sesiones activas, la salida en masa y el registro de accesos, que valen para CUALQUIER competencia, están en **Personas › Sesiones**). Quien identifica la
+máquina es el **navegador de la imagen del mlinux** (`machine_id/boot_id`) — **con o sin gate**. El inicio de sesión desde un
+navegador común solo tiene el IP, y detrás de un NAT el IP es la sede entera: esos inicios de sesión quedan fuera de las
+anomalías de máquina (solo aparecen en "UA fuera de la sede" y en la lista de sesiones). El **"UA fuera de la sede"**
+necesita el esperado de cada equipo, es decir, el gate en **Bloquear** u **Observar**. Sin ninguna máquina identificada el
+panel avisa y muestra solo las sesiones y el registro de accesos.
 
 - **Tarjetas** (clic = filtro): sesiones activas, 👥 **2 sesiones activas** (el mismo equipo en dos
   máquinas; con la sesión única activada esto solo ocurre por un token copiado), 🖥 **máquina
@@ -655,6 +777,10 @@ avisa y muestra solo las sesiones y el registro de accesos.
   falla) y las **revocaciones** de la sesión única.
 - **Línea de tiempo**: cada evento con hora, tipo, equipo, máquina y detalle; filtros por tipo y texto;
   CSV; botón para **cerrar sesión** del equipo.
+- **Explicar** (admin y juez jefe): un caso ya aclarado (ej.: "cambió de máquina por una falla, confirmado por la
+  sede") recibe el motivo, **sale de los conteos** y queda en la lista, atenuado, con quién lo explicó, cuándo y por qué
+  (tarjeta **✓ explicadas**; **deshacer** vuelve a contarlo). Si el caso cambia (el equipo pasa a una tercera máquina),
+  vuelve. Cada marca va al audit.
 - **Equipos**: solo los que tienen alguna anomalía (o todos los que tienen sesión): sesiones activas y en cuántas máquinas,
   las máquinas usadas en la competencia en orden, el último envío (✓ vino de la máquina de la sesión; ✗ no) y las
   anomalías como etiquetas.
@@ -781,6 +907,11 @@ debajo. En cambio, las horas que el **MOJ escribe para las personas** (el DM del
 previo a la competencia, la fecha del cuadernillo, el informe final) salen en la **zona horaria de la competencia**, que defines en
 *Central › Reglas → 🕒 Identidad y ventana → 🌎 Zona horaria de la competencia* (vacío = `America/Sao_Paulo`). Cuando los dos relojes
 difieren, la caja de la ventana muestra también la hora en la zona horaria de la competencia, para que no haya dudas.
+Escribe el nombre de cualquier zona horaria (`America/Santiago`, `America/Mexico_City`…). La lista sugiere todas,
+empezando por la de tu navegador. Usa la zona de tu ciudad, y no otra que tenga la misma hora hoy: el horario de
+verano cambia en fechas distintas en cada país, y los textos saldrían con 1 h de diferencia después del cambio. La
+zona horaria también se puede elegir en el asistente de creación, y va con la competencia al exportar, duplicar o
+guardar un template. Por la CLI: `moj-contest -c <cid> settings set tz=America/Santiago`.
 
 **Marcador:** la inscripción siembra las cohortes `individual` y `times`, cada una con **su propio marcador**:
 el selector "Marcador: General | Equipos | Individual" aparece solo en la página del marcador. Si la
@@ -890,8 +1021,9 @@ las contraseñas generadas; cada persona inicia sesión en la MISMA pantalla de 
 
 ## 9½. Panel del entrenamiento › Contests y quién puede crear
 
-El panel administrativo del Entrenamiento libre (`/treino/admin/`, cuenta `.admin`) tiene la pestaña **🏆 Contests**.
-Lista las competencias creadas por la interfaz y controla quién puede crear competencias y problemas.
+El panel administrativo del Entrenamiento libre (`/treino/admin/`, cuenta `.admin`) tiene el grupo **🏆 Competencias**,
+con dos paneles: **Competencias** lista las competencias creadas por la interfaz, y **Quién puede crear** controla quién
+puede crear competencias y problemas.
 
 **Quién ve qué.** La regla vale en la API, no solo en la pantalla.
 
@@ -899,8 +1031,10 @@ Lista las competencias creadas por la interfaz y controla quién puede crear com
   `SUPERADMINS` en el archivo `contests/treino/conf` (usuarios separados por espacios). Solo quien tiene acceso
   al servidor edita esa lista. No hay pantalla para eso.
 - El **admin común** ve sus propias competencias y las competencias de creadores sin rol de admin (alumnos y
-  monitores habilitados). No ve la competencia de otro administrador. Quitar, duplicar y exportar siguen
-  la misma regla: una competencia fuera de tu alcance responde "no encontrado".
+  monitores habilitados). No ve la competencia de otro administrador. Duplicar y exportar siguen la misma
+  regla: una competencia fuera de tu alcance responde "no encontrado".
+- **Quitar** es solo del propietario de la competencia o del super-admin. Para confirmar, escribe el id
+  de la competencia. La API también exige el id: un admin que ve la competencia de un alumno no la quita.
 
 **Filtros de la lista.** Busca por nombre, id o propietario. Filtra por propietario, modo y situación (próxima, en
 curso, terminada). Ordena por fecha de creación, inicio, nombre o propietario. Marca **solo las mías** para
@@ -908,6 +1042,14 @@ ver solo lo que creaste. El propietario aparece con foto, nombre y enlace a su p
 
 **Id reservado.** Un id que empieza por `icpc` es de la organización de la Maratona. Solo un super-admin crea
 una competencia con ese id. El asistente avisa antes y la API la rechaza.
+
+**Prioridad (columna Prioridad).** El superadministrador cambia la prioridad de cualquier competencia
+directamente en la tabla, incluida **Super**, que salta toda la cola. Este es el único lugar para dar o quitar
+Super. El asistente solo ofrece Super al superadministrador, y una copia (**duplicar**) de una competencia Super
+hecha por otra cuenta nace como **Competencia**. Los demás administradores solo ven la columna: el admin de
+cada competencia cambia las otras prioridades en Central › Reglas. Todo cambio queda en la Auditoría de la
+competencia y en la traza del entrenamiento (feed 📜 Actividad, acción `contest-priority`). Por la CLI:
+`moj contest priority <cid> <prioridad>`.
 
 **Quién puede crear competencias y problemas.** El mismo permiso vale para crear competencias y para crear
 problemas y colecciones en la Gestión de Problemas. Las cuentas `.admin` siempre pueden. Para las demás:

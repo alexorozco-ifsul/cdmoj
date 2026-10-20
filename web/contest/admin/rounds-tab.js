@@ -10,6 +10,8 @@ import { el } from '/shared/ui.js';
 import { makeBankPanel, makeColorsEditor, toLocalDT, dtToEpoch } from '/shared/contest-config/index.js';
 import { T } from '/shared/i18n.js';
 import { fmtEpoch as fmt, downloadAuthed } from '/shared/admin-ui.js';
+import { makeTitleChips } from '/shared/problem-titles.js';
+import { recolorNote } from './balloons-tab.js';
 
 const enc = encodeURIComponent;
 // funções, não const de módulo: T() no topo congela o idioma ANTES do setLang(LOCALE)
@@ -83,14 +85,54 @@ export function makeRoundsTab(CONTEST, opts = {}) {
                  `✓ “${j.from}” archivada (${j.archived.submissions} envíos de ${j.archived.users} cuentas) — “${j.to}” está activa`));
         await load();
       } catch (e) {
-        const bl = (e && e.body && e.body.blockers) || [];
-        setMsg((e.message || T('falha', 'failed', 'fallido')) + (bl.length ? ': ' + bl.map(b => b.code).join(', ') : ''), 'error-box');
+        // os bloqueadores vêm DENTRO do error (ApiError.data) — e.body nunca existiu, e a mensagem saía sem eles
+        const bl = (e && e.data && e.data.blockers) || [];
+        setMsg((e.message || T('falha', 'failed', 'fallido')) + (bl.length ? ': ' + bl.map((b) => T(b.detail || b.code, b.detail_en || null, b.detail_es || null)).join(' · ') : ''), 'error-box');
         await load();
       }
     } }, T('🚀 Promover agora', '🚀 Promote now', '🚀 Promover ahora'));
     box.append(el('div', { class: 'row', style: 'gap:.6rem;align-items:center' }, go,
       el('label', { class: 'small row', style: 'gap:.25rem' }, force,
         T('ignorar os bloqueadores (só em emergência; não passa por cima do placar congelado)', 'ignore blockers (emergency only; does not override the frozen scoreboard)', 'ignorar los bloqueadores (solo en emergencia; no pasa por encima del marcador congelado)'))));
+    return box;
+  }
+
+  // ---- DESFAZER a última promoção (TCP 2026, 03/10/2026: promoveram uma rodada extra depois da prova oficial
+  // e o placar zerou). Só aparece quando há promoção a desfazer; o servidor decide se dá (rodada no ar sem
+  // nenhuma atividade) e diz por quê quando não dá.
+  function undoBox() {
+    const u = DATA.undo;
+    if (!u || !u.from || (u.blockers || []).some((b) => b.code === 'no_promotion')) return null;
+    const box = el('div', { class: 'subcard', style: 'margin:.6rem 0' },
+      el('h3', { style: 'margin:.1rem 0 .4rem' }, T('↩ Desfazer a última promoção', '↩ Undo the last promotion', '↩ Deshacer la última promoción')),
+      el('p', { class: 'small muted', style: 'margin:0 0 .4rem' },
+        T(`Volta “${u.from}” para o ar com tudo o que ela tinha (submissões, veredictos, clarifications, placar) e “${u.to}” volta a ser planejada. Só funciona enquanto “${u.to}” não teve nenhuma atividade.`,
+          `Brings “${u.from}” back live with everything it had (submissions, verdicts, clarifications, scoreboard), and “${u.to}” goes back to planned. It only works while “${u.to}” has had no activity.`,
+          `Vuelve a poner “${u.from}” en vigor con todo lo que tenía (envíos, veredictos, clarifications, marcador) y “${u.to}” vuelve a planificada. Solo funciona mientras “${u.to}” no haya tenido ninguna actividad.`)));
+    if (!u.possible) {
+      const ul = el('ul', { style: 'margin:.2rem 0 .3rem 1.1rem' });
+      (u.blockers || []).forEach((b) => ul.append(el('li', { class: 'small' }, el('b', {}, '⛔ ' + b.code), ' — ' + T(b.detail || '', b.detail_en || null, b.detail_es || null))));
+      box.append(ul);
+      return box;
+    }
+    if (readOnly) return box;
+    box.append(el('button', { class: 'btn', onclick: async () => {
+      const typed = prompt(T(`Desfazer a promoção: “${u.from}” volta ao ar e “${u.to}” volta a planejada. Para confirmar, digite o id do contest (`,
+                            `Undo the promotion: “${u.from}” goes back live and “${u.to}” goes back to planned. To confirm, type the contest id (`,
+                            `Deshacer la promoción: “${u.from}” vuelve a estar en vigor y “${u.to}” vuelve a planificada. Para confirmar, escribe el id de la competencia (`) + CONTEST + '):');
+      if (typed !== CONTEST) { setMsg(T('cancelado (id não confere) — nada foi alterado.', 'cancelled (id does not match) — nothing changed.', 'cancelado (el id no coincide) — nada cambió.'), 'error-box'); return; }
+      setMsg(T('desfazendo…', 'undoing…', 'deshaciendo…'));
+      try {
+        const j = await api({ action: 'undo', confirm: CONTEST });
+        setMsg(T(`✓ “${j.restored}” de volta ao ar (${j.submissions} submissões) — “${j.pending}” voltou a planejada`,
+                 `✓ “${j.restored}” is live again (${j.submissions} submissions) — “${j.pending}” is planned again`,
+                 `✓ “${j.restored}” vuelve a estar en vigor (${j.submissions} envíos) — “${j.pending}” vuelve a planificada`));
+      } catch (e) {
+        const bl = (e && e.data && e.data.blockers) || [];
+        setMsg((e.message || T('falha', 'failed', 'fallido')) + (bl.length ? ': ' + bl.map((b) => T(b.detail || b.code, b.detail_en || null, b.detail_es || null)).join(' · ') : ''), 'error-box');
+      }
+      await load();
+    } }, T('↩ Desfazer a última promoção', '↩ Undo the last promotion', '↩ Deshacer la última promoción')));
     return box;
   }
 
@@ -124,9 +166,16 @@ export function makeRoundsTab(CONTEST, opts = {}) {
         const letInp = el('input', { value: p.letter || String.fromCharCode(65 + i), maxlength: '3',
           style: 'width:3.6rem; font-family:var(--mono)' });
         letInp.addEventListener('input', () => { p.letter = letInp.value.trim(); });
-        plist.append(el('div', { class: 'row', style: 'gap:.5rem;align-items:center;padding:.15rem 0' },
-          letInp,
-          el('span', { style: 'min-width:16rem' }, p.name || p.problem_id || p.bank_id),
+        // nome: vazio = automático (o título no idioma da prova, na hora em que a rodada entra no ar); os chips
+        // PT·EN·ES preenchem com o título de um idioma. Salvo junto com a lista.
+        const pid = (p.bank_id || p.problem_id || '').replace('/', '#');
+        const titles = p._titles || ((DATA && DATA.titles) || {})[pid];
+        const nmInp = el('input', { value: p.name || '', style: 'min-width:14rem',
+          placeholder: T('automático (idioma da prova)', 'automatic (contest language)', 'automático (idioma de la competencia)') });
+        const chips = makeTitleChips(titles, () => nmInp.value, (v) => { nmInp.value = v; p.name = v; });
+        nmInp.addEventListener('input', () => { p.name = nmInp.value; chips.repaint && chips.repaint(); });
+        plist.append(el('div', { class: 'row', style: 'gap:.5rem;align-items:center;padding:.15rem 0;flex-wrap:wrap' },
+          letInp, nmInp, chips,
           el('code', { class: 'small muted' }, p.bank_id || p.problem_id || ''),
           el('button', { class: 'btn ghost', onclick: () => { probs.splice(i, 1); renderP(); } }, '✕')));
       });
@@ -134,7 +183,8 @@ export function makeRoundsTab(CONTEST, opts = {}) {
     renderP();
     const saveP = el('button', { class: 'btn', onclick: () => act({
       action: 'problems', slug: r.slug,
-      problems: probs.map((p, i) => ({ bank_id: p.bank_id || p.problem_id, name: p.name,
+      problems: probs.map((p, i) => ({ bank_id: p.bank_id || p.problem_id,
+        ...((p.name || '').trim() ? { name: p.name.trim() } : {}),
         letter: p.letter || String.fromCharCode(65 + i) })),
     }, T('✓ problemas da rodada salvos', '✓ round problems saved', '✓ problemas de la ronda guardados')) }, T('salvar problemas', 'save problems', 'guardar problemas'));
     const bank = makeBankPanel({
@@ -143,7 +193,7 @@ export function makeRoundsTab(CONTEST, opts = {}) {
         draw: (p) => apiGet('/contest/admin/draw?contest=' + enc(CONTEST) + '&' + new URLSearchParams(p).toString(), G),
         search: (q) => apiGet('/contest/admin/bank?contest=' + enc(CONTEST) + '&limit=30&q=' + enc(q), G),
       },
-      onAdd: (it) => { probs.push({ bank_id: it.id, name: it.title || it.id }); renderP(); },
+      onAdd: (it) => { probs.push({ bank_id: it.id, name: '', ...(it.titles ? { _titles: it.titles } : {}) }); renderP(); },
       searchLabel: T('Problemas desta rodada (buscar no banco)', 'Problems for this round (search the bank)', 'Problemas de esta ronda (buscar en el banco)'),
       searchPlaceholder: T('🔎 título ou id…', '🔎 title or id…', '🔎 título o id…'),
       noQueryFilter: (items) => items.filter((x) => x.private),
@@ -167,7 +217,9 @@ export function makeRoundsTab(CONTEST, opts = {}) {
     const saveC = el('button', { class: 'btn', onclick: () => {
       const v = ced.getValue();
       if (!Object.keys(v).length) { cmsg.textContent = T('nada mudou', 'nothing changed', 'nada cambió'); return; }
-      act({ action: 'set', slug: r.slug, colors: v }, T('✓ cores da rodada salvas', '✓ round colours saved', '✓ colores de la ronda guardados'));
+      act({ action: 'set', slug: r.slug, colors: v }, T('✓ cores da rodada salvas', '✓ round colours saved', '✓ colores de la ronda guardados'))
+        .then(j => { const m = recolorNote(j); if (m) setMsg(T('✓ cores da rodada salvas', '✓ round colours saved', '✓ colores de la ronda guardados') + m, j.balloons_printed_old ? 'error-box' : ''); })
+        .catch(() => {});
     } }, T('salvar cores', 'save colours', 'guardar colores'));
     const inherit = (r.state === 'active') ? null : el('button', { class: 'btn ghost', onclick: () => {
       if (!confirm(T('Esta rodada passa a herdar as cores que estiverem em vigor quando for promovida. Continuar?',
@@ -291,6 +343,7 @@ export function makeRoundsTab(CONTEST, opts = {}) {
     if (!(DATA.rounds || []).length) panel.append(el('div', { class: 'small muted' },
       T('nenhuma rodada ainda', 'no rounds yet', 'ninguna ronda todavía')));
     if (!readOnly) panel.append(promoteBox(), addBox());
+    { const ub = undoBox(); if (ub) panel.append(ub); }
   }
 
   async function load() {

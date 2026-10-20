@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/
 FIX="$(mktemp -d)"; SESS="$(mktemp -d)"; trap 'rm -rf "$FIX" "$SESS"' EXIT
 C="$FIX/mx"; mkdir -p "$C/var" "$C/users"
 NOW=$(date +%s)
-printf 'CONTEST_ID=mx\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nPROBS=( x col#pa A A col#pa )\n' \
+printf 'CONTEST_ID=mx\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_START=%s\nCONTEST_END=%s\nPROBS=( x col#pa A A col#pa )\n' \
   "$((NOW-3600))" "$((NOW+3600))" > "$C/conf"
 mkdir -p "$C/users/mx.admin"
 jq -cn '{login:"mx.admin", fullname:"Admin", password:"x"}' > "$C/users/mx.admin/account.json"
@@ -32,6 +32,18 @@ if jq -e '.success == true and (.by_login | length) == 1200' <<<"$BODY" >/dev/nu
 else FAIL=$((FAIL+1)); echo "FALHOU: resposta não parseia/incompleta: $(head -c 120 <<<"$BODY")" >&2; fi
 n=$(( $(printf '%s' "$BODY" | wc -c) ))
 if (( n > 131072 )); then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FALHOU: fixture pequeno demais ($n bytes) — não exercita o teto" >&2; fi
+
+# ✓ do gate = TODOS os navegadores vistos são o da imagem (auditoria, 03/10/2026: bastava UM; o login de casa ao
+# lado do da imagem, com o gate em observe, ficava escondido atrás do ✓)
+printf '{"mode":"observe","by_regex":[{"regex":"^team","expect":"sede-teste"}]}' > "$C/ua-gate.json"
+printf '%s	teamov0000	10.9.9.9	%s
+' "$((NOW-500))" "$(printf 'Mozilla/5.0 Chrome de casa' | base64 -w0)" >> "$C/var/access.log"
+OUT="$(PATH_INFO=/contest/admin/machines REQUEST_METHOD=GET QUERY_STRING="contest=mx" \
+  HTTP_AUTHORIZATION="Bearer t-adm" CONTESTSDIR="$FIX" SESSIONDIR="$SESS" bash "$ROUTER" 2>/dev/null)"
+BODY="$(printf '%s' "$OUT" | awk 'f{print} /^\r?$/{f=1}')"
+if [[ "$(jq -r '.by_login[] | select(.login=="teamov0000") | "\(.ua_match) \(.ua_any)"' <<<"$BODY")" == "false true" \
+   && "$(jq -r '.by_login[] | select(.login=="teamov0001") | .ua_match' <<<"$BODY")" == true ]]; then PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); echo "FALHOU: ua_match/ua_any (um UA de casa ao lado do da imagem)" >&2; fi
 
 echo "smoke-machines-argmax: PASS=$PASS FAIL=$FAIL"
 (( FAIL == 0 ))

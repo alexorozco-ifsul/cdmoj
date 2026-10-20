@@ -100,7 +100,9 @@ cc_settings_conf_lines(){
   # `baloes`. Ids desconhecidos são ignorados (mod_normalize).
   v="$(jq -r '[ ((.modules // {}) | to_entries[] | select(if (.value|type) == "object" then ((.value | if has("on") then .on else true end) != false) else (.value == true) end) | .key),
                (if ((.regions // []) | length) > 0 or ((.teams_meta // .teams_meta_rules // []) | length) > 0 then "sedes" else empty end),
-               (if ((.colors // {}) | length) > 0 then "baloes" else empty end) ] | unique | join(",")' <<<"$spec" 2>/dev/null)"
+               (if ((.colors // {}) | length) > 0 then "baloes" else empty end),
+               # o gate legado (login_ua_substring) é do módulo `maquinas`: sem ele ligado a regra não vale (03/10/2026)
+               (if ((.login_ua_substring // "") | tostring | length) > 0 then "maquinas" else empty end) ] | unique | join(",")' <<<"$spec" 2>/dev/null)"
   v="$(mod_normalize "$v")"; [[ -n "$v" ]] && printf 'CONTEST_MODULES=%q\n' "$v"
   # seções de módulo que viram VARIÁVEL de conf (o resto vira arquivo em cc_apply_modules_spec).
   # Compat: `balloons_during_freeze` no topo (idioma do settings) também vale.
@@ -178,7 +180,9 @@ cc_create(){
   fi
   case "$priority" in
     prova|lista-privada|lista-publica) ;;
-    super) [[ "$creator" == *.admin ]] || fail 403 "Prioridade 'super' é exclusiva de admin" "priority_forbidden";;
+    # Super passa na frente de TODA fila (inclusive das provas dos outros): só o SUPER-ADMIN do treino (SUPERADMINS
+    # no conf do treino) a dá — o `creator` aqui é a sessão do TREINO (wizard/CLI), identidade verificada
+    super) superadmin_login "$creator" || fail 403 "A prioridade Super é exclusiva do super-admin do treino" "priority_forbidden";;
     *) fail 422 "Prioridade inválida" "priority_invalid";;
   esac
   [[ -z "$start" || "$start" =~ ^[0-9]+$ ]] || fail 422 "Início (start) inválido" "start_invalid"
@@ -191,6 +195,10 @@ cc_create(){
   (( ${#ua_sub} <= 200 )) || fail 422 "login_ua_substring muito longa" "ua_long"
   local loc_in; loc_in="$(jq -r '.locale // empty' <<<"$spec")"
   [[ -z "$loc_in" ]] || contest_locale_ok "$loc_in" || fail 422 "locale inválido (pt, en ou es)" "locale_invalid"
+  # FUSO da prova (o mesmo campo de Central › Regras): o assistente sempre o mostrou e a criação o JOGAVA
+  # FORA calada (03/10/2026). Vazio = o padrão da instalação; nome antigo vira o atual (tz_canon).
+  local tz_in="" tz_raw; tz_raw="$(jq -r '.tz // empty' <<<"$spec")"
+  if [[ -n "$tz_raw" ]]; then tz_in="$(tz_canon "$tz_raw")" || fail 422 "fuso horário desconhecido (ex.: America/Santiago)" "tz_invalid"; fi
   # penalidade do placar ICPC (opcional; só válida em conjunto — a gravação fica no conf_lines)
   local pmin; pmin="$(jq -r '.penalty_minutes // empty' <<<"$spec")"
   if [[ -n "$pmin" ]]; then
@@ -206,7 +214,9 @@ cc_create(){
     id="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+|-+$//g')"
     [[ -n "$id" ]] || id="contest"; id="${id:0:48}"; id="$(printf '%s' "$id" | sed -E 's/-+$//')"
   fi
-  [[ "$id" =~ ^[a-z0-9][a-z0-9._-]{1,48}$ ]] || fail 422 "id inválido (use a-z, 0-9, . _ -)" "id_invalid"
+  # sem PONTO (16/10/2026): o id vira o subdomínio <id>.moj… e os times só entram por ele (lib/team-host.sh) — com
+  # ponto seriam dois rótulos, fora do certificado curinga
+  [[ "$id" =~ ^[a-z0-9][a-z0-9_-]{1,48}$ ]] || fail 422 "id inválido (use a-z, 0-9, _ -)" "id_invalid"
   case "$id" in treino|admin|api|www|status|docs|shared|index|new|old|run|server|web) fail 409 "id reservado" "id_reserved";; esac
   # ids `icpc*` são da organização da Maratona: só SUPER-ADMIN cria (decisão do Ribas, 2026-09-15);
   # vale p/ create, duplicate e todo caminho que passa por aqui (o creator é quem pede)
@@ -227,6 +237,8 @@ cc_create(){
 
   local probs="PROBS=(" i=0
   local lused; lused="$(cc_letters_used "$(jq -c '.problems // []' <<<"$spec")")"
+  # idioma do nome padrão: o conf ainda não existe e a criação não grava STATEMENT_LANGS (automático) ⇒ LOCALE
+  local plang; plang="$(cc_prob_lang "" "$(jq -r '.locale // "pt"' <<<"$spec")")"
   local p pid src pname letter bankid stmt_b64 stmt_file skey bf html
   local pdf_b64 pdf_file larr plangs='{}' jarr pjudges='{}'
   while IFS= read -r p; do
@@ -243,8 +255,8 @@ cc_create(){
     pdf_b64="$(jq -r '.statement_pdf_b64 // ""' <<<"$p")"
     pdf_file="$(jq -r '.statement_pdf_file // ""' <<<"$p")"
     [[ -n "$pid" ]] || { rm -rf "$stg"; fail 422 "Problema sem id" "prob_no_id"; }
-    # sem `name`/`title` no spec: o TÍTULO do banco, nunca o id cru na sanfona (cc_prob_title)
-    [[ -n "$pname" ]] || pname="$(cc_prob_title "${bankid:-${pid//\//#}}" "$pid")"
+    # sem `name`/`title` no spec: o TÍTULO do banco no idioma da prova, nunca o id cru (cc_prob_title)
+    [[ -n "$pname" ]] || pname="$(cc_prob_title "${bankid:-${pid//\//#}}" "$pid" "$plang")"
     { [[ "$pid" =~ ^[A-Za-z0-9._/#@+-]+$ ]] && [[ "$pid" != *..* ]]; } || { rm -rf "$stg"; fail 422 "id de problema inválido: $pid" "prob_id_invalid"; }
     [[ "$src" =~ ^[A-Za-z0-9._-]+$ ]] || { rm -rf "$stg"; fail 422 "source de problema inválido" "src_invalid"; }
     (( ${#pname} <= 160 )) || { rm -rf "$stg"; fail 422 "nome de problema muito longo" "pname_long"; }
@@ -308,7 +320,7 @@ cc_create(){
   sa_name="$(jq -r '.admin.fullname // ""' <<<"$spec")"
   users_from="$(jq -r '.users_from // ""' <<<"$spec")"
   adminlogin="${sa_login:-$creator}"; [[ "$adminlogin" == *.admin ]] || adminlogin="${adminlogin}.admin"
-  valid_id "$adminlogin" || { rm -rf "$stg"; fail 422 "login de admin inválido" "admin_login_invalid"; }
+  valid_login "$adminlogin" || { rm -rf "$stg"; fail 422 "login de admin inválido" "admin_login_invalid"; }
   adminname="${sa_name:-$cname}"
 
   # a conta admin já existe na fonte compartilhada? (users/<login>/account.json)
@@ -329,7 +341,9 @@ cc_create(){
   else
     adminpass="$(cc_genpass)"                     # padrão: gera
   fi
-  case "$adminpass$adminname" in *:*) rm -rf "$stg"; fail 422 "senha/nome do admin não podem conter ':'" "colon";; esac
+  # nome: ':' vira '∶' (name_clean — o placar TXT separa por ':'); a senha segue sem ':'
+  name_clean adminname "$adminname"
+  case "$adminpass" in *:*) rm -rf "$stg"; fail 422 "a senha do admin não pode conter ':'" "colon";; esac
 
   # --- usuários: compartilhados (USERS_FROM) ou específicos do contest ---
   # _cc_stage_user <stg> <login> <pass> <fullname> [email] [team-json] — conta no store
@@ -351,6 +365,13 @@ cc_create(){
       || { rm -rf "$stg"; fail 500 "Falha ao criar a conta do admin" "mkdir_fail"; }
     CREDS+=("$(jq -cn --arg l "$adminlogin" --arg p "$adminpass" --arg n "$adminname" '{login:$l,password:$p,fullname:$n,role:"admin"}')")
   fi
+  # PRÉ-REQUISITO de módulo (lib/modules.sh mod_requires_ok): a inscrição usa as contas do treino — contest de contas
+  # PRÓPRIAS com `inscricoes` ligado barraria todo aluno (Daniel Valle, 07/10/2026). Vale p/ criar, duplicar e template.
+  if [[ -z "$users_from" ]] && jq -e '((.modules // {}).inscricoes) as $m
+        | ($m == true) or (($m | type) == "object" and ((($m | has("on")) | not) or $m.on != false))' >/dev/null 2>&1 <<<"$spec"; then
+    rm -rf "$stg"
+    fail 422 "A inscrição usa as contas do Treino Livre (cada aluno se inscreve com a conta dele no treino), e o contest novo teria contas próprias: use as contas do treino (usuários compartilhados — no assistente, passo 3; na cópia fiel, a caixa \"usar as contas do Treino Livre\"; no spec, users_from) ou tire o módulo inscricoes." "requires_shared_users"
+  fi
   if [[ -n "$users_from" ]]; then
     { valid_id "$users_from" && [[ -d "$CONTESTSDIR/$users_from/users" ]]; } || { rm -rf "$stg"; fail 422 "users_from inválido" "users_from_invalid"; }
     shared="$users_from"
@@ -363,10 +384,10 @@ cc_create(){
       ul="$(jq -r '.login // ""' <<<"$u")"; up="$(jq -r '.password // ""' <<<"$u")"
       un="$(jq -r '.fullname // ""' <<<"$u")"; ue="$(jq -r '.email // ""' <<<"$u")"
       [[ -n "$ul" ]] || continue
-      valid_id "$ul" || { rm -rf "$stg"; fail 422 "login de usuário inválido: $ul" "user_login_invalid"; }
+      valid_login "$ul" || { rm -rf "$stg"; fail 422 "login de usuário inválido: $ul" "user_login_invalid"; }
       [[ "$ul" == "$adminlogin" ]] && continue
-      [[ -z "$up" ]] && up="$(cc_genpass)"; [[ -z "$un" ]] && un="$ul"
-      case "$up$un$ue" in *:*) rm -rf "$stg"; fail 422 "campos de usuário não podem conter ':'" "user_colon";; esac
+      [[ -z "$up" ]] && up="$(cc_genpass)"; name_clean un "$un"; [[ -z "$un" ]] && un="$ul"
+      case "$up$ue" in *:*) rm -rf "$stg"; fail 422 "senha/email de usuário não podem conter ':'" "user_colon";; esac
       _cc_stage_user "$stg" "$ul" "$up" "$un" "$ue" "$(team_fields_json "$u")" \
         || { rm -rf "$stg"; fail 500 "Falha ao criar usuário" "mkdir_fail"; }
       CREDS+=("$(jq -cn --arg l "$ul" --arg p "$up" --arg n "$un" '{login:$l,password:$p,fullname:$n,role:"user"}')")
@@ -392,6 +413,7 @@ cc_create(){
     [[ -n "$shared" ]] && printf 'USERS_FROM=%q\n' "$shared"
     [[ -n "$shared" && "$admin_reused" == true ]] && printf 'SHARED_ADMIN=%q\n' "$adminlogin"
     [[ -n "$b_locale" ]] && contest_locale_ok "$b_locale" && printf 'LOCALE=%q\n' "$b_locale"
+    [[ -n "$tz_in" ]] && printf 'CONTEST_TZ=%q\n' "$tz_in"
     [[ "$b_lstart" =~ ^[0-9]+$ ]] && printf 'LOGIN_START_TIME=%q\n' "$b_lstart"
     [[ "$b_lenabled" == n ]] && printf 'LOGIN_ENABLED=%q\n' "n"
     [[ "$b_freeze" =~ ^[0-9]+$ ]] && printf 'FREEZE_TIME=%q\n' "$b_freeze"
@@ -417,15 +439,32 @@ cc_create(){
 
   mv -T "$stg" "$CONTESTSDIR/$id" 2>/dev/null || { rm -rf "$stg"; fail 500 "Falha ao publicar o contest (id pode ter sido criado em paralelo)" "publish_fail"; }
 
+  # PRÉ-REQUISITO do `virtual` (lib/modules.sh mod_requires_ok, 07/10/2026): o portão precisa do contest NO DISCO
+  # (problemas públicos no treino, placar anônimo, modo…), então a criação não o consulta antes do mv como faz com
+  # `inscricoes`/`esqueletos` (que se decidem pelo spec). Confere aqui, já publicado: se o contest não pode virar
+  # virtual, o módulo NASCE DESLIGADO e a resposta diz por quê (`modules_skipped`) — explica em vez de recusar, porque
+  # o caso comum é a prova nova com os problemas ainda privados (liga-se depois de publicá-los, em Central › Módulos).
+  local skipped='[]'
+  if mod_on "$id" virtual && ! mod_requires_ok "$id" virtual; then
+    local _ccm=",$(mod_raw "$id"),"; mod_set "$id" "${_ccm//,virtual,/,}"
+    skipped="$(jq -cn --arg c "$MOD_REQ_CODE" --arg r "$MOD_REQ_REASON" --arg m "$MOD_REQ_MSG" '[{id:"virtual", code:$c, reason:$r, message:$m}]')"
+    audit_log_to "$id" modules-skipped "virtual code=$MOD_REQ_CODE reason=$MOD_REQ_REASON"
+  fi
+
+  # a prioridade de nascimento entra na trilha (o contest e a central do treino) — as mudanças depois também
+  # entram (cc_set_priority), então "quem pôs esta prova nesta banda" sempre tem resposta
+  audit_log_to "$id" priority "de=— para=$priority via=criação"
+  audit_log_to treino contest-priority "contest=$id de=— para=$priority via=criação"
+
   # CREDS pode estar VAZIO (admin reutilizado em modo compartilhado): teste/expansão set -u safe.
   local users_json='[]'
   [[ -n "${CREDS[@]+x}" ]] && users_json="$(printf '%s\n' "${CREDS[@]}" | jq -cs '.')"
   CC_RESULT="$(jq -cn --arg id "$id" --arg al "$adminlogin" --arg pw "$adminpass" --argjson np "$np" \
-    --argjson users "$users_json" --arg shared "$shared" --argjson reused "$admin_reused" \
+    --argjson users "$users_json" --arg shared "$shared" --argjson reused "$admin_reused" --argjson sk "$skipped" \
     '{contest_id:$id, admin_login:$al, admin_reused:$reused,
       admin_password:(if $reused then null else $pw end), problems:$np,
       users_from:(if $shared=="" then null else $shared end),
-      users:$users, users_count:($users|length),
+      users:$users, users_count:($users|length), modules_skipped:$sk,
       url:("/contest/?c="+$id), scoreboard_url:("/contest/score/?c="+$id)}')"
 }
 
@@ -809,6 +848,28 @@ cc_bank_filter(){
 
 # cc_set_conf_var <contest> <VAR> <value> — define/atualiza uma var no conf (escapada com %q),
 # preservando as demais linhas. cc_del_conf_var remove a var.
+# --- PRIORIDADE no escalonador (CONTEST_PRIORITY; 01/10/2026) ----------------------------------------
+# super > prova > lista-privada > lista-publica; ausente = lista-publica. Decide a BANDA da fila de julgamento e a
+# regra de envios (lista: teto SUBMIT_MAX_INFLIGHT no /submit; prova/super: sem teto, menos prioridade a partir do
+# 6º pendente). Editável depois da criação: o admin do contest muda entre as três de baixo (Central › Regras,
+# /contest/admin/settings); Super só o SUPER-ADMIN do treino dá ou tira (Painel do treino › Contests,
+# /treino/admin/contest-priority) — numa sessão de contest a conta `.admin` é LOCAL e o nome não prova identidade.
+CC_PRIORITIES="lista-publica lista-privada prova super"
+cc_priority_ok(){ [[ -n "$1" && " $CC_PRIORITIES " == *" $1 "* ]]; }
+# cc_set_priority <contest> <nova> <via> — grava e AUDITA no contest e na trilha central do treino
+# (`contest-priority` no var/admin-audit.log do treino — o feed 📜 Atividade). Quem pode o quê é do CHAMADOR.
+# Põe a anterior em CC_PRIO_OLD (vazio = não definida) e CC_PRIO_CHANGED=0|1 (mesma prioridade = nada gravado).
+cc_set_priority(){
+  local c="$1" new="$2" via="$3" old
+  old="$(conf_value "$c" CONTEST_PRIORITY)"; old="${old//\\/}"
+  CC_PRIO_OLD="$old"; CC_PRIO_CHANGED=0
+  [[ -n "$old" && "$old" == "$new" ]] && return 0
+  cc_set_conf_var "$c" CONTEST_PRIORITY "$new" || return 1
+  CC_PRIO_CHANGED=1
+  audit_log_to "$c" priority "de=${old:-não-definida} para=$new via=$via"
+  [[ "$c" == treino ]] || audit_log_to treino contest-priority "contest=$c de=${old:-não-definida} para=$new via=$via"
+  return 0
+}
 cc_set_conf_var(){
   local cf="$CONTESTSDIR/$1/conf" tmp
   [[ -f "$cf" ]] || return 1
@@ -865,14 +926,83 @@ cc_regions_fail(){
 # `enunciados/<skey>.html`. Sem isso, um problema sem `statement_b64` no spec faz o helper
 # baixar o enunciado do banco e SOBRESCREVER o que o admin subiu à mão (a troca de rodada
 # aplica a lista da rodada e clobberaria os enunciados finais da prova).
-# cc_prob_title <bank-id|skey> <id-de-fallback> — NOME do problema quando o spec não traz `name`/`title`:
-# o TÍTULO do banco (json servível, público ou privado), e só em último caso o id. Spec montado à mão /
-# pela API sem o campo deixava "org#id" no lugar do título na sanfona (relato do Daniel Saad, 2026-09-18).
+# cc_prob_title <bank-id|skey> <id-de-fallback> [lang] — NOME do problema quando o spec não traz
+# `name`/`title`: o TÍTULO do banco (json servível, público ou privado) NO IDIOMA DA PROVA (`lang`, de
+# cc_prob_lang), senão o PT, e só em último caso o id. Spec montado à mão / pela API sem o campo deixava
+# "org#id" no lugar do título na sanfona (relato do Daniel Saad, 2026-09-18); e o PT fixo punha o nome em
+# português sobre o enunciado em espanhol (TCP 2026, `LOCALE=es`, 03/10/2026).
 cc_prob_title(){
-  local bf t=""
-  bf="$(cs_bank_json "$1" 2>/dev/null)" && t="$(cs_bank_title "$bf" pt)"
+  local bf t="" l="${3:-pt}"
+  bf="$(cs_bank_json "$1" 2>/dev/null)" && t="$(cs_bank_title_or_pt "$bf" "$l")"
   t="${t//[$'\r\n\t']/ }"; t="${t:0:160}"
   printf '%s' "${t:-$2}"
+}
+# cc_prob_lang <contest> [locale] — o idioma do NOME padrão = o que a sanfona abre (cs_default sobre os
+# idiomas oferecidos: STATEMENT_LANGS=pt com LOCALE=es dá PT). Com `locale` (a criação, o conf ainda não
+# existe e STATEMENT_LANGS ausente = automático) o idioma é o LOCALE dado.
+cc_prob_lang(){
+  if [[ $# -ge 2 ]]; then contest_locale_ok "$2" && printf '%s' "$2" || printf pt; return 0; fi
+  cs_default "$1" "$(cs_langs "$1")"
+}
+# cc_bank_titles <ids_json> -> {id:{pt,en,es}} — títulos por idioma dos problemas, lidos dos json
+# servíveis (público › privado) num jq SÓ (input_filename = o id). Só idiomas com título não vazio. Para
+# as telas que mostram as opções (Prova › Problemas, `moj-contest problems titles`) e a checagem da Central.
+cc_bank_titles(){
+  local tmp id bf; tmp="$(mktemp)" || { printf '{}'; return 0; }
+  while IFS= read -r id; do
+    bf="$(cs_bank_json "$id" 2>/dev/null)" && printf '%s\0' "$bf"
+  done < <(jq -r '.[]? | strings' <<<"${1:-[]}" 2>/dev/null) > "$tmp"
+  if [[ -s "$tmp" ]]; then
+    xargs -0 -r jq -c '{id:(input_filename | sub("^.*/"; "") | sub("\\.json$"; "")),
+        t:({pt:(.title // "")} + ((.statements // {}) | if type == "object" then . else {} end
+             | with_entries(.value = (if (.value | type) == "object" then (.value.title // "") else "" end))))
+          | with_entries(select((.value | type) == "string" and (.value | length) > 0))}' < "$tmp" 2>/dev/null \
+      | jq -sc 'map({key:.id, value:.t}) | from_entries' 2>/dev/null || printf '{}'
+  else
+    printf '{}'
+  fi
+  rm -f "$tmp"
+}
+# cc_attach_titles — stdin = array de itens com `.id` (resultado de busca/sorteio, ≤100) → o mesmo array,
+# cada item com `titles` {pt,en,es} quando o problema tem MAIS DE UM título distinto (= tem enunciado
+# traduzido). É o que as telas usam p/ mostrar as opções de nome; sem tradução, nada muda no item.
+# Lê só os json servíveis desses ids (o índice e o sidecar do treino guardam só o título PT).
+cc_attach_titles(){
+  local tmp; tmp="$(mktemp -d)" || { cat; return 0; }
+  cat > "$tmp/items.json"
+  if ! jq -e 'type == "array"' "$tmp/items.json" >/dev/null 2>&1; then cat "$tmp/items.json"; rm -rf "$tmp"; return 0; fi
+  cc_bank_titles "$(jq -c '[.[]? | .id? | strings]' "$tmp/items.json")" > "$tmp/t.json"
+  [[ -s "$tmp/t.json" ]] || echo '{}' > "$tmp/t.json"
+  jq -c --slurpfile t "$tmp/t.json" '($t[0] // {}) as $T
+    | map(. + (($T[.id] // {}) as $x | if ([$x[]] | unique | length) > 1 then {titles:$x} else {} end))' \
+    "$tmp/items.json" 2>/dev/null || cat "$tmp/items.json"
+  rm -rf "$tmp"
+}
+# cc_prob_cid — (jq) o id canônico de uma entrada do cc_probs_json: a statement_key quando já é 'org#prob',
+# senão o problem_id com a barra virada em '#' (contest legado). O mesmo cálculo do admin/problems.sh.
+CC_PROB_CID_JQ='def cid: (if ((.statement_key // "") | test("#")) then .statement_key else ((.problem_id // "") | gsub("/"; "#")) end);'
+# cc_names_chosen_file <contest> — nomes ESCOLHIDOS pelo admin (ação `rename` com nome): {cid: nome}. Nome
+# escolhido de propósito em outro idioma não vira aviso eterno na Central (item prob_names).
+cc_names_chosen_file(){ printf '%s/%s/var/problem-names-chosen.json' "$CONTESTSDIR" "$1"; }
+# cc_title_fixes <contest> -> [{letter,name,to,lang}] — problemas cujo NOME é um título do banco em OUTRO
+# idioma que o da prova, quando há título no idioma da prova (cc_prob_lang). É o caso do contest criado antes
+# de o nome seguir o idioma (TCP 2026: LOCALE=es com os nomes em PT) e do contest que trocou de LOCALE depois
+# de inserir os problemas. Só nome INTOCADO (igual a um título do banco, sem aproximação) e não escolhido de
+# propósito (cc_names_chosen_file): nome personalizado nunca é tocado. Lê os json servíveis num jq só.
+cc_title_fixes(){
+  local c="$1" lang tmp
+  lang="$(cc_prob_lang "$c")"
+  tmp="$(mktemp -d)" || { printf '[]'; return 0; }
+  cc_probs_json "$c" > "$tmp/cur.json"
+  cc_bank_titles "$(jq -c "$CC_PROB_CID_JQ"' [.[] | cid]' "$tmp/cur.json" 2>/dev/null)" > "$tmp/t.json"
+  [[ -s "$tmp/t.json" ]] || echo '{}' > "$tmp/t.json"
+  if [[ -s "$(cc_names_chosen_file "$c")" ]]; then cp "$(cc_names_chosen_file "$c")" "$tmp/k.json"; else echo '{}' > "$tmp/k.json"; fi
+  jq -c --slurpfile t "$tmp/t.json" --slurpfile k "$tmp/k.json" --arg l "$lang" "$CC_PROB_CID_JQ"'
+    ($t[0] // {}) as $T | (($k[0] // {}) | if type == "object" then . else {} end) as $K
+    | [ .[] | cid as $c | ($T[$c] // {}) as $x | ($x[$l] // "") as $to | (.name // "") as $n
+        | select(($to | length) > 0 and $n != $to and ([$x[]] | any(. == $n)) and ($K[$c] != $n))
+        | {letter, name:$n, to:$to, lang:$l} ]' "$tmp/cur.json" 2>/dev/null || printf '[]'
+  rm -rf "$tmp"
 }
 # LETRA DO PROBLEMA — nunca repetida, SEM diferenciar caixa (o editor de cores e o placar a mostram em
 # maiúscula). A letra é a chave de rename/remove/reorder, das clarifications e da cor de balão; com
@@ -905,6 +1035,7 @@ cc_build_probs(){
   local tdir="$1" spec="$2" enun="${3:-}" probs="PROBS=(" i=0
   local p pid src pname letter bankid stmt_b64 stmt_file skey bf html
   local lused; lused="$(cc_letters_used "$spec")"
+  local plang; plang="$(cc_prob_lang "${tdir##*/}")"   # o conf do contest JÁ existe (cc_set_probs)
   mkdir -p "$tdir/enunciados"
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
@@ -921,8 +1052,8 @@ cc_build_probs(){
     [[ "$letter" =~ ^[A-Za-z0-9]{1,3}$ ]] || return 1
     skey="${pid//\//#}"
     { [[ "$skey" =~ ^[A-Za-z0-9._#@+-]+$ ]] && [[ "$skey" != *..* ]]; } || return 1
-    # nome: o do spec (`name`/`title`); sem ele, o TÍTULO do banco (cc_prob_title)
-    [[ -n "$pname" ]] || pname="$(cc_prob_title "${bankid:-$skey}" "$pid")"
+    # nome: o do spec (`name`/`title`); sem ele, o TÍTULO do banco no idioma da prova (cc_prob_title)
+    [[ -n "$pname" ]] || pname="$(cc_prob_title "${bankid:-$skey}" "$pid" "$plang")"
     html=""
     if [[ "${CC_KEEP_STATEMENTS:-0}" == 1 && -z "$stmt_b64" && -z "$stmt_file" \
           && -s "$tdir/enunciados/$skey.html" ]]; then
@@ -1003,7 +1134,7 @@ cc_tpl_relativize(){
     | (.login_start|tonumber? // 0) as $ls | (.freeze|tonumber? // 0) as $fz
     | pick(["mode","priority","languages","show_log","show_editor","show_tl",
             "allow_backup","allow_print","score_anon","manual_verdict","secret",
-            "login_ua_substring","score_full_users","locale","login_enabled",
+            "login_ua_substring","score_full_users","locale","tz","login_enabled",
             "penalty_minutes","penalty_verdicts",
             "colors","regions","teams_meta","modules"])
     + (if $st > 0 and $en > $st then {duration:($en-$st)} else {} end)
@@ -1026,7 +1157,7 @@ cc_export_spec(){
   local confjson
   confjson="$(
     CONTEST_NAME=""; CONTEST_TYPE=""; CONTEST_PRIORITY=""; CONTEST_START=""; CONTEST_END=""
-    LANGUAGES=""; USERS_FROM=""; LOCALE=""; LOGIN_START_TIME=""; LOGIN_ENABLED=""
+    LANGUAGES=""; USERS_FROM=""; LOCALE=""; LOGIN_START_TIME=""; LOGIN_ENABLED=""; CONTEST_TZ=""
     FREEZE_TIME=""; SHOWLOG=""; SHOWEDITOR=""; SHOWTL=""; SCORE_ANON=""
     BACKUP=""; PRINT=""; MANUAL_VERDICT=""; LOGIN_UA_SUBSTRING=""; SCORE_FULL_USERS=""; SECRET=""
     PENALTY_MINUTES=""; PENALTY_VERDICTS="__unset"; CONTEST_JUDGES=""; CONTEST_MODULES=""
@@ -1034,7 +1165,7 @@ cc_export_spec(){
     jq -cn \
       --arg name "$CONTEST_NAME" --arg mode "$CONTEST_TYPE" --arg prio "$CONTEST_PRIORITY" \
       --arg start "$CONTEST_START" --arg end "$CONTEST_END" --arg langs "$LANGUAGES" \
-      --arg users_from "$USERS_FROM" --arg locale "$LOCALE" \
+      --arg users_from "$USERS_FROM" --arg locale "$LOCALE" --arg tz "$CONTEST_TZ" \
       --arg lstart "$LOGIN_START_TIME" --arg lenabled "$LOGIN_ENABLED" --arg freeze "$FREEZE_TIME" \
       --arg showlog "$SHOWLOG" --arg showeditor "$SHOWEDITOR" \
       --arg showtl "$SHOWTL" --arg anon "$SCORE_ANON" --arg backup "$BACKUP" --arg prnt "$PRINT" \
@@ -1048,6 +1179,7 @@ cc_export_spec(){
       + (if $langs != "" then {languages:($langs|split(" ")|map(select(length>0)))} else {} end)
       + (if $users_from != "" then {users_from:$users_from} else {} end)
       + (if $locale != "" then {locale:$locale} else {} end)
+      + (if $tz != "" then {tz:$tz} else {} end)
       + (if (($lstart|tonumber?) // 0) > 0 then {login_start:($lstart|tonumber)} else {} end)
       + (if $lenabled == "n" then {login_enabled:false} else {} end)
       + (if (($freeze|tonumber?) // 0) > 0 then {freeze:($freeze|tonumber)} else {} end)
@@ -1131,15 +1263,15 @@ cc_list_created(){
     oname="$(user_fullname_of treino "$owner")"; ophoto=false; [[ -f "$CONTESTSDIR/treino/users/$owner/photo.png" ]] && ophoto=true
     oadm=false; [[ "$owner" == *.admin ]] && oadm=true
     line="$(
-      CONTEST_NAME=""; CONTEST_TYPE=""; CONTEST_START=0; CONTEST_END=0; PROBS=()
+      CONTEST_NAME=""; CONTEST_TYPE=""; CONTEST_START=0; CONTEST_END=0; CONTEST_PRIORITY=""; PROBS=()
       . "$cdir/conf" 2>/dev/null
       [[ "${CONTEST_START:-0}" =~ ^[0-9]+$ ]] || CONTEST_START=0; [[ "${CONTEST_END:-0}" =~ ^[0-9]+$ ]] || CONTEST_END=0
       jq -cn --arg id "$cid" --arg nm "${CONTEST_NAME:-$cid}" --arg m "${CONTEST_TYPE:-${_m:-}}" \
          --arg o "${owner:-?}" --arg on "$oname" --argjson op "$ophoto" --argjson oa "$oadm" \
          --argjson at "$at" --argjson st "${CONTEST_START:-0}" --argjson en "${CONTEST_END:-0}" \
-         --argjson np "$(( ${#PROBS[@]} / 5 ))" \
+         --argjson np "$(( ${#PROBS[@]} / 5 ))" --arg pr "${CONTEST_PRIORITY:-}" \
          '{id:$id, name:$nm, mode:$m, owner:$o, owner_name:(if $on=="" then null else $on end), owner_has_photo:$op, owner_is_admin:$oa,
-           created_at:$at, start:$st, end:$en, problems_count:$np}'
+           created_at:$at, start:$st, end:$en, problems_count:$np, priority:(if $pr=="" then null else $pr end)}'
     )"
     [[ -n "$line" ]] && arr+=("$line")
   done

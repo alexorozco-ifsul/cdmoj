@@ -9,6 +9,8 @@ import { status } from '/shared/auth.js';
 import { el, renderAuthArea, fmtDate } from '/shared/ui.js';
 import { flagManifest, flagEl } from '/shared/flags.js';
 import { T } from '/shared/i18n.js';
+import { colonNote } from '/shared/users-batch.js';
+import { contestOrigin } from '/shared/contest-host.js';
 
 const CONTEST = 'treino';
 const TARGET = new URLSearchParams(location.search).get('c') || '';
@@ -35,9 +37,8 @@ function flagPicker(current) {
   return { sel, box: el('span', { class: 'row', style: 'gap:.3rem;align-items:center' }, sel, prev) };
 }
 
-const contestUrl = () => (/^moj\./i.test(location.hostname)
-  ? `${location.protocol}//${TARGET}.${location.host}/`
-  : `/contest/?c=${encodeURIComponent(TARGET)}`);
+// o contest abre pelo subdomínio dele (é por ele que o time entra); fora do moj.* (IP, localhost), o ?c= de sempre
+const contestUrl = () => (contestOrigin(TARGET) ? contestOrigin(TARGET) + '/contest/' : `/contest/?c=${encodeURIComponent(TARGET)}`);
 
 function fmtLeft(s) {
   if (s <= 0) return '0s';
@@ -164,7 +165,7 @@ function meBox() {
         el('button', { class: 'btn ghost', disabled: !canAct(),
           onclick: () => act({ action: 'team-create', name: name.value.trim(),
                                univ: univ.value.trim(), ai: aiSel.value, flag: fp.sel.value },
-                             T('Time criado — agora convide o resto.', 'Team created — now invite the others.', 'Equipo creado — ahora invita a los demás.')) },
+                             T('Time criado — agora convide o resto.', 'Team created — now invite the others.', 'Equipo creado — ahora invita a los demás.') + colonNote(name.value)) },
           T('Criar um time', 'Create a team', 'Crear un equipo'))));
       row.append(el('div', { class: 'small muted', style: 'flex-basis:100%' },
         T('A universidade vira o prefixo do nome no placar — “[SIGLA] Seu Time” — e a declaração de IA aparece como 🤖 ao lado do nome (transparência, sem julgamento).',
@@ -242,7 +243,7 @@ function meBox() {
     const nm = el('input', { value: t.name || '', style: 'min-width:14rem' });
     s.append(el('div', { class: 'row', style: 'gap:.4rem; margin:.4rem 0' }, nm,
       el('button', { class: 'btn ghost',
-        onclick: () => act({ action: 'team-rename', name: nm.value.trim() }, T('Nome trocado.', 'Name changed.', 'Nombre cambiado.')) },
+        onclick: () => act({ action: 'team-rename', name: nm.value.trim() }, T('Nome trocado.', 'Name changed.', 'Nombre cambiado.') + colonNote(nm.value)) },
         T('Renomear', 'Rename', 'Renombrar'))));
 
     // universidade + declaração de IA (capitão edita enquanto a janela estiver aberta)

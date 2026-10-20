@@ -9,7 +9,7 @@ source "$(dirname "$(readlink -f "$0")")/fixture.sh"
 
 C="$FIX/rp"; mkdir -p "$C/var" "$C/enunciados" "$C/clarifications" "$C/print-requests"
 T0=$(( $(date +%s) - 7200 )); TE=$(( T0 + 18000 )); FZ=$(( T0 + 3600 ))
-{ printf 'CONTEST_ID=rp\nCONTEST_TYPE=icpc\nCONTEST_NAME=Prova\\ Smoke\n'
+{ printf 'CONTEST_ID=rp\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_NAME=Prova\\ Smoke\n'
   printf 'CONTEST_START=%s\nCONTEST_END=%s\nFREEZE_TIME=%s\n' "$T0" "$TE" "$FZ"
   printf "PROBS=( x col#pa Alfa A col#pa x col#pb Beta B col#pb )\n"; } > "$C/conf"
 fx_user "$C" rp.admin p "Admin"
@@ -247,7 +247,20 @@ ck "EN: estatística em inglês"   'grep -q "\"en\"" "$EN/statistics.html"'
 sed -i '/^LOCALE=en$/d' "$C/conf"; printf 'LOCALE=es\n' >> "$C/conf"
 printf '%%PDF-1.4 CUADERNILLO_ES\n' > "$C/docs/contest.es.pdf"
 jq -cn '{caderno_version:"v1.0",published:["contest.pt","contest.es"]}' > "$C/docs/config.json"
+# ENUNCIADOS no idioma da PROVA (TCP 2026, 03/10/2026: LOCALE=es e o relatório saía com o PT). A: arquivo es no
+# contest; B: só a tradução no BANCO (json servível, statements.es) — o PT do banco existe e não pode vencer
+printf '<!DOCTYPE html><html><body><h1>Alfa ES</h1></body></html>\n' > "$C/enunciados/col#pa.es.html"
+mkdir -p "$FIX/treino/var/jsons"
+jq -cn --arg pt "$(printf '<h1>Beta PT</h1>' | base64 -w0)" --arg es "$(printf '<h1>Beta ES</h1>' | base64 -w0)" \
+  '{id:"col#pb", title:"Beta", public:true, statement_html_b64:$pt, statements:{es:{title:"Beta", html_b64:$es}}}' > "$FIX/treino/var/jsons/col#pb.json"
 ES="$FIX/res"; CONTESTSDIR="$FIX" MOJ_PROBLEMS_DIR="$PKG" bash "$ROOT/score/report-gen.sh" rp "$ES" >/dev/null 2>&1
+ck "ES: enunciado A no idioma da prova (arquivo es do contest)" 'grep -q "Alfa ES" "$ES/statements/A.html"'
+ck "ES: enunciado B pela tradução es do banco (não o PT)"       'grep -q "Beta ES" "$ES/statements/B.html" && ! grep -q "Beta PT" "$ES/statements/B.html"'
+# prova que oferece SÓ pt (STATEMENT_LANGS=pt) com LOCALE=es: o relatório segue o que a prova mostrou — PT
+printf 'STATEMENT_LANGS=pt\n' >> "$C/conf"
+ESP="$FIX/resp"; CONTESTSDIR="$FIX" MOJ_PROBLEMS_DIR="$PKG" bash "$ROOT/score/report-gen.sh" rp "$ESP" >/dev/null 2>&1
+ck "STATEMENT_LANGS=pt: enunciados em PT mesmo com LOCALE=es"  'grep -q "<h1>Alfa</h1>" "$ESP/statements/A.html" && grep -q "Beta PT" "$ESP/statements/B.html"'
+sed -i '/^STATEMENT_LANGS=/d' "$C/conf"
 ck "ES: chrome traduzido"        'grep -q ">🏆 Marcador<" "$ES/index.html" && grep -q ">📊 Estadísticas<" "$ES/index.html"'
 ck "ES: índice traduzido"        'grep -q "<dt>Competencia</dt>" "$ES/index.html" && grep -q "<th>Autor</th>" "$ES/index.html"'
 ck "ES: placar traduzido"        'grep -q "<th>Equipo</th>" "$ES/index.html" && grep -q "<th>Pen.</th>" "$ES/index.html"'
@@ -259,6 +272,7 @@ ck "ES: sem PT vazando"          '! grep -qE "<dt>Competição</dt>|<th>Equipe</
 ck "ES: sem EN vazando"          '! grep -qE ">🏆 Scoreboard<|<th>Team</th>|Staff tasks|>Flag:|All submissions" "$ES/index.html" "$ES/staff-tasks.html" "$ES/runs.html"'
 ck "ES: estatística em espanhol" 'grep -q "const LANG=\"es\"" "$ES/statistics.html" && grep -q "function T(pt,en,es)" "$ES/statistics.html"'
 rm -f "$C/docs/contest.es.pdf"; jq -cn '{caderno_version:"v1.0",published:["contest.pt"]}' > "$C/docs/config.json"
+rm -f "$C/enunciados/col#pa.es.html" "$FIX/treino/var/jsons/col#pb.json"
 sed -i '/^LOCALE=es$/d' "$C/conf"
 
 # --- COORTES: um placar por visão (o build.sh gera um TXT por coorte) --------------------
@@ -297,6 +311,24 @@ J="$(callj /contest/admin/report-publish GET adm 'contest=rp')"
 ck "GET: ainda não publicado, url pronta"        '[[ "$(jq -r .published <<<"$J")" == false && "$(jq -r .url <<<"$J")" == "/relatorio/rp/" ]]'
 J="$(callj /contest/admin/report-publish POST usr 'contest=rp' '{"action":"publish"}')"
 ck "competidor não publica (403)"                 '[[ "$(jq -r .error.code <<<"$J")" == admin_required ]]'
+# PORTÃO (auditoria do painel, 03/10/2026; decisão do Ribas): o relatório é público e traz placar completo,
+# enunciados e coortes — antes do início, congelado ou com coorte privada não liberada, recusa
+cp "$C/conf" "$FIX/conf.pub"; cp "$C/cohorts.json" "$FIX/cohorts.pub"
+sed -i "s/^CONTEST_START=.*/CONTEST_START=$(( $(date +%s) + 3600 ))/" "$C/conf"
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
+ck "antes do início: 409 not_started (enunciados públicos)" '[[ "$(jq -r .error.code <<<"$J")" == not_started && ! -e "$C/relatorio" ]]'
+cp "$FIX/conf.pub" "$C/conf"; printf 'FREEZE_TIME=%s\n' "$FZ" >> "$C/conf"
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
+ck "congelado antes do fim+1min: 409 freeze_locked (com release_at)" '[[ "$(jq -r .error.code <<<"$J")" == freeze_locked && "$(jq -r .error.release_at <<<"$J")" -gt 0 ]]'
+sed -i "s/^CONTEST_END=.*/CONTEST_END=$(( $(date +%s) - 120 ))/" "$C/conf"
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
+ck "depois do fim, placar AINDA congelado: 409 board_frozen (pede confirmação)" '[[ "$(jq -r .error.code <<<"$J")" == board_frozen && "$(jq -r .error.can_force <<<"$J")" == true && ! -e "$C/relatorio" ]]'
+cp "$FIX/conf.pub" "$C/conf"
+jq '.cohorts += [{id:"conv", name:"Convidados", regex:"^zz", public:false, sees:["conv"]}]' "$FIX/cohorts.pub" > "$C/cohorts.json"
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
+ck "coorte PRIVADA não liberada: 409 cohorts_not_released" '[[ "$(jq -r .error.code <<<"$J")" == cohorts_not_released ]]'
+jq '.results_released = true' "$C/cohorts.json" > "$C/co.tmp" && mv "$C/co.tmp" "$C/cohorts.json"
+J="$(callj /contest/admin/report-publish GET adm 'contest=rp')"   # (liberada: o publish abaixo passa)
 J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish"}')"
 ck "publish: publicado, job done, ≥7 páginas"     '[[ "$(jq -r .published <<<"$J")" == true && "$(jq -r .job.state <<<"$J")" == done && "$(jq -r .pages <<<"$J")" -ge 7 && "$(jq -r .by <<<"$J")" == rp.admin ]]'
 ck "site em contests/rp/relatorio/ (index, statistics)" '[[ -s "$C/relatorio/index.html" && -s "$C/relatorio/statistics.html" && ! -e "$C/relatorio.tmp" ]]'
@@ -314,6 +346,10 @@ J="$(callj /contest/admin/report-publish GET adm 'contest=rp')"
 ck "GET lista a rodada arquivada com relatório (public=false)" '[[ "$(jq -c ".rounds | map({slug, public})" <<<"$J")" == "[{\"slug\":\"aq\",\"public\":false}]" ]]'
 J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish-round","round":"oficial"}')"
 ck "rodada ativa não é publicável (409)"           '[[ "$(jq -r .error.code <<<"$J")" == not_archived ]]'
+jq '.results_released = false' "$C/cohorts.json" > "$C/co.tmp" && mv "$C/co.tmp" "$C/cohorts.json"
+J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish-round","round":"aq"}')"
+ck "publish-round com coorte PRIVADA não liberada: 409" '[[ "$(jq -r .error.code <<<"$J")" == cohorts_not_released && ! -e "$C/relatorio-rodadas/aq" ]]'
+cp "$FIX/cohorts.pub" "$C/cohorts.json"
 J="$(callj /contest/admin/report-publish POST adm 'contest=rp' '{"action":"publish-round","round":"aq"}')"
 ck "publish-round: symlink relatorio-rodadas/aq → rounds/aq/relatorio" '[[ "$(jq -r ".rounds[0].public" <<<"$J")" == true && -L "$C/relatorio-rodadas/aq" && "$(cat "$C/relatorio-rodadas/aq/index.html")" == *aq* ]]'
 ck "audit: report-publish-round"                    'grep -q "report-publish-round	slug=aq" "$C/var/admin-audit.log"'

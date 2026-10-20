@@ -7,7 +7,7 @@
 # reserva, time que chegou de outro jeito).
 #
 #   contests/<c>/ua-gate.json   (ausente ⇒ cai no LOGIN_UA_SUBSTRING de sempre)
-#   { "mode": "enforce",                                  // enforce | off
+#   { "mode": "enforce",                                  // enforce | observe | off
 #     "single_session": true,                             // login em outra máquina derruba a anterior
 #     "from_login": {"regex":"^team([a-z]{6})[0-9]{3}$", "expect":"\\1"},
 #     "by_region":  {"Sorocaba":"brspso", "Campinas":"brspcp"},
@@ -28,6 +28,9 @@
 # O match é SUBSTRING case-insensitive (UA de imagem é estável; ser tolerante aqui evita barrar
 # time por causa de maiúscula). `mode:off` responde sempre "sem gate" — o painel de Máquinas
 # continua mostrando quem estaria fora do padrão.
+# `mode:observe` (03/10/2026, TCP 2026) resolve o esperado como o enforce, mas o LOGIN não barra e a
+# sessão única não vale: mostra esperado × visto e as anomalias sem risco — dá p/ ligar no meio da prova.
+# Quem decide BARRAR é `ug_enforcing` (o login), nunca o esperado sozinho.
 
 ug_file(){ printf '%s/%s/ua-gate.json' "$CONTESTSDIR" "$1"; }
 
@@ -35,7 +38,7 @@ ug_file(){ printf '%s/%s/ua-gate.json' "$CONTESTSDIR" "$1"; }
 ug_get(){
   local f; f="$(ug_file "$1")"
   if [[ -s "$f" ]] && jq -e . "$f" >/dev/null 2>&1; then
-    jq -c '{mode:(if .mode == "off" then "off" else "enforce" end),
+    jq -c '{mode:(if .mode == "off" then "off" elif .mode == "observe" then "observe" else "enforce" end),
             from_login:(if (.from_login.regex // "") != "" then
                           {regex:(.from_login.regex), expect:((.from_login.expect // "\\1"))}
                         else null end),
@@ -52,14 +55,19 @@ ug_get(){
 # revoga a sessão anterior dele (lib/session-index.sh). `false` desliga só isso, mantendo o gate.
 ug_save(){ local f; f="$(ug_file "$1")"; printf '%s\n' "$2" > "$f.tmp" && mv -f "$f.tmp" "$f"; }
 
-# ug_legacy <c> -> LOGIN_UA_SUBSTRING do conf (lido por grep: o caminho de auth nunca sourceia
-# o conf, que roda command substitution). Mesmo idioma de handlers/auth/login.sh.
-ug_legacy(){
-  local v
-  v="$(grep -m1 '^LOGIN_UA_SUBSTRING=' "$CONTESTSDIR/$1/conf" 2>/dev/null | cut -d= -f2-)"
-  v="${v%\'}"; v="${v#\'}"; v="${v%\"}"; v="${v#\"}"
-  printf '%s' "$v"
+# ug_has_rule <gate-json> <legacy> -> rc 0 se ALGUMA regra pode dar esperado a um time (regex do login,
+# sede, regex de login, fallback ou o LOGIN_UA_SUBSTRING legado). Sem nenhuma, "ligado" não barra ninguém
+# — o painel dizia "ativo" assim no TCP 2026 e o organizador achou que o gate funcionava.
+ug_has_rule(){
+  [[ -n "${2:-}" ]] && return 0
+  jq -e '(.from_login != null) or ((.by_regex // []) | length > 0)
+         or ((.by_region // {}) | length > 0) or ((.fallback // "") != "")' <<<"$1" >/dev/null 2>&1
 }
+
+# ug_legacy <c> -> LOGIN_UA_SUBSTRING do conf pelo conf_value (o caminho de auth nunca sourceia o conf, que roda
+# command substitution): sem processo e com o escape do %q desfeito — o grep|cut de antes devolvia "MOJ\ Box" p/ a
+# substring "MOJ Box" e o gate barrava TODO time (auditoria do painel, 03/10/2026).
+ug_legacy(){ conf_value "$1" LOGIN_UA_SUBSTRING; }
 
 # ug_region_of <c> <login> -> sede do time pela regra ÚNICA (lib/regions.sh): a gravada, senão a regex
 # mais FUNDA. Até 28/09/2026 era a 1ª em pré-ordem — o pai vencia a folha (teamsp01 → "Brasil") e o
@@ -72,48 +80,25 @@ ug_region_of(){
 }
 
 # ug_expected <c> <login> -> a substring de UA esperada ("" = sem gate para este login)
+# Ordem: isento › papel › by_regex › by_region › from_login › fallback/LOGIN_UA_SUBSTRING legado. É o MESMO
+# programa do lote (UG_JQ/ug_expect): até 03/10/2026 este caminho tinha a sua cópia, em que o by_region
+# vencia o by_regex — o painel dizia um esperado e o login cobrava outro (auditoria do painel).
+# ug_module_on <c> — o gate (e a sessão única, que depende do esperado) só vale com o módulo `maquinas` LIGADO:
+# desligar desliga a regra, inclusive o LOGIN_UA_SUBSTRING legado (decisão do Ribas, 03/10/2026; lib/modules.sh)
+ug_module_on(){ declare -F mod_on >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/modules.sh"; mod_on "$1" maquinas; }
+
 ug_expected(){
-  local c="$1" l="$2" g reg out
+  local c="$1" l="$2" g reg
   [[ -n "$l" ]] || return 0
+  ug_module_on "$c" || return 0
   g="$(ug_get "$c")"
   [[ "$(jq -r '.mode' <<<"$g")" == off ]] && return 0
-  # 1. isento? (regex bindado antes do test — armadilha de contexto de args do jq)
-  jq -e --arg l "$l" 'any(.exempt[]; . as $rr | (try ($l|test($rr;"i")) catch false))' \
-    <<<"$g" >/dev/null 2>&1 && return 0
-  # 2. conta de papel: sempre entra (é quem configura o gate)
+  # conta de papel: sempre entra (é quem configura o gate) — sai antes de procurar a sede
   case "$l" in *.admin|*.judge|*.cjudge|*.staff|*.cstaff|*.mon|*.animeitor) return 0;; esac
-  # 3./5. by_regex e from_login resolvem no mesmo jq
-  out="$(jq -r --arg l "$l" '
-    # `// null` é obrigatório: `first()` de stream VAZIO é vazio, e `vazio as $v | …` faz a
-    # expressão inteira não produzir NADA (o esperado saía sempre "" quando nenhuma by_regex
-    # casava). Mesma armadilha do `first(...) // …` no resto do repo.
-    ((first(.by_regex[] | .regex as $rr | select(try ($l|test($rr;"i")) catch false) | .expect)) // null) as $byrx
-    | if $byrx != null then $byrx
-      else
-        (if .from_login == null then ""
-         else ((.from_login.regex) as $rr | (.from_login.expect) as $ex
-               # `sub` do jq NÃO entende \1: as capturas vêm do `match` e a substituição de
-               # \1,\2,… no template é feita aqui — assim o admin escreve o \1 de sempre.
-               | (((try ($l | match($rr; "i")) catch null)) // null) as $m
-               | if $m == null then ""
-                 else ([$m.captures[]?.string // ""]) as $g
-                      | reduce range(0; ($g | length)) as $i ($ex;
-                          gsub("[\\\\]" + (($i + 1) | tostring); ($g[$i] // "")))
-                 end)
-         end)
-      end' <<<"$g")"
-  # 4. by_region tem precedência sobre o from_login (imagem da sede fora do padrão)
   reg="$(ug_region_of "$c" "$l")"
-  if [[ -n "$reg" ]]; then
-    local byreg
-    byreg="$(jq -r --arg r "$reg" "$UG_JQ"' ug_byregion(.; $r)' <<<"$g")"
-    [[ -n "$byreg" ]] && { printf '%s' "$byreg"; return 0; }
-  fi
-  [[ -n "$out" ]] && { printf '%s' "$out"; return 0; }
-  # 6. fallback do arquivo, senão o legado do conf
-  out="$(jq -r '.fallback' <<<"$g")"
-  [[ -n "$out" ]] || out="$(ug_legacy "$c")"
-  printf '%s' "$out"
+  # o fallback já resolvido com o legado do conf, como no lote
+  jq -r --arg l "$l" --arg r "$reg" --arg lg "$(ug_legacy "$c")" "$UG_JQ"'
+    (.fallback = (if (.fallback // "") != "" then .fallback else $lg end)) as $g | ug_expect($g; $l; $r)' <<<"$g"
 }
 
 # ug_ok <c> <login> <ua> -> 0 se pode entrar (sem gate, ou o UA contém o esperado)
@@ -168,6 +153,7 @@ UG_JQ='
 ug_expected_map(){
   local c="$1" logins="$2" w g
   [[ -n "$logins" && "$logins" != '[]' ]] || { printf '{}'; return 0; }
+  ug_module_on "$c" || { printf '{}'; return 0; }   # módulo desligado: ninguém tem esperado
   w="$(mktemp -d)" || { printf '{}'; return 1; }
   printf '%s' "$logins" > "$w/logins.json"
   declare -F rg_sites_json >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/regions.sh"

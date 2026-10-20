@@ -15,6 +15,7 @@ import { toLocalDT, dtToEpoch } from '/shared/contest-config/index.js';
 import { field, swapIf, sigOf } from '/shared/admin-ui.js';
 import { T } from '/shared/i18n.js';
 import { MODULES } from './modules.js';
+import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const enc = encodeURIComponent;
 const ICON = { ok: '🟢', warn: '🟡', fail: '🔴' };
@@ -22,15 +23,18 @@ const ICON = { ok: '🟢', warn: '🟡', fail: '🔴' };
 // (o botão "resolver →" só aparece se o painel-alvo está visível — módulo ligado; ver nav.js)
 const TARGET = {
   window: ['central', 'regras'], fim: ['central', 'regras'], show_log: ['central', 'regras'],
-  freeze: ['central', 'regras'], mode: ['central', 'regras'], langs: ['central', 'regras'],
-  balloons_freeze: ['central', 'regras'],
-  modules: ['central', 'modulos'],
-  problems: ['prova', 'problemas'], pool_problems: ['prova', 'problemas'], pool: ['prova', 'problemas'],
+  // `mode` sem destino: o modo do placar não muda depois da criação (Regras o mostra só em leitura)
+  freeze: ['central', 'regras'], langs: ['central', 'regras'], pool: ['central', 'regras'],
+  balloons_freeze: ['central', 'regras'], submit_cap: ['central', 'regras'], login_open: ['central', 'regras'],
+  modules: ['central', 'modulos'], modules_requires: ['central', 'modulos'],
+  problems: ['prova', 'problemas'], pool_problems: ['prova', 'problemas'],
+  prob_names: ['prova', 'problemas'],
   report: ['prova', 'relatorio'],   // postflight (encerrar evento)
   esqueletos: ['prova', 'esqueletos'],
   users: ['pessoas', 'contas'], shared_users: ['pessoas', 'contas'],
   registration: ['pessoas', 'inscricoes'], reg_invites: ['pessoas', 'inscricoes'], reg_source: ['pessoas', 'inscricoes'],
-  print: ['operacao', 'staff'], staff_filters: ['operacao', 'staff'],
+  // `print`: o que resolve "impressão sem staff" é criar a conta .staff (Contas); ligar/desligar a impressão é nas Regras
+  print: ['pessoas', 'contas'], staff_filters: ['operacao', 'staff'],
   judges: ['operacao', 'situacao'], judges_cpus: ['operacao', 'situacao'], daemon: ['operacao', 'situacao'], manual: ['operacao', 'juizes'],
   // módulos de evento
   next_round: ['evento', 'rodadas'], reg_warmup: ['evento', 'rodadas'],
@@ -82,7 +86,7 @@ export function makeCentralTab(CONTEST, opts = {}) {
   // "🔥 Aquecer juízes" (item judges_warm): calibração dirigida SÓ p/ os pares juiz×problema frios.
   // Cada uma ocupa um slot do juiz por alguns minutos — depois do início, a confirmação diz isso.
   async function warmJudges(btn, msg) {
-    const started = !!(lastSt && lastSt.start && Math.floor(Date.now() / 1000) >= lastSt.start);
+    const started = !!(lastSt && lastSt.start && serverNow() >= lastSt.start);
     const ask = started
       ? T('A prova já começou. Cada calibração ocupa um slot do juiz por alguns minutos, e as submissões esperam atrás dela. Aquecer mesmo assim?',
           'The contest has already started. Each calibration takes one judge slot for a few minutes, and submissions wait behind it. Warm up anyway?',
@@ -118,6 +122,32 @@ export function makeCentralTab(CONTEST, opts = {}) {
       const btn = el('button', { class: 'btn' }, T('🔥 Aquecer juízes', '🔥 Warm up judges', '🔥 Calentar jueces'));
       btn.onclick = () => warmJudges(btn, msg);
       act = el('div', { class: 'row', style: 'gap:.35rem;flex-wrap:wrap;align-items:center;margin-top:.35rem' }, btn, msg);
+    } else if (c.action === 'apply_titles') {
+      // item prob_names: nome = título do banco em OUTRO idioma ⇒ o título no idioma da prova (só nesses;
+      // nome personalizado ou escolhido no Renomear o servidor não toca — cc_title_fixes)
+      const msg = el('span', { class: 'small muted' });
+      const btn = el('button', { class: 'btn' }, T('🌐 Usar os títulos no idioma da prova', '🌐 Use the titles in the contest language', '🌐 Usar los títulos en el idioma de la competencia'));
+      btn.onclick = async () => {
+        btn.disabled = true; msg.textContent = T('⏳ aplicando…', '⏳ applying…', '⏳ aplicando…');
+        try {
+          const r = await apiPost('/contest/admin/problems?contest=' + enc(CONTEST), { action: 'apply_titles' }, G);
+          const n = (r.changed || []).length;
+          // como o 🔥 Aquecer: a mensagem fica e o ↻ refaz o checklist (recarregar sozinho levava a tela ao topo)
+          msg.textContent = n
+            ? T(`✓ ${n} problema(s) renomeado(s): ${r.changed.map((x) => x.letter + ' ' + x.to).join('; ')}.`,
+                `✓ ${n} problem(s) renamed: ${r.changed.map((x) => x.letter + ' ' + x.to).join('; ')}.`,
+                `✓ ${n} problema(s) renombrado(s): ${r.changed.map((x) => x.letter + ' ' + x.to).join('; ')}.`)
+            : T('Nada a trocar.', 'Nothing to change.', 'Nada que cambiar.');
+        } catch (e) {
+          msg.textContent = T('Falhou: ', 'Failed: ', 'Falló: ') + ((e && e.message) || T('erro de rede', 'network error', 'error de red'));
+          btn.disabled = false;
+        }
+      };
+      act = el('div', { class: 'row', style: 'gap:.35rem;flex-wrap:wrap;align-items:center;margin-top:.35rem' }, btn, msg);
+    } else if (c.action === 'open_telao') {
+      // a mesa do telão é página AVULSA (não é um painel daqui): o "resolver" vira link p/ ela
+      act = el('div', { style: 'margin-top:.35rem' }, el('a', { class: 'btn ghost', href: '/contest/animeitor/?c=' + enc(CONTEST) },
+        T('abrir a mesa do telão →', 'open the big-screen page →', 'abrir la página de la pantalla →')));
     }
     return el('div', { class: 'ck' },
       el('span', { class: 'ico' }, ICON[c.level] || '•'),
@@ -167,7 +197,7 @@ export function makeCentralTab(CONTEST, opts = {}) {
     // Renderiza sempre que o cartão é ESPERADO (fim base já passou), mesmo quando
     // can_finish=false (prorrogação de sede) ou o GET falhou — sumir em silêncio foi o bug
     // da Maratona 29/08. can_act=false (juiz-chefe) = checklist somente-leitura.
-    const postEnd = !st || !st.end || Math.floor(Date.now() / 1000) > st.end;
+    const postEnd = !st || !st.end || serverNow() > st.end;
     if (fin && fin._err) {
       if (postEnd) panel.append(el('div', { class: 'section' },
         el('h2', { style: 'margin:.1rem 0' }, T('🏁 Depois da prova', '🏁 After the contest', '🏁 Después de la competencia')),
@@ -221,7 +251,7 @@ export function makeCentralTab(CONTEST, opts = {}) {
           btn.disabled = true;
           // can_finish também espera o fim geral + 1 min quando há freeze (freeze_release_at)
           const at = +fin.freeze_release_at || 0;
-          btn.title = (at && Math.floor(Date.now() / 1000) < at)
+          btn.title = (at && serverNow() < at)
             ? T('disponível a partir de ', 'available from ', 'disponible a partir de ') + new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + T(' (fim para todas as sedes + 1 min)', ' (end for every site + 1 min)', ' (fin para todas las sedes + 1 min)')
             : T('disponível depois do fim para todas as sedes', 'available after every site finishes', 'disponible después de que todas las sedes terminen');
         }

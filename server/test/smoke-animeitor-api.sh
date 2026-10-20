@@ -16,7 +16,7 @@ export CONTESTSDIR="$FIX" RUNDIR="$RUN" SESSIONDIR="$SESS"
 
 NOW="$EPOCHSECONDS"; START=$(( NOW - 7200 )); FREEZE=$(( NOW - 3600 )); END=$(( NOW + 3600 ))
 C="$FIX/ap"; mkdir -p "$C/var"
-{ printf 'CONTEST_ID=ap\nCONTEST_TYPE=icpc\nCONTEST_NAME=Prova\nCONTEST_START=%s\nCONTEST_END=%s\nFREEZE_TIME=%s\nPENALTY_MINUTES=20\n' "$START" "$END" "$FREEZE"
+{ printf 'CONTEST_ID=ap\nCONTEST_MODULES=sedes,maquinas,baloes,coortes,inscricoes\nCONTEST_TYPE=icpc\nCONTEST_NAME=Prova\nCONTEST_START=%s\nCONTEST_END=%s\nFREEZE_TIME=%s\nPENALTY_MINUTES=20\n' "$START" "$END" "$FREEZE"
   printf "PROBS=( x col#pa Alfa A col#pa x col#pb Beta B col#pb )\n"; } > "$C/conf"
 mkteam(){ fx_user "$C" "$1" x "$2" >/dev/null
   jq -c --arg n "$2" --arg u "$3" --arg r "$4" '.team = ({name:$n, univ_short:$u, flag:"br"} + (if $r == "" then {} else {region:$r} end))' \
@@ -84,7 +84,7 @@ ck "coorte COM regex que reproduz o recorte ⇒ vai o regex" '[[ "$(P Convidados
 ck "coorte SEM regex (default) ⇒ lista exata dos 4 oficiais" '[[ "$(P Oficiais .kind)" == list && "$(P Oficiais ".codes[0]")" == "^(teambr001|teambr002|teammx001|zeta)$" ]]'
 ck "sede por CAMPO da conta ⇒ lista exata (zeta e o convidado são de Brasília)" '[[ "$(P Brasil ".sites[] | select(.name==\"Brasília\") | .codes[0]")" == "^(conv001|teambr001|zeta)$" ]]'
 ck "sede por regex ⇒ o regex"          '[[ "$(P México ".sites[0].codes[0]")" == "^teammx" ]]'
-ck "o Geral leva TODAS as sedes-folha (revelação por sede no placar geral)" '[[ "$(P Geral "[.sites[].name] | join(\",\")")" == "Brasília,Goiânia,CDMX" ]]'
+ck "o Geral leva a sede Geral (todos os times) + TODAS as sedes-folha (TCP 2026: sem ela não há resultado geral)" '[[ "$(P Geral "[.sites[].name] | join(\",\")")" == "Geral,Brasília,Goiânia,CDMX" && "$(P Geral ".sites[0].source.kind")" == whole && "$(P Geral ".sites[0].codes[0]")" == ".*" ]]'
 
 echo "== publicar =="
 call $A POST '{"action":"publish"}'
@@ -208,6 +208,15 @@ ck "2ª passada sem novidade: só o relógio viaja (nenhum history mudou ⇒ zer
 sleep 1; printf '40:col#pb:C:Accepted,100p:%s:s-feed\n' $(( START + 2400 )) >> "$C/users/zeta/history"
 : > "$MOCKD/requests.log"; FEED
 ck "veredicto novo: a passada seguinte leva SÓ essa run" '[[ "$(REQ "/runs\"")" == 1 && "$(R zeta B .answer)" == Y ]] && grep "/runs\"" "$MOCKD/requests.log" | grep -q "\"len\": [0-9]\{2,3\}[,}]"'
+# CUSTO EM REGIME (TCP 2026, 03/10/2026: jq/stat/tail/awk/find a CADA segundo relendo arquivos que quase nunca
+# mudam). O laço de verdade por 6 s com jq/stat/awk/tail/find falsos que anotam o segundo de cada chamada; a 1ª
+# passada carrega caches e publica, os 2 últimos segundos são o relógio sem novidade e não rodam nenhum deles.
+SH="$(mktemp -d)"; for x in jq stat awk tail find sort; do printf '#!/bin/bash\necho "$EPOCHSECONDS %s" >> "%s/t"\nexec "%s" "$@"\n' "$x" "$SH" "$(command -v $x)" > "$SH/$x"; chmod +x "$SH/$x"; done
+( PATH="$SH:$PATH" timeout 6 bash "$ROOT/daemons/animeitor-feed.sh" >/dev/null 2>&1 )
+TE=$EPOCHSECONDS   # só os 2 ÚLTIMOS segundos contam (a 1ª passada pode passar de 2 s numa máquina carregada)
+NREG=$(awk -v t=$((TE - 2)) '$1 >= t && $2 != "find"' "$SH/t" 2>/dev/null | wc -l); NFIND=$(awk -v t=$((TE - 2)) '$1 >= t && $2 == "find"' "$SH/t" 2>/dev/null | wc -l); rm -rf "$SH"
+# o `find … history -newer` das runs (a cada C_RN=2 s) é legítimo: até 2 no regime
+ck "relógio em regime (os 2 últimos segundos): nenhum jq/stat/tail/awk/sort e no máx. 2 find (as runs)" '(( NREG == 0 && NFIND <= 2 ))'
 # time novo com run ANTES de o roster ir: a run volta por unknown_team ⇒ a passada seguinte republica e reenvia
 mkteam tardio01 "Time Tardio" UNB "Brasília"; printf '50:col#pa:C:Accepted,100p:%s:s-tardio\n' $(( START + 3000 )) > "$C/users/tardio01/history"
 bash "$ROOT/score/build.sh" ap >/dev/null 2>&1
@@ -239,6 +248,11 @@ call $A POST '{"action":"config","event":""}'                       # volta ao n
 printf '{"version":1,"active":"prova","rounds":[{"slug":"aquecimento","state":"archived"},{"slug":"prova","state":"active"}]}' > "$C/rounds.json"
 call $A GET ''
 ck "com rodadas o nome-padrão do evento leva a rodada ativa" '[[ "$(J .event)" == "ap-prova" ]]'
+call $A POST '{"action":"config","event":"ap-prova"}'            # a tela manda de volta o nome RESOLVIDO ao gravar
+ck "gravar o nome que já vale não congela o padrão da rodada" '[[ "$(J .saved)" == true && "$(jq -r .event "$C/animeitor.json")" == "" ]]'
+sed -i 's/"active":"prova"/"active":"final"/' "$C/rounds.json"; call $A GET ''
+ck "…e a rodada seguinte ganha o evento dela" '[[ "$(J .event)" == "ap-final" ]]'
+sed -i 's/"active":"final"/"active":"prova"/' "$C/rounds.json"
 cp "$C/users/teambr001/history" "$MOCKD/h1.bak"; : > "$C/users/teambr001/history"    # a promoção zerou o history deste time
 call $A POST '{"action":"publish"}'; call $A POST '{"action":"push-runs"}'
 ck "evento novo recebe só as runs VIVAS — as que sumiram não viram X fantasma nele" \
@@ -271,6 +285,14 @@ n0="$(wc -l < "$MOCKD/requests.log")"
 call $RV GET '' cst
 ck "ANTES de liberar: released=false, zero links — e o servidor do telão nem é consultado" '[[ "$(J .released)" == false && "$(J ".links|length")" == 0 && "$(wc -l < "$MOCKD/requests.log")" == "$n0" ]]'
 nav cst; ck "…e a barra do .cstaff não tem o botão" '[[ "$BODY" != *Reveleitor* ]]'
+# a PRÉVIA da organização (03/10/2026): admin/.animeitor veem os links ANTES de liberar, e quem os receberia
+call $RV GET '' ani
+ck ".animeitor ANTES de liberar: todos os links (prévia), released=false" '[[ "$(J .released)" == false && "$(J .all)" == true && "$(J ".links|length")" -ge 5 ]]'
+call $A GET '' ani 'links=1'
+ck "?links=1: quem RECEBE cada link quando liberar (sede de Brasília → o .cstaff dela)" '[[ "$(J "[.links.sites[] | select(.contest==\"Geral\" and .site==\"Brasília\") | .recipients[]] | join(\",\")")" == "sede.cstaff" ]]'
+ck "…a sede Geral (todos os times) não vai a staff nenhum" '[[ "$(J "first(.links.sites[] | select(.contest==\"Geral\" and .site==\"Geral\")) | (.whole == true and (.recipients | length) == 0)")" == true ]]'
+ck "…escopo por REGEX de login também resolvido (CDMX → mx.cstaff)" '[[ "$(J "[.links.sites[] | select(.site==\"CDMX\") | .recipients[]] | unique | join(\",\")")" == "mx.cstaff" ]]'
+ck "…e quem viu os links vai ao audit (link é credencial)" 'grep -rq "animeitor-links-read" "$C/var" 2>/dev/null'
 call $A POST '{"action":"reveal-release"}' cst
 ck "só o .animeitor/admin libera (.cstaff → 403)" '[[ "$OUT" == *"Status: 403"* ]]'
 call $A POST '{"action":"reveal-release"}'
@@ -279,6 +301,7 @@ call $RV GET '' cst
 ck ".cstaff de Brasília: os links da sede dele em TODOS os placares em que ela aparece (Geral e Brasil)" \
    '[[ "$(J "[.links[] | .contest + \"/\" + .site] | sort | join(\",\")")" == "Brasil/Brasília,Geral/Brasília" && "$(J ".links[0].url")" == *"secret="* && "$(J .scoped)" == true ]]'
 ck "…e NENHUM de outra sede" '[[ "$BODY" != *Goi* && "$BODY" != *CDMX* ]]'
+ck "…nem o da sede Geral (todos os times: só a organização)" '[[ "$(J "[.links[] | select(.site==\"Geral\")] | length")" == 0 ]]'
 call $RV GET '' gst
 ck ".staff de Goiânia (region: em outra caixa): só Goiânia" '[[ "$(J "[.links[].site] | unique | join(\",\")")" == "Goiânia" && "$(J ".links|length")" == 2 ]]'
 call $RV GET '' mxc
@@ -310,6 +333,10 @@ ck "reset confirmado: evento apagado LÁ, estado local limpo, o alheio continua"
    '[[ "$(J .reset)" == true && ! -e "$C/var/animeitor-reveal.released" && "$(ST ".events | has(\"ap-2026\")")" == false && "$(ST ".events | has(\"regional-2026\")")" == true && ! -e "$C/var/animeitor-sent.tsv" ]]'
 ck "o mapa de ids FICA (id é da submissão, não do evento)" '[[ -s "$C/var/animeitor-ids.tsv" ]]'
 
+echo "== regex vazia é recusada (o \"+ sede\" em branco revelava um placar vazio) =="
+call $A POST '{"action":"save","contests":[{"name":"Geral","source":{"kind":"view","id":"public"},"codes":null,"sites":[{"name":"Nova","source":{"kind":"manual","id":""},"codes":[]}]}]}'
+ck "sede com codes [] → 422 codes_empty" '[[ "$OUT" == *"Status: 422"* && "$(J .error.code)" == codes_empty ]]'
+
 echo "== sede única (sem regions.json): o Geral leva UMA sede — sem sede não há link de revelação =="
 # XIV Maratona UnB (25/09/2026): prova numa sede só, sem regions.json ⇒ o Geral saía SEM sede, o Animeitor não
 # gerava link de revelação e liberar o reveleitor não liberava nada ("0 links de revelação").
@@ -319,6 +346,6 @@ ck "sem regions: o Geral tem 1 sede \"Geral\" com os mesmos times do placar (.*)
 ck "…e os outros placares (coortes) continuam sem sede" '[[ "$(J "[.proposal.contests[] | select(.name != \"Geral\") | .sites | length] | add // 0")" == 0 ]]'
 mv "$C/regions.json.fora" "$C/regions.json"
 call $A GET '' ani 'proposal=1'
-ck "com regions: as sedes voltam a ser as folhas (nenhuma sede \"Geral\")" '[[ "$(P Geral "[.sites[].name] | join(\",\")")" == "Brasília,Goiânia,CDMX" ]]'
+ck "com regions: a sede Geral (todos) + as folhas" '[[ "$(P Geral "[.sites[].name] | join(\",\")")" == "Geral,Brasília,Goiânia,CDMX" ]]'
 
 echo ""; echo "RESULT: $pass passed, $fail failed"; exit $(( fail>0?1:0 ))

@@ -6,7 +6,8 @@
 #                            chave do MOJ), default_url, user (só da chave PRÓPRIA), url, event, moj_base_url,
 #                            enabled, feed, secret_contest, contests (o que está salvo; null = ainda vale a
 #                            proposta), managed, status, clock, verify (a última conferência, sem ids),
-#                            feeder_alive_at (batimento do processo alimentador), now}
+#                            feeder_alive_at (batimento do processo alimentador), now}. `event` = o nome EFETIVO
+#                            (com a chave do MOJ, evento novo ganha `moj-`; ver an_cfg)
 #   A CHAVE DO MOJ ($ANIMEITOR_CRED_FILE) vale p/ todo contest sem chave própria, no servidor padrão, e nunca
 #   volta p/ a tela (nem o usuário dela). Chave própria: {action:"config", user, token}; {user:"", token:""}
 #   apaga a própria e volta p/ a do MOJ.
@@ -17,7 +18,8 @@
 #   POST {action:"save", contests:[…]|null}   grava os placares/sedes revisados (null = voltar à proposta)
 #   POST {action:"publish", adopt?}      -> cria/atualiza evento + placares + sedes LÁ (idempotente). 409:
 #                            event_exists (existe lá e não é deste contest: `adopt`), event_taken (o nome é de
-#                            OUTRO contest do MOJ), adopt_forbidden (a chave do MOJ só assume evento deste contest)
+#                            OUTRO contest do MOJ), adopt_forbidden (a chave do MOJ só assume evento deste contest),
+#                            event_prefix_required (a chave do MOJ só CRIA evento `moj-…` — o an_cfg já põe o prefixo)
 #   POST {action:"verify"}               -> CONFERE sede a sede (runs_secret) se o Animeitor tem todas as runs;
 #                            o que falta/diverge é reenviado na hora e conferido de novo -> {verify, before?, runs?}
 #   POST {action:"push-runs", full?}     -> manda as runs (delta; full = tudo de novo)
@@ -75,7 +77,18 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
     else state="$(jq -c '. + {proposal: null}' <<<"$state")"; fi
   fi
   if [[ "$(param links)" == 1 ]] && an_configured "$contest"; then
-    state="$(jq -c --argjson l "$(an_links "$contest" || true)" '. + {links: $l}' <<<"$state")"
+    # links ao vivo + a PRÉVIA de quem os receberia (sem liberar): `links.sites` = [{contest, site, whole,
+    # recipients}] — a sede de todos os times (`whole`) só vai à organização central. O link é credencial:
+    # quem os viu vai ao audit, como a leitura do staff no /reveal.
+    lk="$(an_links "$contest" || true)"; [[ -n "$lk" ]] || lk='{"public":[],"revelation":[]}'
+    lf="$(mktemp)"; rcf="$(mktemp)"; trap 'rm -f "${pf:-}" "$lf" "$rcf"' EXIT
+    printf '[]' > "$rcf"
+    if an_resolved "$contest" "$lf" 2>/dev/null; then
+      source "$_LIBDIR/print.sh"
+      an_link_recipients "$contest" "$lf" > "$rcf" 2>/dev/null && [[ -s "$rcf" ]] || printf '[]' > "$rcf"
+    fi
+    state="$(jq -c --argjson l "$lk" --slurpfile s "$rcf" '. + {links: ($l + {sites: $s[0]})}' <<<"$state")"
+    audit_log_to "$contest" animeitor-links-read "by=$SESSION_LOGIN links=$(jq '(.revelation // []) | length' <<<"$lk" 2>/dev/null)"
   fi
   ok_json_slurp '$s[0]' s "$state"
   exit 0
@@ -86,6 +99,7 @@ jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "JSON inválido" "bad_json"
 action="$(jq -r '.action // empty' <<<"$body")"
 case "$action" in
 config)
+  unset ev_typed
   cfg="$(an_cfg "$contest")"
   if jq -e 'has("url")' >/dev/null 2>&1 <<<"$body"; then
     url="$(jq -r '.url // ""' <<<"$body")"; url="${url%/}"
@@ -101,26 +115,45 @@ config)
     # vazio = o nome-PADRÃO (id do contest; com rodadas, `<contest>-<rodada ativa>`) — fica vazio no arquivo
     ev="$(jq -r '.event // ""' <<<"$body")"
     [[ -z "$ev" ]] || an_name_ok "$ev" || fail 422 "Nome de evento inválido (até 64 caracteres, sem barra)" "event_invalid"
-    [[ -e "$ACTIVE/$contest" ]] && [[ "$ev" != "$(jq -r .event <<<"$cfg")" ]] && fail 409 "Pare o alimentador antes de trocar o evento" "feeding"
-    cfg="$(jq -c --arg e "$ev" '.event_set = $e' <<<"$cfg")"
+    ev_typed="$ev"     # aplicado depois da chave: "o mesmo nome" depende da chave e da URL DESTE pedido
   fi
+  # a chave: validada aqui, gravada só depois de todas as conferências (um 409/422 não deixa meia troca)
+  credop=keep; own=""
   if jq -e 'has("token") or has("user")' >/dev/null 2>&1 <<<"$body"; then
     user="$(jq -r '.user // ""' <<<"$body")"; token="$(jq -r '.token // ""' <<<"$body")"
     cf="$(an_credfile "$contest")"
-    if [[ -z "$user" && -z "$token" ]]; then rm -f "$cf"
+    if [[ -z "$user" && -z "$token" ]]; then credop=delete; own=0
     else
       # trocar só o usuário (token vazio) mantém o token gravado
       if [[ -z "$token" && -s "$cf" ]]; then IFS= read -r _old < "$cf"; token="${_old#*:}"; fi
       [[ "$user" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] || fail 422 "Usuário inválido" "user_invalid"
       [[ "$token" =~ ^[A-Za-z0-9._~+/=-]{8,256}$ ]] || fail 422 "Token inválido (8 a 256 caracteres, sem espaço nem aspas)" "token_invalid"
-      mkdir -p "$cdir/secrets"; chmod 700 "$cdir/secrets" 2>/dev/null
-      tmpf="$cf.tmp.$BASHPID"
-      ( umask 077; printf '%s:%s\n' "$user" "$token" > "$tmpf" ) && mv -f "$tmpf" "$cf"
+      credop=write; own=1
     fi
   fi
+  # o MESMO nome que já valeria sem mexer no `event_set` = sem mudança: a tela manda de volta o nome RESOLVIDO a cada
+  # "gravar", e gravá-lo congelaria o padrão `<contest>-<rodada>` (a rodada nova deixaria de criar evento novo) —
+  # 04/10/2026. A comparação é com o nome que valeria COM a URL e a chave deste pedido (trocar p/ a chave própria
+  # tira o prefixo moj-: aí o nome digitado é mudança de verdade).
+  if [[ -n "${ev_typed+x}" ]]; then
+    ev_keep="$(jq -r .event <<<"$(an_cfg "$contest" "$(jq -c '.event = .event_set | del(.event_set)' <<<"$cfg")" "$own")")"
+    [[ "$ev_typed" == "$ev_keep" ]] || cfg="$(jq -c --arg e "$ev_typed" '.event_set = $e' <<<"$cfg")"
+  fi
+  # o nome que o evento TERÁ com tudo isso (URL, nome digitado e chave mudam o nome: com a chave do MOJ ele
+  # ganha o prefixo moj-) — é ELE que tem de caber e que não pode mudar com o alimentador ligado
+  ev_now="$(jq -r .event <<<"$cfg")"
+  ev_new="$(jq -r .event <<<"$(an_cfg "$contest" "$(jq -c '.event = .event_set | del(.event_set)' <<<"$cfg")" "$own")")"
+  an_name_ok "$ev_new" || fail 422 "Nome de evento longo demais: com a chave do MOJ ele ganha o prefixo $AN_EVENT_PREFIX (até 64 caracteres no total)" "event_invalid"
+  [[ -e "$ACTIVE/$contest" && "$ev_new" != "$ev_now" ]] && fail 409 "Pare o alimentador antes de trocar o evento" "feeding"
+  case "$credop" in
+    delete) rm -f "$cf" ;;
+    write)  mkdir -p "$cdir/secrets"; chmod 700 "$cdir/secrets" 2>/dev/null
+            tmpf="$cf.tmp.$BASHPID"
+            ( umask 077; printf '%s:%s\n' "$user" "$token" > "$tmpf" ) && mv -f "$tmpf" "$cf" ;;
+  esac
   an_cfg_save "$contest" "$cfg" || fail 500 "Não consegui gravar" "save_failed"
   mod_enable "$contest" telao
-  audit_log_to "$contest" animeitor-config "url=$(jq -r .url <<<"$cfg") event=$(jq -r .event <<<"$cfg") cred=$(jq -r 'if has("token") or has("user") then "alterada" else "mantida" end' <<<"$body")"
+  audit_log_to "$contest" animeitor-config "url=$(jq -r .url <<<"$cfg") event=$ev_new cred=$(jq -r 'if has("token") or has("user") then "alterada" else "mantida" end' <<<"$body")"
   ok_json_slurp '{saved:true} + $s[0]' s "$(_an_state)"
   ;;
 test)
@@ -155,6 +188,10 @@ save)
       || fail 422 "Nome de placar ou de sede repetido" "name_duplicate"
     jq -e 'all(.[]; (.source.kind != "manual" or .codes != null) and all(.sites[]; .source.kind != "manual" or .codes != null))' >/dev/null 2>&1 <<<"$norm" \
       || fail 422 "Placar ou sede manual precisa de regex" "codes_missing"
+    # regex VAZIA (o "+ sede" com a caixa em branco gravava `codes:[]`): a sede ia ao telão sem time nenhum e o
+    # link revelava um placar vazio. Lista vazia ≠ automático (null): recusa.
+    jq -e 'all(.[]; (.codes == null or (.codes | length) > 0) and all(.sites[]; .codes == null or (.codes | length) > 0))' >/dev/null 2>&1 <<<"$norm" \
+      || fail 422 "Placar ou sede sem times: escreva a regex (ou volte ao automático)" "codes_empty"
     cfg="$(jq -c --argjson n "$norm" '.contests = $n' <<<"$cfg")"
   fi
   an_cfg_save "$contest" "$cfg" || fail 500 "Não consegui gravar" "save_failed"

@@ -12,9 +12,10 @@ import { el } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { fmtDate, fmtS, toCsv, downloadText, swapIf, sigOf, everyVisible } from '/shared/admin-ui.js';
 import { rgAssign, rgFlatten, rgKey } from '/shared/regions-match.js';
+import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const enc = encodeURIComponent;
-const nowE = () => Math.floor(Date.now() / 1000);
+const nowE = () => serverNow();
 // fábrica, não const de módulo: T() no topo congelaria o idioma antes do LOCALE do contest
 const STATUS = () => ({
   pending: { t: T('🕓 pendente', '🕓 pending', '🕓 pendiente'), cls: 'flag-warn' },
@@ -243,7 +244,14 @@ export function makeTasksTab(CONTEST, opts = {}) {
         await apiPost('/contest/admin/staff-filters?contest=' + enc(CONTEST), { filters: f }, G);
         Object.values(blocks).forEach((ta) => { ta.dataset.orig = ta.value; });   // salvo = limpo
         msg.className = 'small'; msg.textContent = T('✓ salvo', '✓ saved', '✓ guardado'); save.disabled = false; await refresh();
-      } catch (e) { save.disabled = false; msg.className = 'small error-box'; msg.textContent = e.message || T('falha', 'failed', 'fallido'); }
+      } catch (e) {
+        save.disabled = false; msg.className = 'small error-box';
+        const d = (e && e.data) || {};
+        // regex que não compila deixava o staff sem ver nada — agora o servidor recusa e diz qual
+        msg.textContent = d.code === 'regex_invalid'
+          ? T(`Regex inválida: “${d.regex}” — nada foi salvo. Corrija ou use region:<sede>.`, `Invalid regex: “${d.regex}” — nothing was saved. Fix it or use region:<site>.`, `Regex inválida: “${d.regex}” — no se guardó nada. Corrígela o usa region:<sede>.`)
+          : (e.message || T('falha', 'failed', 'fallido'));
+      }
     });
     box.append(el('div', { class: 'row', style: 'margin-top:.7rem' }, save, msg));
     return box;

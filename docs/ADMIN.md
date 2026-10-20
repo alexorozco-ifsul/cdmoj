@@ -360,7 +360,48 @@ Para consertar uma conta:
 2. Rode de novo com `--apply`.
 3. Confira a última linha: tudo em zero.
 
+### Promover uma conta a um papel (`.admin`, `.judge`…)
+
+O papel vem do **sufixo** do login, e o usuário não pode se dar um sufixo pelo perfil (é escalação). Quem promove é
+o admin da plataforma, com `server/bin/user-promote.sh` — a MESMA cascata da troca de username (conta, Telegram,
+orgs, inscrições, contests compartilhados, virtuais, posse e as sessões abertas, que seguem logadas já com o papel).
+A senha não muda e a troca não gasta o limite anual do usuário.
+
+1. Escreva a mensagem (HTML do Telegram: `<b>`, `<i>`, `<code>`, `<a href>`; escape `<`, `>` e `&`) num arquivo.
+2. Rode em **dry-run** (mostra a conta, o Telegram vinculado e a posse):
+   `podman exec systemd-moj-api bash /opt/moj/cdmoj/server/bin/user-promote.sh <login> <login>.admin`
+3. Repita com `--apply --message-file <arquivo>`: promove e põe a mensagem na fila do mojinho p/ o Telegram
+   vinculado (sem vínculo, avisa e não manda). Fica no audit do treino (`user-promote`, `user-promote-dm`).
+
+
 A ferramenta **recusa** quando o login novo não existe, e quando o login antigo **ainda existe**. No segundo
 caso não houve troca de username: são duas contas, e a posse entre contas diferentes não se transfere por
 aqui. Rodar duas vezes é inofensivo. Cada problema ganha um commit `dono: <antigo> -> <novo>`.
 
+
+## 11. Painel do treino: admin × super-admin
+
+O painel `/treino/admin/` tem dois papéis. A regra vale na API, não só na tela.
+
+- **Admin do treino:** toda conta `.admin` com sessão do treino. Vê tudo (estatísticas, fila, máquinas, logs), cuida
+  das contas geridas, das notícias, das conquistas e de quem pode criar contest, e desloga alunos: 1 por vez, ou até
+  20 de uma vez com prévia e confirmação.
+- **Super-admin:** a conta `.admin` listada em `SUPERADMINS` no `contests/treino/conf` (logins separados por espaço).
+  Não há tela para essa lista, de propósito. Só o super-admin:
+  - grava a config dos juízes, limpa cache, mata ou reinicia slot, cancela calibração e roda o `updateproblemset`
+    (as `/ops` de escrita);
+  - age na Fila (reenfileirar, resolver como Judge Error), que vale para qualquer contest;
+  - trava contas, desloga por IP e desloga mais de 20 contas de uma vez;
+  - muda a prioridade de contest e remove contest de outro dono.
+
+O `.admin` LOCAL de um contest (o que o assistente cria para quem monta o contest) não entra em nenhuma rota do
+painel nem das `/ops`, nem de leitura: até 16/10/2026 ele conseguia configurar e desligar juízes.
+
+**Ação de vários alvos (deslogar, travar, por IP).** A tela pede ao servidor uma prévia: quantas contas, quantas
+sessões, os primeiros nomes e os pulados com o motivo. Para executar, digite o número de contas. A própria conta, as
+contas de papel (`.admin`, `.judge`…) e o super-admin nunca entram. Depois de executar:
+- o detalhe (afetados e pulados) fica em `contests/treino/var/admin-actions/<epoch>-<ação>-<pid>.json`;
+- o audit do treino leva uma linha curta, com o caminho do detalhe;
+- os super-admins recebem uma DM do mojinho (sem Telegram vinculado, o grupo dos admins).
+
+Para dar o papel de super-admin a mais alguém, acrescente o login em `SUPERADMINS` no conf do treino.

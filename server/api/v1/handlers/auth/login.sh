@@ -24,11 +24,26 @@ _mexp="$(account_field "$contest" "$u" '.managed.expires_at')"; _mexp="${_mexp//
 # lib/ua-gate.sh resolve tudo e cai no LOGIN_UA_SUBSTRING legado quando não há ua-gate.json.
 # Papéis privilegiados seguem isentos (precisam entrar para configurar).
 source "$_LIBDIR/ua-gate.sh"
+source "$_LIBDIR/registration.sh"
 # o esperado é capturado UMA vez: é o teste do gate (ug_ok inline) e, depois do alias, o critério
 # "este login está sujeito ao gate" da sessão única (vazio = sem gate p/ ele: off, isento, papel
-# ou sem regra — NUNCA use o `mode`, que é enforce por default sem arquivo)
-_ugexp="$(ug_expected "$contest" "$u")"
+# ou sem regra). O `mode` sozinho NUNCA decide (é enforce por default sem arquivo, p/ o legado valer):
+# ele só separa, entre quem TEM esperado, barrar (enforce) de apenas observar (observe).
+# MEMBRO de time inscrito: o gate é o do TIME (a sede e o padrão de login são da conta do time — com o login
+# da pessoa o esperado saía vazio e o membro entrava de qualquer máquina; auditoria do painel, 03/10/2026)
+_uglogin="$u"
+if reg_enabled "$contest"; then
+  _ugt="$(reg_team_of "$contest" "$u")"
+  [[ -n "$_ugt" ]] && user_exists "$contest" "$_ugt" && _uglogin="$_ugt"
+fi
+_ugexp="$(ug_expected "$contest" "$_uglogin")"
+# modo e sessão única num jq só (só p/ quem tem esperado). `observe` resolve o esperado mas NÃO barra nem
+# derruba sessão — é o modo de olhar (painel e anomalias) sem risco.
+_ugmode=off; _ugsingle=false
 if [[ -n "$_ugexp" ]]; then
+  IFS=$'\x01' read -r _ugmode _ugsingle <<<"$(jq -r '"\(.mode)\u0001\(.single_session != false)"' <<<"$(ug_get "$contest")")"
+fi
+if [[ -n "$_ugexp" && "$_ugmode" == enforce ]]; then
   _ua="${HTTP_USER_AGENT:-}"
   [[ "${_ua,,}" == *"${_ugexp,,}"* ]] \
     || fail 403 "Login bloqueado: este navegador/máquina não está autorizado para o contest (sede errada?)" "ua_gate"
@@ -39,7 +54,6 @@ fi
 # API direto entrava assim mesmo. Agora valem aqui, junto do roster de inscritos
 # (lib/registration.sh). Conta de PAPEL nunca é barrada: o organizador precisa entrar antes
 # de todo mundo (e p/ configurar a prova).
-source "$_LIBDIR/registration.sh"
 if ! is_reserved_role_login "$u"; then
   # \x01 como separador: campo vazio no meio DESLOCA os seguintes quando o IFS é tab (ver CLAUDE.md)
   _dc="$( ( LOGIN_ENABLED=""; LOGIN_START_TIME=""; source "$CONTESTSDIR/$contest/conf" 2>/dev/null
@@ -66,8 +80,18 @@ fi
 actor=""
 if reg_enabled "$contest"; then
   _team="$(reg_team_of "$contest" "$u")"
-  if [[ -n "$_team" ]] && user_exists "$contest" "$_team"; then actor="$u"; u="$_team"; fi
+  if [[ -n "$_team" ]] && user_exists "$contest" "$_team"; then
+    # TIME desabilitado (Pessoas › Contas): o membro autentica com a credencial DELE, então a senha `!…` do time não
+    # barrava ninguém — quem barra é a marca (mesma resposta de senha errada: não confirma nada)
+    [[ "$(account_field "$contest" "$_team" '.disabled')" == true ]] && fail 401 "Wrong user or password" "bad_creds"
+    actor="$u"; u="$_team"
+  fi
 fi
+
+# --- TIME SÓ PELO ENDEREÇO DO CONTEST (lib/team-host.sh): fora do subdomínio, nada de sessão --------------------
+# Depois da senha e do alias: o audit registra só credencial VERDADEIRA usada pelo endereço errado, e o time (não a
+# pessoa) é quem a regra olha — a mesma conta que o router barraria a cada requisição.
+th_login_check "$contest" "$u" "$actor"
 
 name="$(user_fullname "$contest" "$u")"
 # --- SESSÃO ÚNICA POR TIME (só com gate p/ este login + single_session) ------------------
@@ -77,8 +101,8 @@ name="$(user_fullname "$contest" "$u")"
 # vale semeado; sem marcador, a 1ª vez semeia (flock -n: quem não pegar segue sem revogar).
 _revoked=0; _sfd=""
 _single=0
-if [[ -n "$_ugexp" ]] && ! is_reserved_role_login "$u"; then
-  jq -e '.single_session != false' <<<"$(ug_get "$contest")" >/dev/null 2>&1 && _single=1
+if [[ -n "$_ugexp" && "$_ugmode" == enforce && "$_ugsingle" == true ]] && ! is_reserved_role_login "$u"; then
+  _single=1
 fi
 if (( _single )); then
   sess_index_seeded "$contest" || sess_seed_index "$contest" || _single=0

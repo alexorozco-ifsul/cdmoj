@@ -38,6 +38,8 @@ Object.defineProperty(FakeNode.prototype,'disabled',{get(){return !!this._d},set
 globalThis.document={ createElement:(t)=>new FakeNode(t), createTextNode:(t)=>({nodeType:3,text:String(t),textContent:String(t)}),
   createElementNS:(ns,t)=>new FakeNode(t), activeElement:null, body:new FakeNode('body') };
 function T(pt,en,es){ return pt; } function uiLocale(){ return 'pt-BR'; } function getLang(){ return 'pt'; }
+// relógio do servidor (web/shared/server-clock.js; o import sai junto com os outros): aqui, o do teste
+function serverNowMs(){ return Date.now(); } function serverNow(){ return Math.floor(Date.now() / 1000); }
 globalThis.confirm=()=>false; globalThis.alert=()=>{}; globalThis.setInterval=(f,ms)=>1; globalThis.clearInterval=()=>{};
 globalThis.setTimeout=(f)=>1; globalThis.clearTimeout=()=>{};
 globalThis.location={hash:'', search:'', hostname:'x', origin:'https://c.x'}; globalThis.URL={createObjectURL:()=>'blob:x', revokeObjectURL:()=>{}}; globalThis.Blob=function(){};
@@ -97,11 +99,11 @@ let D={submissions:{pending:1,max_wait_s:12,response:{avg_s:5,p95_s:9},pending_l
        judges:{online:1,total:1,busy:0,queue_depth:0,list:[{host:"j1",online:true,state:"free",age_s:1,problems_count:2,langs:["c"]}],pool:[]}, routing:{shards:2,delivered_5m:3,workers:[{shard:0,alive_age_s:2,in_submit:1,in_results:1}]}, review:{}, window:50, now:1788000000};
 let SESS={sessions:[{login:"a"}],alerts:[]}, TQ={requests:[]};
 async function apiGet(p){ if(p.includes("/dashboard")) return JSON.parse(JSON.stringify(D)); if(p.includes("/sessions")) return SESS; if(p.includes("/queue")) return TQ; if(p.includes("report-publish")) return {published:false,job:null}; return {}; }
-(async()=>{ const tab=makeStatusTab("c"); await tab.load(); const k0=[...tab.panel.children]; const cards0=k0[2].children[0], judges0=k0[6].children[0], pend0=k0[7].children[0];
+(async()=>{ const tab=makeStatusTab("c"); await tab.load(); const k0=[...tab.panel.children]; const cards0=k0[2].children[0], judges0=k0[7].children[0], pend0=k0[8].children[0], warm0=k0[6];
   await tab.load(); const k1=[...tab.panel.children];
-  print("same_skeleton="+k0.every((n,i)=>n===k1[i])); print("same_cards="+(k1[2].children[0]===cards0)); print("same_judges="+(k1[6].children[0]===judges0));
+  print("same_skeleton="+k0.every((n,i)=>n===k1[i])); print("same_cards="+(k1[2].children[0]===cards0)); print("same_judges="+(k1[7].children[0]===judges0));
   D.submissions.pending_list=[]; await tab.load(); const k2=[...tab.panel.children];
-  print("skeleton_after_change="+k0.every((n,i)=>n===k2[i])); print("pending_rebuilt="+(k2[7].children[0]!==pend0)); print("cards_kept="+(k2[2].children[0]===cards0)); print("judges_kept="+(k2[6].children[0]===judges0));
+  print("skeleton_after_change="+k0.every((n,i)=>n===k2[i])); print("pending_rebuilt="+(k2[8].children[0]!==pend0)); print("cards_kept="+(k2[2].children[0]===cards0)); print("judges_kept="+(k2[7].children[0]===judges0)); print("warm_row_fixed="+(k2[6]===warm0 && /Aquecer|Warm|Calentar/.test(JSON.stringify(warm0.textContent||""))));
   print("nchildren="+k2.length);
 })().catch(e=>print("ERRO "+e+"\n"+e.stack));' > "$T/status.out"
 check "$(kv status same_skeleton)" true "status: esqueleto idêntico no 2º load"
@@ -110,6 +112,7 @@ check "$(kv status same_judges)" true "status: juízes não refeitos sem mudanç
 check "$(kv status skeleton_after_change)" true "status: esqueleto idêntico após dado novo"
 check "$(kv status pending_rebuilt)" true "status: só a caixa de pendentes trocou"
 check "$(kv status cards_kept)" true "status: cards ficaram (assinatura igual)"
+check "$(kv status warm_row_fixed)" true "status: botão Aquecer juízes num nó FIXO (não se refaz no refresh)"
 check "$(kv status judges_kept)" true "status: juízes ficaram"
 
 # ------------------------------------------------------------------- Staff (tasks.js) -------
@@ -200,6 +203,7 @@ async function apiGet(p){ const d=JSON.parse(JSON.stringify(D)); d.computed_at=D
   D.counts.multi_session=2; D.anomalies.push({kind:"multi_session",severity:"bad",at:6,login:"t2",machine:"m:c/3",detail:{sessions:2,keys:["m:c/3","m:d/4"]}}); await tab.load(); const k2=[...tab.panel.children];
   print("cards_rebuilt="+(k2[0].children[3].children[0]!==cards0)); print("skeleton_stable="+k0.every((n,i)=>n===k2[i]));
   D.gate.active=false; await tab.load(); const k3=[...tab.panel.children]; print("tl_hidden_without_gate="+k3[1].hidden); print("skeleton_stable2="+k0.every((n,i)=>n===k3[i]));
+  D.machines_identified=true; await tab.load(); const k4=[...tab.panel.children]; print("tl_visible_identified_no_gate="+!k4[1].hidden);
 })().catch(e=>print("ERRO "+e+"\n"+e.stack));' sessions-common.js > "$T/anomalies.out"
 check "$(kv anomalies same_skeleton)" true "anomalies: esqueleto idêntico no 2º load"
 check "$(kv anomalies state_kept)" true "anomalies: barra de estado não refeita (computed_at fora da assinatura)"
@@ -211,6 +215,7 @@ check "$(kv anomalies cards_rebuilt)" true "anomalies: cards trocaram com anomal
 check "$(kv anomalies skeleton_stable)" true "anomalies: esqueleto idêntico após dado novo"
 check "$(kv anomalies tl_hidden_without_gate)" true "anomalies: linha do tempo escondida sem gate"
 check "$(kv anomalies skeleton_stable2)" true "anomalies: esqueleto idêntico ao desligar o gate"
+check "$(kv anomalies tl_visible_identified_no_gate)" true "anomalies: sem gate mas com máquina identificada (MLinux), a linha do tempo aparece"
 
 # ------------------------------------------------------------ Clarifications (página) ------------
 run clar contest/clarification/clarification.js '
