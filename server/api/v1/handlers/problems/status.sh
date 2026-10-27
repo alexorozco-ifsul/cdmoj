@@ -78,7 +78,7 @@ pi_summary_ensure; issmap="$PI_SUMMARY"; [[ -s "$issmap" ]] || issmap=/dev/null
 # quebrado era um board VAZIO (o antigo `|| jq -cn '{total:0,…}'`) — silencioso e indistinguível de
 # "você não tem problema nenhum". Agora falha vira 500 COM a mensagem do jq.
 out="$(jq -c --slurpfile TL "$tlmap" --slurpfile VAL "$valmap" --slurpfile CX "$calmap" --slurpfile ISS "$issmap" \
-          --slurpfile NJ "$njmap" --argjson CAL "$calib" --argjson SUP "$sup" --argjson CAPJ "$capj" '
+          --slurpfile NJ "$njmap" --argjson CAL "$calib" --argjson SUP "$sup" --argjson CAPJ "$capj" "$_TL_EFF_DEF"'
   ($TL[0] // {}) as $tl | ($VAL[0] // {}) as $val | ($CX[0] // {}) as $cx | ($ISS[0] // {}) as $iss
   | ($NJ[0] // {}) as $njm
   | ($SUP | map(if . == "py2" or . == "py3" then "py" else . end)) as $supn
@@ -87,6 +87,10 @@ out="$(jq -c --slurpfile TL "$tlmap" --slurpfile VAL "$valmap" --slurpfile CX "$
   | [ .problems[]
       | .id as $id
       | ($val[$id]) as $v | ($tl[$id]) as $t
+      # MÉTODO DO TL (26/10/2026): o sumário carimba o do conf (tl-report / problem_commit) e traz as duas
+      # metades; vale a do método — o Kattis ainda não calibrado (juiz anterior) sai vazio, não o MOJ no lugar
+      | (($t.method // "moj") | if . == "kattis" then "kattis" else "moj" end) as $tlm
+      | (if $tlm == "kattis" then ($t.tl_kattis // {}) else ($t.tl // {}) end) as $ttl
       | (($v.checks // []) | any(.name=="good_sol_accepts" and (.ok|not))) as $gsbad
       | (if $v==null then "none" elif ($v.ok==true) then "ok" else "error" end) as $vstate
       | ($t.calibrated // false) as $cal
@@ -100,7 +104,7 @@ out="$(jq -c --slurpfile TL "$tlmap" --slurpfile VAL "$valmap" --slurpfile CX "$
       # linguagens good SEM TL servido = solução good que não calibrou (o TL servido é a UNIÃO entre
       # hosts, então ausente = falhou em TODOS os juízes). Só vale p/ calibração ATUAL (senão é "stale").
       | ([ (.good_langs // [])[] | (if .=="py3" or .=="py2" then "py" else . end)
-           | select(. as $g | ($SUP|index($g)) and (($t.tl // {})|has($g)|not)) ] | unique) as $miss
+           | select(. as $g | ($SUP|index($g)) and ($ttl|has($g)|not)) ] | unique) as $miss
       | ($cal and ($stale|not) and ($miss|length>0)) as $gsnotl
       | (($vstate=="error") or $gsbad) as $err
       | (.public and ($cal|not)) as $pubuncal            # público mas SEM calibração (sem TL p/ o aluno)
@@ -177,20 +181,16 @@ out="$(jq -c --slurpfile TL "$tlmap" --slurpfile VAL "$valmap" --slurpfile CX "$
           error_reasons:([ (if $vstate=="error" then "validation_failed" else empty end),
                            (if $gsbad then "good_sol_rejected" else empty end) ]),
           # TL EFETIVO: o `tl` do sumário é o CALIBRADO CRU (a projeção só lê hosts[].tl) — sem
-          # o overlay, o Painel mostrava um número que o juiz não usa. O override vem CARIMBADO
-          # no índice de donos (gen-problem-owners.sh), então isto não abre pacote nenhum: o
-          # Painel é rota quente e lista os 1400 problemas de um .admin.
-          # ⚠ `$ovr`/`$cal` são ligados ANTES do reduce: lá dentro o `.` é o ACUMULADOR, não o
-          # problema (a mesma armadilha de escopo do jq que já mordeu o gate de UA).
-          time_limits:( (.tl_override // {}) as $ovr | ($t.tl // {}) as $cal
-                        | if ($ovr|length) == 0 then $cal
-                          else ((($cal|keys) + ($ovr|keys)) | unique) as $ks
-                               | reduce $ks[] as $k ({};
-                                   .[$k] = ($ovr[$k] // $ovr["default"] // $cal[$k]))
-                               | with_entries(select(.value != null) | .value |= tostring)
-                          end ),
-          time_limits_calibrated:($t.tl // {}),
+          # o overlay, o Painel mostrava um número que o juiz não usa. O override e o TLMOD sum/mult
+          # vêm CARIMBADOS no índice de donos (gen-problem-owners.sh), então isto não abre pacote
+          # nenhum: o Painel é rota quente e lista os 1400 problemas de um .admin. A regra é a tl_eff
+          # (lib/tl-store.sh), a MESMA das outras rotas; os parâmetros `$` são avaliados aqui, contra o
+          # problema (dentro do reduce de lá o `.` é o acumulador).
+          time_limits:tl_eff($ttl; (.tl_override // {}); (.tl_mods // {})),
+          time_limits_calibrated:$ttl,
+          tl_method:$tlm,
           tl_override:(.tl_override // {}),
+          tl_mods:(.tl_mods // {}),
           updated_at:($t.at // null),
           validated_at:($v.at // null),
           render_warnings:($v.render_warnings // "") }

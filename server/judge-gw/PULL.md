@@ -17,11 +17,11 @@ inventário e **puxam jobs no heartbeat**. O escalonador é o próprio handler d
   GET  /judge/package?id ────────────▶  handlers/judge/package.sh ─▶ .tar.gz + X-Moj-Checksum
         (+ X-Moj-Tl-Checksum = o carimbo estreito, p/ diagnóstico)
   ...cacheia em ~/.cache/moj/problems/<id>, CALIBRA na 1ª vez (calibreitor → tl.<host>)...
-  POST /judge/tl-report(id,checksum,tl)▶ handlers/judge/tl-report.sh ─▶ run/tl/<id>.json (por host)
+  POST /judge/tl-report(id,checksum,tl,tl_kattis)▶ handlers/judge/tl-report.sh ─▶ run/tl/<id>.json (por host)
   POST /judge/heartbeat(state,inv,free_slots,total_slots,cfg_hash,status,slot_cpus,max_free_group) ─▶ heartbeat.sh = ESCALONADOR
         ◀── {assigned:[…]|null, update|null, command|null, reregister, config?, holding?} ──
         (claim atômico; LOTE de até free_slots SLOTS — job de CPUNEEDED=k ocupa k_slots e leva
-         {test_cpus,same_numa,slots,par_max,par_cap}; config por juiz quando o cfg_hash difere;
+         {test_cpus,same_numa,slots,par_max,par_cap} + tl_method (o TLMETHOD do conf AGORA); config por juiz quando o cfg_hash difere;
          status ∈ ok|draining|disabled = auto-relato honesto; comando URGENTE kill|restart é
          entregue MESMO ocupado — recuperação sem SSH, /ops/judge-reset; holding = juiz
          SEGURADO p/ um job largo)
@@ -86,11 +86,51 @@ envelhecer porque alguém salvou uma solução `wrong`. Serve o **máximo entre 
 `var/jsons` (conservador). Ao **relançar**, o agente re-reporta os TLs do cache (sem
 recalibrar). Se o pacote muda de verdade, o `tl_checksum` novo **descarta** o TL antigo (todos
 recalibram).
+
+**Raias da calibração (26/10/2026).** A calibração completa (update `calibrate` e o comando dirigido) leva
+`par_max`/`par_cap` = G grupos de CPU e `slots` = G × k_slots: G = min(`CALIB_PAR_MAX` (4; `1` desliga),
+livres ÷ k_slots, a maior fase — #good ou #pass+slow+wrong, contadas com `find`: a API roda sem glob), e 1 com job
+na fila ou juiz legado (`_calib_lanes_v` em `sched-lib.sh`). O heartbeat soma os `slots` no `claimed`. O agente só
+aceita G > 1 com o calibreitor que tem raias (o nome `MOJ_CALIB_LANES` no arquivo) e `AGENT_CALIB_LANES≠0`; o
+calibreitor roda as soluções do mesmo tipo em paralelo, uma por grupo, e o resultado é o do serial.
+
+**TL da classe de hardware (26/10/2026).** Juízes idênticos calibram TLs um pouco diferentes, e o veredicto de quem
+está no limite dependia de qual juiz pegava o envio. O `register` deriva dos specs a classe `hwclass`
+(`<arch>|<cpu>|<ncpu>|<memória em GiB, em blocos de 4>`), o `tl-report` a carimba em `hosts[h].class` do store e o
+heartbeat a exporta (`QC_HWCLASS`) p/ o claim: cada job leva `tl_class` = o máx, por linguagem, entre os juízes da
+classe de quem reivindica, nas duas metades, com o checksum do store (`_TLCLASS_DEF` em `sched-lib.sh`; o
+`_SCHED_TLMAX_DEF` de lá é cópia literal do `_TL_MAX_DEF` do `tl-store.sh`). O agente só o usa com o mesmo
+`tl_checksum` do pacote em cache: grava `tl.job` = a tabela local com a classe onde ela é maior e o passa ao
+build-and-test (`MOJ_TLFILE`) e ao teto do job. Sem classe (agente antigo), sem store ou checksum diferente: a
+tabela local, como antes. Store de antes: o re-report do boot carimba; `bin/tl-class-backfill.sh` carimba sem
+reiniciar juiz.
+
+**Problema que não existe mais (26/10/2026).** Apagado ou movido de org, ele segue no cache dos juízes, e o
+re-report do boot batia nele: o `tl-report` respondia 500 e o `calib-report` criava `run/calib/<id>/` órfão. Hoje
+os dois respondem **404 `problem_gone`** antes de qualquer escrita (e de novo sob o lock do problema, que o
+delete segura ao apagar o estado). O agente novo trata o 404 `problem_gone` como definitivo: não repete o POST
+(só repete sem resposta, 408, 409 `busy`, 429 e 5xx), marca a entrada do cache (`<cache>/<id>/.gone`; também no
+`exists:false` do `package-meta`), tira-a do inventário do register, não a re-reporta mais e o GC a apaga. O delete/move do problema também
+tira da fila as calibrações dele (`sched_calib_drop`, a MESMA função do `/ops/calib-cancel`; o move pede a do id
+novo se havia alguma).
+
+**Os DOIS métodos de TL (26/10/2026; mojtools `tl-methods.sh`, `docs/PACOTE.md` §10 "Métodos de TL").** A tabela
+`tl.<host>` leva as duas metades — `TL[]` (o método MOJ) e `TLKATTIS[]` (o do Kattis, por linguagem) — e o
+agente reporta as duas (`tl`, `tl_kattis`; o servidor guarda `hosts[h].tl_kattis` e saneia os dois mapas). Quem
+escolhe a metade é o `TLMETHOD` do conf do problema, que fica FORA dos dois carimbos (trocar não recalibra nem
+rebaixa o pacote) — então o juiz não pode confiar no conf do cache: o **claim** (`q_claim`/`q_claim_id`,
+`sched-lib.sh` `_pkg_tlmethod_v`, um `read` do conf sem fork) põe **`tl_method`** no job, e o agente o repassa
+ao build-and-test (`MOJ_TL_METHOD`), ao teto do job (`_job_cap`) e ao `ensure_cached` (job `kattis` com tabela
+sem a metade Kattis recalibra antes de julgar). Fora do `.cmeta` de propósito: um 13º campo na ordem fixa que
+os três leitores leem igual é a armadilha já paga uma vez. Agente antigo ignora o campo e usa o conf do cache.
 O `POST /judge/calib-report` leva, além do log texto e dos `reports` (report.html por solução),
 o campo **`sols`** = o `.calib-sols.json` do calibreitor (a calibração POR EXTENSO:
-`[{file,lang,category,verdict,tests:[{name,code,time,tl}]}]`, ≤300 KB; cópia em
+`[{file,lang,category,verdict,method,etl,tests:[{name,code,time,tl,code_alt,tl_alt}]}]` — `code_alt`/`tl_alt` =
+o veredicto e o TL pelo OUTRO método de TL, só pass/slow/wrong —, ≤300 KB; cópia em
 `<cache>/<id>/.calib-sols.json` p/ o re-envio de boot). O servidor PRESERVA `sols`/`reports`
-de um POST sem esses campos com o MESMO checksum (boot/agente velho não apagam o dado).
+de um POST sem esses campos com o MESMO checksum (boot/agente velho não apagam o dado) e, com o MESMO checksum,
+JUNTA o que vem por categoria/arquivo (26/10/2026): a calibração RÁPIDA, só das good — normal na mesma versão,
+já que o `TLMETHOD` fica fora dela —, troca as linhas das good e deixa as de pass/slow/wrong. Versão nova zera.
 
 - **GC do cache no juiz** (lado agente): pacote sem uso há `AGENT_CACHE_MAX_DAYS` (14) vira
   **stub** — o `pkg/` pesado sai, `tl.<host>`+meta ficam (o registro segue anunciando o

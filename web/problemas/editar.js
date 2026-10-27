@@ -12,7 +12,7 @@ import { T, uiLocale } from '/shared/i18n.js';
 import { STMT_LANGS, STMT_SHORT, stmtName } from '/shared/statement-langs.js';
 import { decorateSamples } from '/shared/statement-samples.js';
 import { makeTestRun, testsTable } from '/problemas/testrun.js';
-import { expectPill, expectWant, expectGot, summaryText, validatorText, pendingLabel } from '/problemas/readiness.js';
+import { expectPill, expectWant, expectGot, summaryText, validatorText, pendingLabel, tlMethodName } from '/problemas/readiness.js';
 import { makeIssues } from '/problemas/issues.js';
 
 const CONTEST = 'treino';
@@ -91,16 +91,27 @@ let solEditors = Object.fromEntries(SOL_CATS.map(([c]) => [c, []]));
 
 // ---- conf (configurações do problema) -----------------------------------------------------
 const confVal = (text, key) => { const e = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); const m = (text || '').match(new RegExp('^\\s*' + e + '\\s*=\\s*(.*)$', 'm')); return m ? m[1].trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1') : null; };
-function confUpsert(text, key, value) {
+// `top`: chave AUSENTE entra na 1ª linha, não na última — a regra do tl-checksum p/ as linhas que ficam FORA do
+// carimbo (TLMETHOD): o resto do conf não muda um byte. O servidor ainda normaliza o fim do conf ao gravar (um \n
+// final, lib/problems.sh nl1); conf de upload com outro final muda o carimbo uma vez, como qualquer edição.
+function confUpsert(text, key, value, top) {
   const lines = (text || '').split('\n'), e = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), re = new RegExp('^\\s*' + e + '\\s*=');
   const idx = lines.findIndex(l => re.test(l));
   if (value === null || value === '') { if (idx >= 0) lines.splice(idx, 1); }
-  else { const v = /[\s+]/.test(value) ? `"${value}"` : value, line = key + '=' + v; if (idx >= 0) lines[idx] = line; else lines.push(line); }
+  else { const v = /[\s+]/.test(value) ? `"${value}"` : value, line = key + '=' + v; if (idx >= 0) lines[idx] = line; else if (top) lines.unshift(line); else lines.push(line); }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 // FUNCTION_LANGS (docs/PACOTE.md, "Submissão de função"): as linguagens em que o aluno envia SÓ a função —
 // o editor do aluno abre VAZIO nelas. Declarada pelo autor; o template de função a preenche ao ser aplicado.
-const CF_TEXT = [['cf_memlimit', 'MEMLIMITMB'], ['cf_stack', 'STACKLIMITMB'], ['cf_calibrafactor', 'TLMOD[calibrafactor]'], ['cf_calibrationtl', 'CALIBRATIONTL'], ['cf_ulimit_u', 'ULIMITS[-u]'], ['cf_ulimit_f', 'ULIMITS[-f]'], ['cf_maxparallel', 'MAXPARALLELTESTS'], ['cf_cpuneeded', 'CPUNEEDED'], ['cf_fnlangs', 'FUNCTION_LANGS']];
+const CF_TEXT = [['cf_memlimit', 'MEMLIMITMB'], ['cf_stack', 'STACKLIMITMB'], ['cf_calibrafactor', 'TLMOD[calibrafactor]'], ['cf_calibrationtl', 'CALIBRATIONTL'], ['cf_ulimit_u', 'ULIMITS[-u]'], ['cf_ulimit_f', 'ULIMITS[-f]'], ['cf_maxparallel', 'MAXPARALLELTESTS'], ['cf_cpuneeded', 'CPUNEEDED'], ['cf_fnlangs', 'FUNCTION_LANGS'],
+  ['cf_kattis_a', 'KATTIS_AC_TO_TIME_LIMIT'], ['cf_kattis_b', 'KATTIS_TIME_LIMIT_TO_TLE'], ['cf_kattis_r', 'KATTIS_TIME_RESOLUTION']];
+// [id, chave, DEFAULT quando AUSENTE] — escolha entre valores, no molde do CF_YN: só grava o que difere do default
+// ou já estava no conf. TLMETHOD (docs/PACOTE.md "Métodos de TL"): moj (o padrão) | kattis; entra no TOPO do conf.
+const CF_SEL = [['cf_tlmethod', 'TLMETHOD', 'moj']];
+// os parâmetros do Kattis só aparecem com o método Kattis
+function applyTlMethod() {
+  if ($('cf_kattis_box')) $('cf_kattis_box').hidden = $('cf_tlmethod').value !== 'kattis';
+}
 // [id, chave, DEFAULT quando a chave está AUSENTE] — TRI-ESTADO (24/09/2026): chave ausente = o default
 // do juiz (ALLOWPARALLELTEST/TLERERUN ausentes = ligados; STOPWHEN/SAMENUMA ausentes = desligados). O
 // checkbox mostra o efetivo, e salvar só ESCREVE a chave quando o valor difere do default ou quando ela
@@ -121,6 +132,8 @@ function confToFields(text) {
   CF_TEXT.forEach(([id, k]) => { $(id).value = confVal(text, k) || ''; });
   CF_YN.forEach(([id, k, def]) => { $(id).checked = ynOf(text, k, def) === 'y'; });
   CF_FLAG.forEach(([id, k]) => { $(id).checked = (confVal(text, k) || '').toLowerCase() === 'y'; });
+  CF_SEL.forEach(([id, k, def]) => { const v = (confVal(text, k) || '').trim().toLowerCase(); $(id).value = v === 'kattis' ? 'kattis' : def; });
+  applyTlMethod();
   $('cf_nosample').checked = sampleOff(text); applySampleMode();
   limitsWarn();
 }
@@ -169,8 +182,12 @@ function syncConfFromFields() {
     c = confUpsert(c, k, (v === def && !present) ? null : v);   // igual ao default e ausente: fica ausente
   });
   CF_FLAG.forEach(([id, k]) => { c = confUpsert(c, k, $(id).checked ? 'y' : null); });
+  CF_SEL.forEach(([id, k, def]) => {
+    const v = $(id).value || def, present = confVal(c, k) !== null;
+    c = confUpsert(c, k, (v === def && !present) ? null : v, true);
+  });
   c = confUpsert(c, 'SAMPLE', $('cf_nosample').checked ? 'no' : null);
-  $('confRaw').value = c; applySampleMode();
+  $('confRaw').value = c; applySampleMode(); applyTlMethod();
 }
 const hiddenFile = (multiple) => { const i = el('input', { type: 'file' }); if (multiple) i.multiple = true; i.hidden = true; return i; };
 function langSelect(value) { const s = el('select', { class: 'small' }); LANG_OPTS.forEach(([id, l]) => s.append(el('option', { value: id }, l))); s.value = value || ''; return s; }
@@ -1046,8 +1063,10 @@ async function preview() {
 }
 
 // ---- validação & calibração (painel + prontidão, best-effort) -----------------------------
+// Devolve o /problems/calib que ESTA chamada buscou (null se falhou): quem compara antes × depois (o salvar, em
+// recalibIfOutdated) usa ele, nunca o LASTCALIB global — um poll que saiu antes do save e voltou depois o sobrescreve.
 async function loadValidation() {
-  if (!ID) { VAL = { validated: 'na', calibrated: 'na' }; LASTVAL = LASTINFO = LASTCALIB = PSTAT = null; renderVal(); updateReady(); return; }
+  if (!ID) { VAL = { validated: 'na', calibrated: 'na' }; LASTVAL = LASTINFO = LASTCALIB = PSTAT = null; renderVal(); updateReady(); return null; }
   const g = (pfx) => apiGet(pfx + encodeURIComponent(ID), { contest: CONTEST, auth: true }).catch(() => null);
   const [val, info, calib, st] = await Promise.all([     // 4 GETs em paralelo (antes era sequencial)
     g('/problems/validation?id='), g('/problems/get?id='), g('/problems/calib?id='), g('/problems/status?id='),
@@ -1068,6 +1087,7 @@ async function loadValidation() {
   VAL.validated = (RUNNING === 'publish') ? 'run' : ((LASTVAL && Array.isArray(LASTVAL.checks) && LASTVAL.checks.length) ? (LASTVAL.ok ? 'ok' : 'todo') : 'na');
   VAL.calibrated = (RUNNING || calibRunning()) ? 'run' : (nHosts ? 'ok' : 'na');
   maybeRenderVal(); updateReady();   // só reconstrói o painel se algo mudou (não a cada poll)
+  return calib;
 }
 // dispara Calibrar/Validar e fica buscando o resultado sozinho (a calibração roda no juiz).
 //
@@ -1121,6 +1141,11 @@ document.addEventListener('visibilitychange', () => {
   loadValidation().then(() => { if (RUNNING || calibRunning()) { if (!calibTimer) { calibStart = Date.now(); armPolling(4000); } } });
 });
 const tlLine = (tl) => Object.entries(tl || {}).filter(([k]) => k !== 'default').map(([k, v]) => `${k}: ${v}s`).join(' · ');
+// OS DOIS MÉTODOS DE TL (docs/PACOTE.md "Métodos de TL"): o do conf (`tl_method` do /problems/calib) vale; o outro
+// fica ao lado, p/ o autor comparar antes de trocar (a troca não recalibra: os juízes medem os dois).
+const curMethod = () => ((LASTCALIB && LASTCALIB.tl_method) === 'kattis' ? 'kattis' : 'moj');
+const altMethod = () => (curMethod() === 'kattis' ? 'moj' : 'kattis');
+const hostTl = (h, m) => ((m || curMethod()) === 'kattis' ? (h.tl_kattis || {}) : (h.tl || {}));
 // abre o report.html (rico) de uma solução, gerado na calibração daquele juiz, numa nova aba
 async function openCalibReport(host, name) {
   try {
@@ -1160,9 +1185,14 @@ function solsBlock(h) {
       tdet.style.display = open ? '' : 'none'; tg.textContent = lbl(open);
     } }, lbl(OPEN_SOLS.has(key)));
     const repName = (s.category || '') + '-' + (s.file || '');
-    const want = expectWant(s.category), got = expectGot(s.expect);
+    const want = expectWant(s.category, s.expect), got = expectGot(s.expect);
+    // o juízo pelo OUTRO método (expect_alt): o que aconteceria se o autor trocasse o TLMETHOD
+    const ap = expectPill(s.expect_alt);
+    const alt = ap ? el('span', { class: 'pill ' + ap.cls, style: 'opacity:.8', title: expectGot(s.expect_alt) || ap.title || '' },
+      tlMethodName(altMethod()) + ' ' + ap.label) : null;
     box.append(el('div', { class: 'solrow' },
       pill ? el('span', { class: 'pill ' + pill.cls, title: pill.title || '' }, pill.label) : el('span', { class: 'muted' }, '•'),
+      alt,
       el('b', {}, (s.category || '?') + '/' + (s.file || '?')),
       el('span', { class: 'muted' }, s.verdict || ''),
       tg,
@@ -1197,21 +1227,33 @@ function validatorBlock(h) {
 }
 // quadro-resumo: tempo-limite por linguagem em cada juiz; o "servido" (o que o aluno vê) em negrito
 function tlSummaryTable(hosts, served) {
-  const langs = [...new Set([...Object.keys(served || {}), ...hosts.flatMap(h => Object.keys(h.tl || {}))])];
+  const langs = [...new Set([...Object.keys(served || {}), ...hosts.flatMap(h => Object.keys(hostTl(h)))])];
   if (!langs.length) return null;
   langs.sort((a, b) => (a === 'default') - (b === 'default') || a.localeCompare(b));   // 'default' por último
   const cpuOf = {}; JUDGES.forEach(j => { cpuOf[j.host] = j.cpu; });
   const servedOf = (lang) => {
     if (served && served[lang] != null) return served[lang];
-    const vals = hosts.map(h => +((h.tl || {})[lang])).filter(Number.isFinite);
+    const vals = hosts.map(h => +(hostTl(h)[lang])).filter(Number.isFinite);
     return vals.length ? Math.max(...vals) : null;   // ainda não indexado: usa o máx entre juízes
   };
+  // o tempo-limite servido pelo OUTRO método (efetivo, com o override) — "se trocar"
+  const altEff = ((LASTCALIB && LASTCALIB.time_limits_by_method) || {})[altMethod()];
+  const altOf = (lang) => (altEff && altEff.effective && altEff.effective[lang] != null) ? altEff.effective[lang] : null;
   const thead = el('tr', {}, el('th', {}, T('linguagem', 'language', 'lenguaje')), el('th', { class: 'served' }, T('servido (aluno)', 'served (student)', 'servido (estudiante)')),
+    altEff ? el('th', { title: T('O tempo-limite se você trocar o método no conf (sem recalibrar).', 'The time limit if you switch the method in the conf (no recalibration).', 'El tiempo límite si cambias el método en el conf (sin recalibrar).') },
+      T('se ', 'if ', 'si ') + tlMethodName(altMethod())) : null,
     ...hosts.map(h => el('th', {}, h.host, cpuOf[h.host] ? el('div', { class: 'cpu' }, cpuOf[h.host]) : null)));
   // TLOVERRIDE no conf: a coluna "servido" deixa de ser a medição e passa a ser a decisão do
   // autor — então cada linha sobreposta leva o selo, com o calibrado no title.
   const ovr = (LASTINFO && LASTINFO.tl_override) || {};
   const ovrOf = (lang) => ovr[lang] != null ? ovr[lang] : (ovr.default != null ? ovr.default : null);
+  // TLMOD[<lang>.sum|.mult] no conf: o juiz soma/multiplica por cima do calibrado (o servido já inclui); o
+  // override, quando há, é final e vence o ajuste — então o selo do TLMOD só sai sem override na linha.
+  const mods = (LASTINFO && LASTINFO.tl_mods) || {};
+  const modOf = (lang) => {
+    const a = (mods.sum || {})[lang], m = (mods.mult || {})[lang];
+    return [a != null ? (a < 0 ? '−' + Math.abs(a) : '+' + a) + 's' : '', m != null ? '×' + m : ''].filter(Boolean).join(' ');
+  };
   const body = langs.map(lang => el('tr', {},
     el('td', {}, tlLangName(lang)),
     el('td', { class: 'served' }, el('b', {}, tlSecs(servedOf(lang))),
@@ -1223,10 +1265,18 @@ function tlSummaryTable(hosts, served) {
                                'Definido por ti en el conf (TLOVERRIDE). Medido por la calibración: ')
                              + (cal.length ? tlSecs(Math.max(...cal)) : '—');
                    return s; })()
-        : null),
-    ...hosts.map(h => el('td', {}, tlSecs((h.tl || {})[lang])))));
+        : modOf(lang)
+          ? el('span', { class: 'pill', style: 'margin-left:.3rem',
+              title: T(`Ajuste do conf (TLMOD[${lang}.sum|.mult]): o juiz soma/multiplica isto por cima do tempo calibrado — o servido já inclui.`,
+                       `Conf adjustment (TLMOD[${lang}.sum|.mult]): the judge adds/multiplies this on top of the calibrated time — the served value already includes it.`,
+                       `Ajuste del conf (TLMOD[${lang}.sum|.mult]): el juez suma/multiplica esto sobre el tiempo calibrado — el servido ya lo incluye.`) },
+              modOf(lang))
+          : null),
+    altEff ? el('td', { class: 'muted' }, tlSecs(altOf(lang))) : null,
+    ...hosts.map(h => el('td', {}, tlSecs(hostTl(h)[lang])))));
   return el('div', { class: 'tlsummary-wrap' },
-    el('div', { class: 'small muted', style: 'margin:.3rem 0 .2rem' }, T('Resumo por linguagem — em negrito o tempo-limite que o estudante vê no enunciado:', 'Summary per language — in bold the time limit the student sees in the statement:', 'Resumen por lenguaje — en negrita el tiempo límite que el estudiante ve en el enunciado:')),
+    el('div', { class: 'small muted', style: 'margin:.3rem 0 .2rem' }, T('Resumo por linguagem, pelo método ', 'Summary per language, by the ', 'Resumen por lenguaje, por el método ')
+      + tlMethodName(curMethod()) + T(' (o do conf) — em negrito o tempo-limite que o estudante vê no enunciado:', ' method (the one in the conf) — in bold the time limit the student sees in the statement:', ' (el del conf) — en negrita el tiempo límite que el estudiante ve en el enunciado:')),
     el('table', { class: 'tlsummary' }, el('thead', {}, thead), el('tbody', {}, ...body)));
 }
 // assinatura do que o painel mostra: só reconstrói quando MUDA — senão o polling (a cada 4s)
@@ -1243,22 +1293,97 @@ function calibWhere() {
   });
   return ' · ' + parts.join(' · ') + '.';
 }
+// SIMULAÇÃO DO TEMPO-LIMITE (o servidor calcula: lib/tl-sim.sh; o /problems/calib serve tl_sim + tl_suggest): com os
+// tempos desta calibração, como o TL sairia em outras configurações (fator do MOJ; resolução do Kattis), que soluções
+// sairiam com o veredicto errado em cada uma, e a sugestão de cada método. "Aplicar" só PREENCHE os campos da aba
+// Limites (o mesmo caminho de editar à mão): salvar grava o conf, e o fator ou os parâmetros do Kattis novos mudam a
+// versão do pacote — o editor pede a recalibração sozinho (recalibIfOutdated); o método sozinho não muda a versão.
+// Fica FORA do trecho que o smoke-limits-tab recorta (confVal … hiddenFile).
+const tlsimLine = (tl) => {
+  const e = Object.entries(tl || {}).filter(([k]) => k !== 'default');
+  return e.length ? e.map(([k, v]) => `${tlLangName(k)} ${tlSecs(v)}`).join(' · ') : 'default ' + tlSecs((tl || {}).default);
+};
+function tlsimApply(fields) {
+  Object.entries(fields).forEach(([id, v]) => { const e = $(id); if (e) { e.value = String(v); e.dispatchEvent(new Event('change')); } });
+  applyTlMethod();
+  setMsg(T('Campos preenchidos na aba Limites. Salve para gravar o conf: com o fator ou os parâmetros do Kattis novos, o editor recalibra sozinho depois de salvar; trocar só o método não recalibra.',
+           'Fields filled in on the Limits tab. Save to write the conf: with a new factor or new Kattis parameters, the editor recalibrates by itself after saving; changing only the method does not recalibrate.',
+           'Campos completados en la pestaña Límites. Guarda para grabar el conf: con un factor nuevo o parámetros de Kattis nuevos, el editor recalibra solo después de guardar; cambiar solo el método no recalibra.'), '');
+}
+function tlsimTable(rows, head, label) {
+  const tb = rows.map(r => el('tr', r.current ? { style: 'font-weight:600' } : {},
+    el('td', {}, label(r), r.current ? el('span', { class: 'pill', style: 'margin-left:.3rem' }, T('atual', 'current', 'actual')) : null),
+    el('td', {}, tlsimLine(r.tl)),
+    el('td', {}, r.ok ? '✓' : '✗ ' + (r.fail || []).join(', '),
+      (r.unmeasured || []).length ? el('span', { class: 'muted', title: T('O teste morreu no teto de tempo da calibração antes de decidir: a calibração não mediu o bastante para dizer.', 'The test died at the calibration time ceiling before it could decide: the calibration did not measure enough to tell.', 'La prueba murió en el techo de tiempo de la calibración antes de decidir: la calibración no midió lo suficiente para saberlo.') },
+        ' · ' + T('não medido: ', 'not measured: ', 'no medido: ') + r.unmeasured.join(', ')) : null)));
+  return el('div', { class: 'tlsummary-wrap' }, el('table', { class: 'tlsummary' },
+    el('thead', {}, el('tr', {}, el('th', {}, head), el('th', {}, T('tempo-limite', 'time limit', 'tiempo límite')),
+      el('th', {}, T('soluções com veredicto errado', 'solutions with the wrong verdict', 'soluciones con veredicto equivocado')))),
+    el('tbody', {}, ...tb)));
+}
+function renderTlSim() {
+  const box = $('cf_tlsim_box'); if (!box) return;
+  box.innerHTML = '';
+  const c = LASTCALIB, st = c && c.tl_sim_state;
+  if (!st) return;                                    // servidor anterior à simulação: nada a mostrar
+  box.append(el('h5', { style: 'margin:.8rem 0 .2rem' }, T('Simulação do tempo-limite', 'Time-limit simulation', 'Simulación del tiempo límite')));
+  const note = (t) => el('p', { class: 'small muted', style: 'margin:.2rem 0' }, t);
+  if (st === 'calibrating') { box.append(note(T('Disponível quando a calibração terminar.', 'Available when the calibration ends.', 'Disponible cuando termine la calibración.'))); return; }
+  if (st === 'error') { box.append(note(T('A simulação não pôde ser calculada com os dados desta calibração.', 'The simulation could not be computed with the data of this calibration.', 'La simulación no se pudo calcular con los datos de esta calibración.'))); return; }
+  if (st !== 'ok' || !c.tl_sim) { box.append(note(T('Calibre o problema para simular outras configurações com os tempos medidos.', 'Calibrate the problem to simulate other settings with the measured times.', 'Calibra el problema para simular otras configuraciones con los tiempos medidos.'))); return; }
+  const sim = c.tl_sim, sg = c.tl_suggest || {};
+  box.append(note(T('Com os tempos que a calibração mediu (juízes ', 'With the times the calibration measured (judges ', 'Con los tiempos que midió la calibración (jueces ') + (sim.hosts || []).join(', ')
+    + T('), como o tempo-limite sairia em cada configuração e que soluções sairiam com o veredicto errado. Nada roda de novo.', '), how the time limit would come out in each setting and which solutions would get the wrong verdict. Nothing runs again.', '), cómo saldría el tiempo límite en cada configuración y qué soluciones tendrían el veredicto equivocado. Nada se ejecuta de nuevo.')));
+  if ((sim.overrides || []).includes('default')) box.append(note(T('O TLOVERRIDE[default] do conf decide o tempo-limite de toda linguagem: nenhuma configuração abaixo muda o julgamento.', 'The conf TLOVERRIDE[default] sets the time limit of every language: no setting below changes the judging.', 'El TLOVERRIDE[default] del conf decide el tiempo límite de todo lenguaje: ninguna configuración de abajo cambia la evaluación.')));
+  const btn = (fields) => el('button', { type: 'button', class: 'btn small', style: 'margin-left:.4rem', onclick: () => tlsimApply(fields) }, T('aplicar', 'apply', 'aplicar'));
+  const sline = (...kids) => el('p', { class: 'small', style: 'margin:.25rem 0 .7rem' }, ...kids);
+  // ---- MOJ ----
+  box.append(el('b', { class: 'small' }, T('Método MOJ: fator × pior tempo + 0,02 s', 'MOJ method: factor × worst time + 0.02 s', 'Método MOJ: factor × peor tiempo + 0,02 s')));
+  box.append(tlsimTable(sim.moj.rows || [], T('fator', 'factor', 'factor'), (r) => r.cf + '×'));
+  const iv = sim.moj.interval || {}, sm = sg.moj || {};
+  const ivTxt = iv.min == null ? '' : (iv.max == null ? T(`Fatores que deixam tudo certo: a partir de ${iv.min} (piso: ${iv.min_by}).`, `Factors that keep everything right: from ${iv.min} (floor: ${iv.min_by}).`, `Factores que dejan todo correcto: desde ${iv.min} (piso: ${iv.min_by}).`)
+    : T(`Fatores que deixam tudo certo: de ${iv.min} até abaixo de ${iv.max} (piso: ${iv.min_by}; teto: ${iv.max_by}).`, `Factors that keep everything right: from ${iv.min} to below ${iv.max} (floor: ${iv.min_by}; ceiling: ${iv.max_by}).`, `Factores que dejan todo correcto: desde ${iv.min} hasta menos de ${iv.max} (piso: ${iv.min_by}; techo: ${iv.max_by}).`));
+  if (sm.state === 'keep') box.append(sline(T(`Sugestão: manter o fator atual (${sm.cf}). `, `Suggestion: keep the current factor (${sm.cf}). `, `Sugerencia: mantener el factor actual (${sm.cf}). `) + ivTxt));
+  else if (sm.state === 'change') box.append(sline(T(`Sugestão: fator ${sm.cf}`, `Suggestion: factor ${sm.cf}`, `Sugerencia: factor ${sm.cf}`)
+    + (sm.why === 'default_valid' ? T(' (o padrão da plataforma). ', ' (the platform default). ', ' (el predeterminado de la plataforma). ') : '. ') + ivTxt, btn({ cf_calibrafactor: sm.cf, cf_tlmethod: 'moj' })));
+  else if (sm.state === 'conflict') box.append(sline(T(`Nenhum fator deixa tudo certo: a ${sm.pass} precisa de mais tempo do que a ${sm.slow} gasta. Revise as duas soluções.`, `No factor keeps everything right: ${sm.pass} needs more time than ${sm.slow} takes. Review both solutions.`, `Ningún factor deja todo correcto: ${sm.pass} necesita más tiempo del que ${sm.slow} gasta. Revisa las dos soluciones.`)));
+  else if (sm.why === 'no_constraints') box.append(sline(T('Sem soluções pass ou slow para conferir: o fator atual serve.', 'No pass or slow solutions to check: the current factor works.', 'Sin soluciones pass o slow para verificar: el factor actual sirve.')));
+  // ---- Kattis ----
+  const kp = sim.kattis || {}, sk = sg.kattis || {};
+  box.append(el('b', { class: 'small' }, T(`Método Kattis: o menor múltiplo da resolução ≥ ${kp.a} × pior tempo (margem da lenta ${kp.b}×)`, `Kattis method: the smallest multiple of the resolution ≥ ${kp.a} × worst time (slow margin ${kp.b}×)`, `Método Kattis: el menor múltiplo de la resolución ≥ ${kp.a} × peor tiempo (margen de la lenta ${kp.b}×)`)));
+  box.append(tlsimTable(kp.rows || [], T('resolução', 'resolution', 'resolución'), (r) => r.r + ' s'));
+  const kf = { cf_kattis_a: sk.a, cf_kattis_b: sk.b, cf_kattis_r: sk.r, cf_tlmethod: 'kattis' };
+  if (sk.state === 'keep') box.append(sline(T(`Sugestão: manter a resolução atual (${sk.r} s), a maior que deixa tudo certo.`, `Suggestion: keep the current resolution (${sk.r} s), the largest that keeps everything right.`, `Sugerencia: mantener la resolución actual (${sk.r} s), la mayor que deja todo correcto.`)));
+  else if (sk.state === 'change' && sk.why === 'largest_r') box.append(sline(T(`Sugestão: resolução ${sk.r} s, a maior que deixa tudo certo.`, `Suggestion: resolution ${sk.r} s, the largest that keeps everything right.`, `Sugerencia: resolución ${sk.r} s, la mayor que deja todo correcto.`), btn(kf)));
+  else if (sk.state === 'change' && sk.why === 'adjust_a') box.append(sline(T(`Nenhuma resolução serve com o multiplicador ${kp.a}. Sugestão: multiplicador ${sk.a} com a resolução ${sk.r} s.`, `No resolution works with the multiplier ${kp.a}. Suggestion: multiplier ${sk.a} with resolution ${sk.r} s.`, `Ninguna resolución sirve con el multiplicador ${kp.a}. Sugerencia: multiplicador ${sk.a} con la resolución ${sk.r} s.`), btn(kf)));
+  else if (sk.state === 'change' && sk.why === 'adjust_b') box.append(sline(T(`Nem a resolução nem o multiplicador resolvem. Sugestão: margem da lenta ${sk.b}×.`, `Neither the resolution nor the multiplier solves it. Suggestion: slow margin ${sk.b}×.`, `Ni la resolución ni el multiplicador lo resuelven. Sugerencia: margen de la lenta ${sk.b}×.`), btn(kf)));
+  else if (sk.state === 'conflict') box.append(sline(T(`Nenhuma combinação deixa tudo certo: a ${sk.pass} precisa de mais tempo do que a ${sk.slow} gasta, com a margem. Revise as duas soluções.`, `No combination keeps everything right: ${sk.pass} needs more time than ${sk.slow} takes, with the margin. Review both solutions.`, `Ninguna combinación deja todo correcto: ${sk.pass} necesita más tiempo del que ${sk.slow} gasta, con el margen. Revisa las dos soluciones.`)));
+}
 function valRenderSig() {
   const hosts = (LASTCALIB && LASTCALIB.hosts) || [];
   const checks = (LASTVAL && LASTVAL.checks) || [];
   const served = (LASTINFO && (LASTINFO.time_limits || LASTINFO.tl)) || {};
   return JSON.stringify({
+    id: ID,   // o 1º Salvar dá o id e MOSTRA o cartão (#calibsec) — sem isto, nada mais mudava e ele seguia escondido
     run: RUNNING,
     live: CALIB_LIVE.map(c => `${c.host}|${c.state}|${minsSince(c.since)}`),
     checks: checks.map(c => `${c.name}:${c.ok}:${c.detail || ''}`),
-    hosts: hosts.map(h => `${h.host}|${h.at}|${h.stale}|${(h.log || '').length}|${(h.reports || []).length}|${tlLine(h.tl)}|${(h.sols || []).map(s => `${s.category}/${s.file}:${s.verdict}:${(s.tests || []).length}:${(s.expect || {}).why}`).join(',')}|${JSON.stringify(h.validator || null)}`),
+    hosts: hosts.map(h => `${h.host}|${h.at}|${h.stale}|${(h.log || '').length}|${(h.reports || []).length}|${tlLine(h.tl)}|${tlLine(h.tl_kattis)}|${(h.sols || []).map(s => `${s.category}/${s.file}:${s.verdict}:${(s.tests || []).length}:${(s.expect || {}).why}:${(s.expect_alt || {}).why}`).join(',')}|${JSON.stringify(h.validator || null)}`),
     summary: JSON.stringify((LASTCALIB && LASTCALIB.summary) || null),
+    summary_alt: JSON.stringify((LASTCALIB && LASTCALIB.summary_alt) || null),
+    method: (LASTCALIB && LASTCALIB.tl_method) || '',
+    bym: JSON.stringify((LASTCALIB && LASTCALIB.time_limits_by_method) || null),
+    sim: JSON.stringify(LASTCALIB ? [LASTCALIB.tl_sim_state || null, LASTCALIB.tl_sim || null, LASTCALIB.tl_suggest || null] : null),
+    classes: JSON.stringify((LASTCALIB && LASTCALIB.classes) || null),
     served: Object.entries(served).map(([k, v]) => `${k}=${v}`),
     ovr: Object.entries((LASTINFO && LASTINFO.tl_override) || {}).map(([k, v]) => `${k}=${v}`),
+    mods: JSON.stringify((LASTINFO && LASTINFO.tl_mods) || {}),
   });
 }
 function maybeRenderVal() { if (valRenderSig() !== LAST_RENDER_SIG) renderVal(); }   // re-render só quando algo muda
 function renderVal() {
+  renderTlSim();   // a caixa da simulação mora na aba Limites; renderiza junto com o painel de calibração
   const box = $('valpanel'); if (!box) return;
   box.querySelectorAll('.caliblog').forEach(p => { CALIB_SCROLL[p.dataset.host] = p.scrollTop; });   // preserva o scroll do log
   box.innerHTML = '';
@@ -1266,9 +1391,10 @@ function renderVal() {
   const hosts = (calib && calib.hosts) || [];
   const served = (info && (info.time_limits || info.tl)) || {};   // o que o aluno vê (json servido)
   const checks = (val && Array.isArray(val.checks)) ? val.checks : [];
-  if (!ID || (!checks.length && !hosts.length && !RUNNING && !calibRunning())) { box.style.display = 'none'; return; }
-  box.style.display = '';
-  box.append(el('h3', {}, T('Validação & calibração', 'Validation & calibration', 'Validación y calibración')));
+  // o CARTÃO (#calibsec: o título e os juízes onde calibrar, no HTML) é de problema salvo; sem nada ainda, o painel
+  // diz o que fazer (antes ele sumia, e a calibração direcionada morava no fim da aba, longe daqui)
+  const sec = $('calibsec'); if (sec) sec.style.display = ID ? '' : 'none';
+  if (!ID) { LAST_RENDER_SIG = valRenderSig(); return; }
   // o aviso conta ONDE e HÁ QUANTO TEMPO: uma calibração leva minutos, e "Calibrando no juiz…" sem
   // mais nada, por 7 min, é indistinguível de "travou" (relatos de 21/09/2026)
   if (RUNNING || calibRunning()) box.append(el('div', { class: 'running' }, el('span', { class: 'spin' }),
@@ -1289,6 +1415,12 @@ function renderVal() {
   if (hosts.length) {
     const sum = tlSummaryTable(hosts, served);   // quadro-resumo por linguagem (antes dos cards de cada juiz)
     if (sum) box.append(sum);
+    // JUÍZES IDÊNTICOS (a mesma classe de hardware) julgam com o MESMO tempo-limite: o maior entre eles, que o
+    // servidor põe em cada job (`classes` do /problems/calib). As colunas por juiz seguem sendo a medição de cada um.
+    ((calib && calib.classes) || []).filter(c => (c.hosts || []).length > 1).forEach(c => box.append(el('div', { class: 'small muted', style: 'margin:.2rem 0' },
+      T('Juízes idênticos (', 'Identical judges (', 'Jueces idénticos (') + c.hosts.join(', ')
+        + T(') julgam com o mesmo tempo-limite, o maior entre eles: ', ') judge with the same time limit, the largest among them: ', ') juzgan con el mismo tiempo límite, el mayor entre ellos: ')
+        + tlsimLine(curMethod() === 'kattis' ? (c.effective_kattis || c.tl_kattis) : (c.effective || c.tl)))));
     // A calibração IGNORA o override de propósito (o calibreitor exporta MOJ_CALIBRATING=1: ali
     // se mede de verdade). Sem este aviso, o autor lê os tempos dos cartões abaixo e conclui que
     // o override não pegou — foi exatamente o relato que gerou esta tela.
@@ -1308,6 +1440,11 @@ function renderVal() {
       box.append(el('div', { class: 'solsum ' + (sm.bad ? 'bad' : ((sm.missing || []).length ? 'todo' : 'ok')) },
         el('b', {}, T('Soluções: ', 'Solutions: ', 'Soluciones: ')), smt));
     }
+    // o mesmo juízo pelo OUTRO método de TL: o que mudaria se o autor trocasse o TLMETHOD (sem recalibrar)
+    const sma = summaryText(calib && calib.summary_alt);
+    if (sma) box.append(el('div', { class: 'small muted', style: 'margin:.1rem 0 .3rem' },
+      T('Se trocar para o método ', 'If you switch to the ', 'Si cambias al método ') + tlMethodName(altMethod())
+        + T(': ', ' method: ', ': ') + sma));
     hosts.forEach(h => {
       const isOpen = OPEN_LOGS.has(h.host);
       const det = el('div', { style: 'margin-top:.3rem;display:' + (isOpen ? '' : 'none') });
@@ -1319,7 +1456,8 @@ function renderVal() {
         det.style.display = open ? '' : 'none'; toggle.textContent = open ? T('ocultar log', 'hide log', 'ocultar log') : T('ver log', 'view log', 'ver log');
       } }, isOpen ? T('ocultar log', 'hide log', 'ocultar log') : T('ver log', 'view log', 'ver log'));
       const head = el('div', { class: 'row', style: 'gap:.5rem;align-items:center;flex-wrap:wrap' },
-        el('b', {}, h.host), el('span', { class: 'small muted' }, tlLine(h.tl) || T('sem TL', 'no TL', 'sin TL')),
+        el('b', {}, h.host), el('span', { class: 'small' }, tlMethodName(curMethod()) + ': ' + (tlLine(hostTl(h)) || T('sem TL', 'no TL', 'sin TL'))),
+        el('span', { class: 'small muted' }, '· ' + tlMethodName(altMethod()) + ': ' + (tlLine(hostTl(h, altMethod())) || T('sem TL', 'no TL', 'sin TL'))),
         h.at ? el('span', { class: 'small muted' }, '· ' + fmtDate(h.at)) : null,
         el('span', { style: 'flex:1' }), toggle);
       // sols estruturado: solução a solução, teste a teste (cada linha já linka o seu report);
@@ -1348,7 +1486,13 @@ function renderVal() {
       }
       box.append(el('div', { class: 'judgecard' }, head, sols, h.stale ? null : validatorBlock(h), reps, det));
     });
-  } else if (!RUNNING && !calibRunning()) box.append(el('p', { class: 'small muted' }, T('Ainda não calibrado — clique “Calibrar” na barra de baixo.', 'Not calibrated yet — click “Calibrate” on the bottom bar.', 'Todavía no calibrado — haz clic en “Calibrar” en la barra de abajo.')));
+  } else if (!RUNNING && !calibRunning()) box.append(el('p', { class: 'small muted' }, checks.length
+    ? T('Ainda não calibrado — clique “Calibrar” na barra de baixo ou calibre nos juízes marcados acima.',
+        'Not calibrated yet — click “Calibrate” on the bottom bar or calibrate on the judges checked above.',
+        'Todavía no calibrado — haz clic en “Calibrar” en la barra de abajo o calibra en los jueces marcados arriba.')
+    : T('Ainda não validado nem calibrado — use “Validar” ou “Calibrar” na barra de baixo, ou calibre nos juízes marcados acima.',
+        'Not validated or calibrated yet — use “Validate” or “Calibrate” on the bottom bar, or calibrate on the judges checked above.',
+        'Todavía no validado ni calibrado — usa “Validar” o “Calibrar” en la barra de abajo, o calibra en los jueces marcados arriba.')));
   // sem juízes calibrados mas com TL servido (legado): mostra o tempo-limite usado na correção
   if (!hosts.length && Object.keys(served).length) box.append(el('div', { class: 'small', style: 'margin-top:.4rem' }, T('Tempo-limite usado na correção: ', 'Time limit used for grading: ', 'Tiempo límite usado en la corrección: ') + tlLine(served)));
   box.querySelectorAll('.caliblog').forEach(p => { if (CALIB_SCROLL[p.dataset.host]) p.scrollTop = CALIB_SCROLL[p.dataset.host]; });   // restaura o scroll
@@ -1464,16 +1608,21 @@ async function uploadTar(file) {
     body = { repo: REPO, prob };
   }
   setMsg(T('Enviando pacote…', 'Uploading package…', 'Subiendo paquete…'));
+  // o envio SUBSTITUI o pacote: como no Salvar, o painel relê o servidor (o loadSource não relia — ficava a
+  // calibração de antes até recarregar a página) e, se o problema já era calibrado e a versão mudou, recalibra
+  const prev = ID ? calibSnapshot() : null;
+  const done = T('Pacote enviado e recarregado ✓', 'Package uploaded and reloaded ✓', 'Paquete subido y recargado ✓');
+  const after = () => loadValidation().then((cal) => recalibIfOutdated(prev, cal, done)).then(ensurePolling, () => {});
   try {
     body.tar_b64 = await fileToBase64(file);
     const j = await apiPost('/problems/upload', body, { contest: CONTEST, auth: true });
     ID = j.id; MODE = 'edit'; history.replaceState({}, '', '?id=' + encodeURIComponent(ID));
     $('prob').disabled = true; $('title').textContent = T('Editar: ', 'Edit: ', 'Editar: ') + ID;
-    await loadSource(ID); HIST_LOADED = false; setMsg(T('Pacote enviado e recarregado ✓', 'Package uploaded and reloaded ✓', 'Paquete subido y recargado ✓'), 'v-ok');
+    await loadSource(ID); HIST_LOADED = false; setMsg(done, 'v-ok'); after();
   } catch (e) {
     if (e instanceof ApiError && e.code === 'stale_rev') {
       setMsg(T('Não enviado: o problema mudou desde que você o abriu.', 'Not uploaded: the problem changed since you opened it.', 'No subido: el problema cambió desde que lo abriste.'), 'error');
-      showConflict(e, async () => { try { await apiPost('/problems/upload', { ...body, force: true }, { contest: CONTEST, auth: true }); await loadSource(ID); HIST_LOADED = false; setMsg(T('Pacote enviado e recarregado ✓', 'Package uploaded and reloaded ✓', 'Paquete subido y recargado ✓'), 'v-ok'); } catch (x) { setMsg(x.message || String(x), 'error'); } });
+      showConflict(e, async () => { try { await apiPost('/problems/upload', { ...body, force: true }, { contest: CONTEST, auth: true }); await loadSource(ID); HIST_LOADED = false; setMsg(done, 'v-ok'); after(); } catch (x) { setMsg(x.message || String(x), 'error'); } });
     } else setMsg((e instanceof ApiError ? e.message : T('Falha no upload', 'Upload failed', 'Error al subir')) + (e.code ? ` (${e.code})` : ''), 'error');
   }
 }
@@ -1633,6 +1782,7 @@ async function save(opts = {}) {
   let f; try { f = collectFields(); }
   catch (e) { setMsg(T('Erro ao preparar os dados do problema: ', 'Error preparing the problem data: ', 'Error al preparar los datos del problema: ') + (e && e.message || e), 'error'); return; }
   $('save').disabled = true; setMsg(T('Salvando…', 'Saving…', 'Guardando…'));
+  const prev = (MODE === 'edit') ? calibSnapshot() : null;   // a versão calibrada ANTES do save (recalibIfOutdated)
   try {
     if (MODE === 'new') {
       const prob = $('prob').value.trim();
@@ -1653,6 +1803,10 @@ async function save(opts = {}) {
     SAVED_AT = Math.floor(Date.now() / 1000);   // versão NOVA do pacote: a calibração em voo ficou velha
     updateReady();
     setMsg(T('Salvo ✓', 'Saved ✓', 'Guardado ✓'), 'v-ok');   // SALVAR não mexe em público — publicar é ação explícita (botão na aba Publicação)
+    // o painel de validação/calibração RELÊ o servidor: trocar o TLMETHOD vale na hora (o servido, o juízo das
+    // soluções e o resumo mudam de método sem recalibrar) — antes o painel seguia com o dado de antes do save até
+    // recarregar a página. E uma edição que muda a versão do pacote num problema já calibrado RECALIBRA sozinha.
+    if (ID) loadValidation().then((cal) => recalibIfOutdated(prev, cal, T('Salvo ✓', 'Saved ✓', 'Guardado ✓'))).then(ensurePolling, () => {});
   } catch (e) {
     if (e instanceof ApiError && e.code === 'stale_rev') { setMsg(T('Não salvo: o problema mudou desde que você o abriu.', 'Not saved: the problem changed since you opened it.', 'No guardado: el problema cambió desde que lo abriste.'), 'error'); showConflict(e, () => save({ force: true })); }
     else setMsg((e instanceof ApiError ? e.message : T('Falha ao salvar', 'Failed to save', 'Error al guardar')) + (e.code ? ` (${e.code})` : ''), 'error');
@@ -1711,6 +1865,40 @@ async function calibrateHosts(hosts) {
                      'Esos jueces ya tenían una calibración de este problema en cola — sigue el progreso abajo.'), 'v-ok');
     showTab('pub'); renderVal(); updateReady(); startPolling();
   } catch (e) { setMsg(e.message, 'error'); }
+}
+// ---- SALVAR RECALIBRA (26/10/2026, decisão do Ribas: o editor pede a calibração sozinho) ---------------------------
+// A calibração do painel é a de uma VERSÃO do pacote (`version` do /problems/calib: conf, testes, scripts e todas as
+// soluções; o enunciado e a linha TLMETHOD ficam fora). Um save — ou um envio de pacote — que muda essa versão deixava
+// os juízes "desatualizado — recalibre" e nada recalibrava: o servidor só pede calibração ao virar kattis sem a
+// metade, e o juiz só recalibra quando chega um job, com o aluno esperando. Foi o "aplicar" da simulação + Salvar
+// (olamundo, 26/10/2026): o texto prometia "recalibra" e o problema ficou desatualizado. Agora, se o problema já tinha
+// calibração (ou uma em voo) e o save mudou a versão, o editor pede a calibração nos juízes que o tinham calibrado e
+// estão online (nenhum deles online = um juiz livre, como o "Calibrar"). Problema nunca calibrado segue manual.
+function calibSnapshot() {
+  const c = LASTCALIB;
+  if (!ID || !c || !c.version) return null;
+  const hosts = (c.hosts || []).map(h => h.host).filter(Boolean);
+  return (hosts.length || calibRunning()) ? { version: c.version, hosts } : null;
+}
+// `cal` = o /problems/calib que o loadValidation PÓS-save buscou (não o LASTCALIB global: um poll que saiu antes do
+// save pode voltar depois com a versão velha); `done` = a mensagem do que acabou de dar certo (Salvo ✓, Pacote enviado ✓)
+async function recalibIfOutdated(prev, cal, done) {
+  if (!prev || !cal || !cal.version || cal.version === prev.version) return false;
+  const online = new Set(JUDGES.filter(j => j.online).map(j => j.host));
+  const hosts = prev.hosts.filter(h => online.has(h));
+  try {
+    await apiPost('/problems/request-calibration', hosts.length ? { id: ID, hosts } : { id: ID }, { contest: CONTEST, auth: true });
+    RUNNING = 'calibrate';
+    setMsg(done + T(' — a mudança desatualizou a calibração: recalibrando ', ' — the change made the calibration outdated: recalibrating ', ' — el cambio dejó la calibración desactualizada: recalibrando ')
+      + (hosts.length ? T('em ', 'on ', 'en ') + hosts.join(', ') : T('num juiz livre', 'on a free judge', 'en un juez libre'))
+      + T('. Acompanhe em “Validação & calibração” (aba Publicação).', '. Follow it in “Validation & calibration” (Publishing tab).', '. Sigue el progreso en “Validación y calibración” (pestaña Publicación).'), 'v-ok');
+    renderVal(); updateReady(); startPolling();
+    return true;
+  } catch (e) {
+    setMsg(done + T(', mas o pedido de recalibração falhou (', ', but the recalibration request failed (', ', pero la solicitud de recalibración falló (')
+      + ((e && e.message) || e) + T('). Clique “Calibrar”.', '). Click “Calibrate”.', '). Haz clic en “Calibrar”.'), 'error');
+    return false;
+  }
 }
 async function newDir() {
   const name = prompt(T('Nome da nova org — minúsculas, sem espaço:', 'New org name — lowercase, no spaces:', 'Nombre de la nueva org — minúsculas, sin espacios:')); if (!name) return;
@@ -1812,7 +2000,7 @@ function bindHandlers() {
   $('uploadTar').addEventListener('change', (e) => { uploadTar(e.target.files[0]); e.target.value = ''; });
   $('repo').onchange = async () => { REPO = $('repo').value; updateRepoHint(); renderPubState(); await loadShare(); };
   $('shareAdd').onclick = async () => { const u = $('shareLogin').value.trim(); if (u) { await share([u], []); $('shareLogin').value = ''; } };
-  [...CF_TEXT, ...CF_YN, ...CF_FLAG, ['cf_nosample']].forEach(([id]) => $(id).addEventListener('change', () => { syncConfFromFields(); updateReady(); }));
+  [...CF_TEXT, ...CF_YN, ...CF_FLAG, ...CF_SEL, ['cf_nosample']].forEach(([id]) => $(id).addEventListener('change', () => { syncConfFromFields(); updateReady(); }));
   ['cf_memlimit', 'cf_cpuneeded', 'cf_samenuma'].forEach((id) => $(id) && $(id).addEventListener('input', limitsWarn));
   $('confRaw').addEventListener('change', () => { confToFields($('confRaw').value); updateReady(); });
   $('newCollBtn').onclick = newColl;

@@ -76,7 +76,9 @@
     .running{display:flex;align-items:center;gap:.5rem;color:#ffd98a;margin:.3rem 0 .4rem;font-size:.9rem}
     .spin{width:.95rem;height:.95rem;border:2px solid #ffd98a;border-top-color:transparent;border-radius:50%;display:inline-block;animation:moj-spin .8s linear infinite;flex:none}
     @keyframes moj-spin{to{transform:rotate(360deg)}}
-    /* calibração direcionada: juízes agrupados por CPU */
+    /* calibração direcionada: juízes agrupados por CPU, no topo do cartão Validação & calibração (tracejado = controle;
+       os cartões de juiz, de borda cheia, são o resultado) */
+    .calibtarget{border:1px dashed var(--border,#2a2a2a);border-radius:.5rem;padding:.45rem .7rem;margin:.3rem 0 .7rem}
     .cpugrp{margin:.35rem 0}
     .jcheck{display:inline-flex;align-items:center;gap:.25rem;font-size:.85rem;margin-right:.4rem;white-space:nowrap}
     .jcheck.off{opacity:.5}
@@ -363,11 +365,33 @@
             <div class="limits-grid">
               <div class="lfield"><label><span data-en="Calibration factor" data-es="Factor de calibración">Fator de calibração</span> <code>TLMOD[calibrafactor]</code></label>
                 <span class="lrow"><input id="cf_calibrafactor" type="text" placeholder="1.35"><span class="unit">×</span></span>
-                <span class="small muted" data-en="TL = factor × worst time of the good solutions" data-es="TL = factor × peor tiempo de las soluciones buenas">TL = fator × pior tempo das soluções good</span></div>
+                <span class="small muted" data-en="MOJ method: TL = factor × worst time of the good solutions + 0.02 s" data-es="Método MOJ: TL = factor × peor tiempo de las soluciones buenas + 0,02 s">Método MOJ: TL = fator × pior tempo das soluções good + 0,02 s</span></div>
               <div class="lfield"><label><span data-en="good ceiling in calibration" data-es="techo de las buenas en la calibración">Teto da good na calibração</span> <code>CALIBRATIONTL</code></label>
                 <span class="lrow"><input id="cf_calibrationtl" type="text" placeholder="5"><span class="unit">s</span></span>
                 <span class="small muted" data-en="good above this fails calibration" data-es="una buena por encima de esto reprueba la calibración">good acima disso reprova a calibração</span></div>
+              <div class="lfield"><label><span data-en="Time-limit method" data-es="Método del tiempo límite">Método do tempo-limite</span> <code>TLMETHOD</code></label>
+                <span class="lrow"><select id="cf_tlmethod">
+                  <option value="moj" data-en="MOJ (default)" data-es="MOJ (por defecto)">MOJ (padrão)</option>
+                  <option value="kattis">Kattis</option>
+                </select></span>
+                <span class="small muted" data-en="The calibration measures both methods every time: changing this does not require recalibration." data-es="La calibración mide los dos métodos siempre: cambiar esto no requiere recalibración.">A calibração mede os dois métodos sempre: trocar não pede recalibração.</span></div>
             </div>
+            <div id="cf_kattis_box" hidden>
+              <p class="small muted" style="margin:.5rem 0 .2rem"><span data-en="Kattis method (spec 2025-09), per language: the time limit is the smallest multiple of the resolution that is at least the multiplier × the worst time of the good solutions of that language. A slow solution must exceed the margin × the time limit on some test, and the calibration checks that." data-es="Método Kattis (spec 2025-09), por lenguaje: el tiempo límite es el menor múltiplo de la resolución que es al menos el multiplicador × el peor tiempo de las soluciones buenas de ese lenguaje. Una solución lenta tiene que superar el margen × el tiempo límite en alguna prueba, y la calibración lo verifica.">Método Kattis (spec 2025-09), por linguagem: o tempo-limite é o menor múltiplo da resolução que é pelo menos o multiplicador × o pior tempo das soluções good daquela linguagem. Uma solução lenta tem de passar da margem × o tempo-limite em algum teste, e a calibração confere isso.</span></p>
+              <div class="limits-grid">
+                <div class="lfield"><label><span data-en="Multiplier" data-es="Multiplicador">Multiplicador</span> <code>KATTIS_AC_TO_TIME_LIMIT</code></label>
+                  <span class="lrow"><input id="cf_kattis_a" type="text" inputmode="decimal" placeholder="2.0"><span class="unit">×</span></span>
+                  <span class="small muted" data-en="from 1 to 100; ac_to_time_limit in the spec" data-es="de 1 a 100; ac_to_time_limit en la spec">de 1 a 100; ac_to_time_limit na spec</span></div>
+                <div class="lfield"><label><span data-en="Slow-solution margin" data-es="Margen de la solución lenta">Margem da solução lenta</span> <code>KATTIS_TIME_LIMIT_TO_TLE</code></label>
+                  <span class="lrow"><input id="cf_kattis_b" type="text" inputmode="decimal" placeholder="1.5"><span class="unit">×</span></span>
+                  <span class="small muted" data-en="from 1 to 100; time_limit_to_tle in the spec" data-es="de 1 a 100; time_limit_to_tle en la spec">de 1 a 100; time_limit_to_tle na spec</span></div>
+                <div class="lfield"><label><span data-en="Resolution" data-es="Resolución">Resolução</span> <code>KATTIS_TIME_RESOLUTION</code></label>
+                  <span class="lrow"><input id="cf_kattis_r" type="text" inputmode="decimal" placeholder="1.0"><span class="unit">s</span></span>
+                  <span class="small muted" data-en="more than 0 and up to 10; the time limit rounds up to a multiple of this" data-es="más de 0 y hasta 10; el tiempo límite se redondea hacia arriba a un múltiplo de esto">mais de 0 e até 10; o tempo-limite arredonda para cima a um múltiplo disto</span></div>
+              </div>
+            </div>
+            <!-- simulação do tempo-limite com os tempos da calibração (editar.js renderTlSim; servidor: lib/tl-sim.sh) -->
+            <div id="cf_tlsim_box"></div>
           </div>
 
           <div class="lcard">
@@ -461,7 +485,23 @@
           <div id="pubOrgHint" class="small" style="display:none;margin-top:.4rem;color:#ffd98a"></div>
         </div>
 
-        <div class="section" id="valpanel" style="display:none"></div>
+        <!-- 1b) Validação & calibração: onde calibrar (os juízes, por processador) e, logo abaixo, o resultado de cada juiz
+             (#valpanel, montado pelo renderVal). A calibração direcionada morava no fim da aba, em "Avançado" — longe do
+             resultado que ela produz (pedido do Ribas, 26/10/2026). O cartão só aparece com o problema salvo (com id). -->
+        <div class="section" id="calibsec" style="display:none">
+          <h3 data-en="Validation &amp; calibration" data-es="Validación y calibración">Validação &amp; calibração</h3>
+          <div class="calibtarget">
+            <p class="small muted" style="margin:0"><span data-en="Calibrate on specific judges to see the time limit and the reports on" data-es="Calibra en jueces específicos para ver el tiempo límite y los informes en">Calibre em juízes específicos para ver o tempo-limite e os reports em</span>
+              <b data-en="different processors" data-es="distintos procesadores">processadores diferentes</b><span data-en=". The checked (online) judges recalibrate in parallel, and the result of each judge appears below. The “Calibrate” button on the bottom bar uses one free judge." data-es=". Los jueces marcados (en línea) recalibran en paralelo, y el resultado de cada juez aparece abajo. El botón “Calibrar” de la barra de abajo usa un juez libre.">. Os juízes marcados (online) recalibram em paralelo, e o resultado de cada juiz aparece abaixo. O botão “Calibrar” da barra de baixo usa um juiz livre.</span></p>
+            <div id="judgePick"></div>
+            <div class="row" style="gap:.5rem;flex-wrap:wrap;margin-top:.4rem">
+              <button id="calibSel" class="btn ghost" type="button" title="Calibrar nos juízes marcados" data-en-title="Calibrate on the checked judges" data-es-title="Calibrar en los jueces marcados" data-en="Calibrate selected" data-es="Calibrar seleccionados">Calibrar selecionados</button>
+              <button id="calibPerCpu" class="btn ghost" type="button" title="Um juiz de cada modelo de processador" data-en-title="One judge of each processor model" data-es-title="Un juez de cada modelo de procesador" data-en="1 per processor" data-es="1 por procesador">1 por processador</button>
+              <button id="calibAll" class="btn ghost" type="button" title="Todos os juízes online" data-en-title="All online judges" data-es-title="Todos los jueces en línea" data-en="Calibrate on all" data-es="Calibrar en todos">Calibrar em todos</button>
+            </div>
+          </div>
+          <div id="valpanel"></div>
+        </div>
 
         <!-- 2) Coleções (agrupamento — rótulos m:n; NÃO dão acesso) -->
         <div class="section">
@@ -504,22 +544,10 @@
           <div id="shareList" class="small muted" style="margin-top:.3rem"></div>
         </div>
 
-        <!-- 4) Avançado: calibração direcionada + pacote bruto -->
+        <!-- 4) Pacote do problema: o pacote bruto (baixar / enviar). A calibração direcionada que morava aqui ("Avançado")
+             foi para o cartão Validação & calibração, junto do resultado. -->
         <div class="section">
-          <h3 data-en="Advanced" data-es="Avanzado">Avançado</h3>
-
-          <h4 style="margin:.6rem 0 .2rem" data-en="Targeted calibration" data-es="Calibración dirigida">Calibração direcionada</h4>
-          <p class="small muted"><span data-en="Force calibration on a set of judges to see the behavior (time limit and reports) on" data-es="Fuerza la calibración en un conjunto de jueces para ver el comportamiento (tiempo límite e informes) en">Force a calibração num conjunto de juízes para ver o comportamento (tempo-limite e
-            reports) em</span> <b data-en="different processors" data-es="distintos procesadores">processadores diferentes</b><span data-en=". The checked (online) ones recalibrate in parallel; the result appears in" data-es=". Los marcados (en línea) recalibran en paralelo; el resultado aparece en">. Os marcados (online) recalibram em paralelo; o resultado
-            aparece em</span> <b data-en="Validation &amp; calibration" data-es="Validación &amp; calibración">Validação &amp; calibração</b><span data-en=", per judge." data-es=", por juez.">, por juiz.</span></p>
-          <div id="judgePick"></div>
-          <div class="row" style="gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
-            <button id="calibSel" class="btn ghost" type="button" title="Calibrar nos juízes marcados" data-en-title="Calibrate on the checked judges" data-es-title="Calibrar en los jueces marcados" data-en="Calibrate selected" data-es="Calibrar seleccionados">Calibrar selecionados</button>
-            <button id="calibPerCpu" class="btn ghost" type="button" title="Um juiz de cada modelo de processador" data-en-title="One judge of each processor model" data-es-title="Un juez de cada modelo de procesador" data-en="1 per processor" data-es="1 por procesador">1 por processador</button>
-            <button id="calibAll" class="btn ghost" type="button" title="Todos os juízes online" data-en-title="All online judges" data-es-title="Todos los jueces en línea" data-en="Calibrate on all" data-es="Calibrar en todos">Calibrar em todos</button>
-          </div>
-
-          <h4 style="margin:1rem 0 .2rem" data-en="Problem package" data-es="Paquete del problema">Pacote do problema</h4>
+          <h3 data-en="Problem package" data-es="Paquete del problema">Pacote do problema</h3>
           <div id="pkgInfo" class="small muted">—</div>
           <div id="pkgTree" class="pkgtree"></div>
           <div class="row" style="gap:.5rem;margin-top:.4rem">

@@ -219,6 +219,83 @@ _pkg_par_v() {
   [[ "$mem" =~ ^[0-9]+$ ]] || mem=0
   _PP_K=$k; _PP_NUMA=$numa; _PP_PAR=$par; _PP_M=$m; _PP_MEM=$mem
 }
+# _pkg_tlmethod_v <problem_id> : o TLMETHOD do conf ATUAL do pacote (moj|kattis) em _PP_TLM, SEM fork. Vai no job
+# reivindicado (`tl_method`, 26/10/2026; mojtools tl-methods.sh): o juiz julga pela metade da tabela que o conf
+# escolhe AGORA — o TLMETHOD fica fora dos carimbos do pacote, então o conf do CACHE do juiz pode estar velho.
+# Fora do .cmeta de propósito: um 13º campo na ordem fixa que os três leitores leem igual é a armadilha já
+# paga uma vez. A ÚLTIMA linha vence, como no `source` do juiz.
+_pkg_tlmethod_v() {
+  local id="${1//\//#}" conf c="" re
+  _PP_TLM=moj
+  [[ -n "${MOJ_PROBLEMS_DIR:-}" && "$id" == *#* ]] || return 0
+  conf="$MOJ_PROBLEMS_DIR/${id%%#*}/${id#*#}/conf"
+  [[ -f "$conf" ]] || return 0
+  IFS= read -r -d '' c < "$conf" || true
+  [[ "$c" == *TLMETHOD* ]] || return 0
+  c=$'\n'"$c"; re=$'\n[[:space:]]*TLMETHOD=["\x27]?([A-Za-z]+)'
+  while [[ "$c" =~ $re ]]; do _PP_TLM="${BASH_REMATCH[1]}"; c="${c#*"${BASH_REMATCH[0]}"}"; done
+  [[ "$_PP_TLM" == kattis ]] || _PP_TLM=moj
+  return 0
+}
+# ===== TL DA CLASSE DE HARDWARE (26/10/2026) ====================================================================
+# Juízes IDÊNTICOS (a mesma `hwclass` do registro: arch|cpu|ncpu|memória em blocos de 4 GiB, register.sh) calibram
+# TLs um pouco diferentes, e o veredicto de um aluno no limite dependia de qual juiz pegava o envio ("assim parece
+# sorte" — pedido do Ribas). O claim põe no job `tl_class` = o MÁXIMO, por linguagem, entre os juízes da classe do
+# juiz que reivindica, nas duas metades do store (run/tl/<id>.json; o tl-report carimba hosts[h].class), com o
+# checksum do store. O agente só o usa se o checksum bate com o tl_checksum do pacote dele, e julga pelo maior
+# entre a classe e a tabela local (nunca abaixo da própria medição). Sem classe (registro de agente antigo), sem
+# store ou sem juiz da classe no store: sem o campo — a tabela local, como antes. Custo no claim: o --slurpfile do
+# store (~1 KB) no MESMO jq que já carimba o job.
+# _SCHED_TLMAX_DEF é cópia LITERAL do _TL_MAX_DEF de api/v1/lib/tl-store.sh (o heartbeat não carrega aquela lib);
+# o smoke-sched-tlclass.sh confere que as duas são iguais.
+_SCHED_TLMAX_DEF='def _tlkey: if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end;
+def tlmax(maps): reduce (maps | to_entries[]) as $e ({}; ($e.key|_tlkey) as $k
+    | .[$k]=([(.[$k]//0),($e.value|tonumber? // 0)]|max)) | with_entries(.value|=tostring);'
+_TLCLASS_DEF="$_SCHED_TLMAX_DEF"'
+def tlclass($cls; $st):
+  ($st[0] // {}) as $s
+  | if $cls == "" or ($s.checksum // "") == "" then null
+    else [($s.hosts // {}) | to_entries[] | select((.value.class // "") == $cls)] as $m
+    | if ($m | length) == 0 then null
+      else {class: $cls, checksum: $s.checksum, hosts: ($m | map(.key)),
+            tl: tlmax($m[] | .value.tl // {}), tl_kattis: tlmax($m[] | .value.tl_kattis // {})} end
+    end;
+def withclass($cls; $st): tlclass($cls; $st) as $tc | if $tc == null then . else . + {tl_class: $tc} end;'
+# _tlclass_src_v <problem_id> : em _TLC_SRC, o store de TL do problema p/ o --slurpfile do claim (/dev/null = sem
+# store ou juiz sem classe), SEM fork
+_tlclass_src_v() {
+  local id="${1//\//#}"
+  _TLC_SRC=/dev/null
+  [[ -n "${QC_HWCLASS:-}" && "$id" == *#* && -s "${TL_STORE_DIR:-$RUNDIR/tl}/$id.json" ]] && _TLC_SRC="${TL_STORE_DIR:-$RUNDIR/tl}/$id.json"
+  return 0
+}
+# ===== RAIAS DA CALIBRAÇÃO (26/10/2026) =========================================================================
+# A calibração completa roda as soluções do mesmo tipo em paralelo (mojtools calibreitor.sh: uma raia por grupo de
+# CPU). O claim (upd_claim/cmd_claim) dá G = min(CALIB_PAR_MAX, livres ÷ k_slots, a maior fase: #good ou
+# #pass+slow+wrong) grupos — e 1 quando há job na fila (a calibração não toma o slot de quem espera veredicto) ou o
+# juiz é legado. Carimba par_max/par_cap = G e slots = G × k_slots (o heartbeat soma os `slots` no `claimed`).
+# O agente antigo, ou com AGENT_CALIB_LANES=0, usa 1 grupo de qualquer jeito. CALIB_PAR_MAX=1 desliga aqui.
+: "${CALIB_PAR_MAX:=4}"
+# _calib_lanes_v <problem_id> <k_slots> <livres> : G em _CLG. Conta as soluções com `find` (a API roda sem glob:
+# `sols/good/*` seria o padrão literal, "1 solução") e só quando o teto, os livres e a fila deixam G > 1.
+_calib_lanes_v() {
+  local id="${1//\//#}" ks="$2" free="$3" pkg ng no g
+  _CLG=1
+  [[ "$CALIB_PAR_MAX" =~ ^[0-9]+$ && "$ks" =~ ^[0-9]+$ && "$free" =~ ^[0-9]+$ ]] || return 0
+  (( ks >= 1 )) || return 0
+  g=$(( free / ks )); (( g > CALIB_PAR_MAX )) && g=$CALIB_PAR_MAX
+  (( g > 1 )) || return 0
+  q_has_jobs && return 0
+  [[ -n "${MOJ_PROBLEMS_DIR:-}" && "$id" == *#* ]] || return 0
+  pkg="$MOJ_PROBLEMS_DIR/${id%%#*}/${id#*#}"
+  ng="$(find "$pkg/sols/good" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+  no="$(find "$pkg/sols/pass" "$pkg/sols/slow" "$pkg/sols/wrong" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+  ng="${ng//[^0-9]/}"; no="${no//[^0-9]/}"
+  (( ${no:-0} > ${ng:-0} )) && ng=$no
+  (( ${ng:-0} < g )) && g=${ng:-0}
+  (( g > 1 )) && _CLG=$g
+  return 0
+}
 # _kslots <k> <slot_cpus> -> ceil(k/slot_cpus) (slot_cpus<1 ⇒ 1)
 _kslots() { local k="$1" sc="$2"; [[ "$sc" =~ ^[0-9]+$ && "$sc" -ge 1 ]] || sc=1; printf '%s' "$(( (k + sc - 1) / sc ))"; }
 
@@ -431,7 +508,7 @@ q_claim() {
     [[ "$memkb" =~ ^[0-9]+$ ]] || memkb=""
     local -A PKGPAR=()
     # lote reivindicado (p/ o par_max no fim): dest, k_slots, k, numa, par, m
-    local -a C_DEST=() C_KS=() C_K=() C_KORIG=() C_NUMA=() C_PAR=() C_M=() C_GROUPS=()
+    local -a C_DEST=() C_KS=() C_K=() C_KORIG=() C_NUMA=() C_PAR=() C_M=() C_GROUPS=() C_TLM=() C_PROB=()
     # conjuntos do JUIZ, calculados UMA vez por chamada (2 jq no total)
     local -A PH=()
     while IFS= read -r pk; do [[ -n "$pk" ]] && PH["$pk"]=1; done \
@@ -502,6 +579,7 @@ q_claim() {
         if mv "$f" "$dest" 2>/dev/null; then
           rm -f "$f.cmeta" 2>/dev/null
           C_DEST+=("$dest"); C_KS+=("$ks"); C_K+=("$k"); C_KORIG+=("$korig"); C_NUMA+=("$numa"); C_PAR+=("$par"); C_M+=("$m"); C_GROUPS+=(1)
+          _pkg_tlmethod_v "$prob"; C_TLM+=("$_PP_TLM"); C_PROB+=("$prob")
           slots_left=$(( slots_left - ks ))
           [[ "$numa" == y && -n "$mfg" ]] && mfg=$(( mfg - ks ))
         fi
@@ -535,13 +613,18 @@ q_claim() {
     for (( i=0; i<n; i++ )); do
       dest="${C_DEST[i]}"; local tmp="$dest.tmp" cap_i="${C_M[i]:-$pmax}"
       (( cap_i > pmax )) && cap_i=$pmax
+      # tl_method (o método do TL do conf AGORA) vai p/ todo juiz: o antigo ignora o campo e usa o conf do cache;
+      # tl_class (o TL da classe de hardware do juiz, ver _TLCLASS_DEF) idem
+      _tlclass_src_v "${C_PROB[i]}"
       if (( legacy )); then
-        jq -c --arg h "$host" --argjson now "$now" '. + {assigned_to:$h, assigned_at:$now}' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
+        jq -c --arg h "$host" --argjson now "$now" --arg tlm "${C_TLM[i]:-moj}" --arg cls "${QC_HWCLASS:-}" --slurpfile st "$_TLC_SRC" \
+           "$_TLCLASS_DEF"'. + {assigned_to:$h, assigned_at:$now, tl_method:$tlm} | withclass($cls; $st)' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
       else
         # cpu_needed (o CPUNEEDED) só p/ as TELAS: test_cpus > cpu_needed = slots a mais pela memória
         jq -c --arg h "$host" --argjson now "$now" --argjson k "${C_K[i]}" --argjson nm "$([[ "${C_NUMA[i]}" == y ]] && echo true || echo false)" \
            --argjson sl "$(( C_GROUPS[i] * C_KS[i] ))" --argjson pm "${C_GROUPS[i]}" --argjson pc "$cap_i" --argjson kn "${C_KORIG[i]}" \
-           '. + {assigned_to:$h, assigned_at:$now, test_cpus:$k, same_numa:$nm, slots:$sl, par_max:$pm, par_cap:$pc, cpu_needed:$kn}' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
+           --arg tlm "${C_TLM[i]:-moj}" --arg cls "${QC_HWCLASS:-}" --slurpfile st "$_TLC_SRC" \
+           "$_TLCLASS_DEF"'. + {assigned_to:$h, assigned_at:$now, test_cpus:$k, same_numa:$nm, slots:$sl, par_max:$pm, par_cap:$pc, cpu_needed:$kn, tl_method:$tlm} | withclass($cls; $st)' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
       fi
       cat "$dest"; printf '\n'
     done
@@ -684,7 +767,7 @@ upd_claim() {
     flock 9 || exit 0
     while IFS= read -r f; do
       [[ -f "$f" ]] || continue
-      k=1; numa=n
+      k=1; numa=n; _CLG=1
       if jq -e '.kind=="calibrate"' "$f" >/dev/null 2>&1; then
         t="$(jq -r '.target // ""' "$f" 2>/dev/null)"
         if [[ -n "$t" ]]; then
@@ -698,6 +781,7 @@ upd_claim() {
           ks="$(_kslots "$k" "$sc")"
           (( ks > free )) && continue
           [[ "$numa" == y && -n "$mfg" ]] && (( ks > mfg )) && continue
+          (( legacy )) || _calib_lanes_v "$t" "$ks" "$free"   # raias: G grupos (1 com fila, teto, legado)
         fi
       fi
       base="$(basename "$f")"; dest="$UPDATESDIR/inprogress/$host/$base"
@@ -707,7 +791,9 @@ upd_claim() {
           jq -c --argjson now "$EPOCHSECONDS" '. + {claimed_at:$now}' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
         else
           jq -c --argjson now "$EPOCHSECONDS" --argjson k "$k" --argjson nm "$([[ "$numa" == y ]] && echo true || echo false)" \
-             --argjson sl "$(_kslots "$k" "$sc")" '. + {claimed_at:$now, test_cpus:$k, same_numa:$nm, slots:$sl}' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
+             --argjson sl "$(( _CLG * $(_kslots "$k" "$sc") ))" --argjson g "$_CLG" \
+             '. + {claimed_at:$now, test_cpus:$k, same_numa:$nm, slots:$sl}
+              + (if $g > 1 then {par_max:$g, par_cap:$g} else {} end)' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
         fi
         cat "$dest"; exit 0
       fi
@@ -874,8 +960,10 @@ cmd_claim() {  # <host> : reivindica 1 comando pendente do host (ecoa + remove),
         (( ks > free )) && continue
         [[ "$numa" == y && -n "$mfg" ]] && (( ks > mfg )) && continue
         if (( legacy )); then cat "$f"
-        else jq -c --argjson k "$k" --argjson nm "$([[ "$numa" == y ]] && echo true || echo false)" --argjson sl "$ks" \
-               '. + {test_cpus:$k, same_numa:$nm, slots:$sl}' "$f" 2>/dev/null; fi
+        else _calib_lanes_v "$(jq -r '.id // ""' "$f" 2>/dev/null)" "$ks" "$free"   # raias, como no upd_claim
+             jq -c --argjson k "$k" --argjson nm "$([[ "$numa" == y ]] && echo true || echo false)" --argjson sl "$(( _CLG * ks ))" \
+               --argjson g "$_CLG" '. + {test_cpus:$k, same_numa:$nm, slots:$sl}
+                                    + (if $g > 1 then {par_max:$g, par_cap:$g} else {} end)' "$f" 2>/dev/null; fi
         rm -f "$f"; exit 0
       fi
       cat "$f"; rm -f "$f"; exit 0
@@ -893,6 +981,49 @@ cmd_claim() {  # <host> : reivindica 1 comando pendente do host (ecoa + remove),
 # cmd_find_calibrate <host> <problem_id> : ecoa o cmdid de um calibrate direcionado AINDA NÃO
 # entregue a esse host p/ o problema (dedup do caminho targeted; comando entregue some do dir,
 # então "em execução" não é visível aqui — o dedup do agente cobre esse resto).
+# sched_calib_drop <problem_id> [inprogress] — tira da fila as calibrações do problema: as PENDENTES (updates/pending,
+# sob o lock do upd_claim), os comandos DIRECIONADOS ainda não entregues (commands/<host>, flock por host) e, com
+# `inprogress`, também os claims/marcadores em execução (o juiz ainda reporta nesse reqid: cai num reqid
+# inexistente, inofensivo). Sem `inprogress` só os CONTA. Ecoa "pendentes direcionados removidos_em_execução
+# em_voo". Fonte única do /ops/calib-cancel e do delete/move de problema (que levam inprogress: o problema sumiu).
+sched_calib_drop() {
+  local id="$1" inprog="${2:-}" p t out r i
+  [[ -n "$id" ]] || { echo "0 0 0 0"; return 0; }
+  mkdir -p "$UPDATESDIR/pending" 2>/dev/null
+  p="$( (
+    flock 9 || exit 0
+    n=0
+    while IFS= read -r f; do
+      [[ -f "$f" ]] || continue
+      jq -e --arg t "$id" '.kind=="calibrate" and .target==$t' "$f" >/dev/null 2>&1 || continue
+      rm -f "$f" && n=$((n+1))
+    done < <(find "$UPDATESDIR/pending" -maxdepth 1 -name '*.json' 2>/dev/null)
+    echo "$n"
+  ) 9>"$UPDATESDIR/.lock" )"
+  p="${p//[^0-9]/}"; p="${p:-0}"
+  out="$(while IFS= read -r hostdir; do
+    [[ -d "$hostdir" ]] || continue
+    (
+      flock 9 || exit 0
+      while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        jq -e --arg t "$id" '.action=="calibrate" and .id==$t' "$f" >/dev/null 2>&1 || continue
+        rm -f "$f" && echo x
+      done < <(find "$hostdir" -maxdepth 1 -name '*.json' 2>/dev/null)
+    ) 9>"$hostdir/.lock"
+  done < <(find "$CMDDIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null))"
+  t="${out//[^x]/}"; t="${#t}"
+  out="$( (
+    flock 9 || exit 0
+    while IFS= read -r f; do
+      [[ -f "$f" ]] || continue
+      jq -e --arg t "$id" '.kind=="calibrate" and .target==$t' "$f" >/dev/null 2>&1 || continue
+      if [[ -n "$inprog" ]]; then rm -f "$f" && echo r; else echo i; fi
+    done < <(find "$UPDATESDIR/inprogress" -mindepth 2 -name '*.json' 2>/dev/null)
+  ) 9>"$UPDATESDIR/.lock" )"
+  r="${out//[^r]/}"; r="${#r}"; i="${out//[^i]/}"; i="${#i}"
+  echo "$p $t $r $i"
+}
 cmd_find_calibrate() {
   local r
   r="$(find "$CMDDIR/$1" -maxdepth 1 -name '*.json' -exec cat {} + 2>/dev/null \
@@ -987,10 +1118,11 @@ q_claim_id() {
     base="${f##*/}"; mkdir -p "$ASSIGNEDDIR/$host" 2>/dev/null; dest="$ASSIGNEDDIR/$host/$base"
     mv "$f" "$dest" 2>/dev/null || exit 0
     rm -f "$f.cmeta" 2>/dev/null
-    tmp="$dest.tmp"
+    tmp="$dest.tmp"; _pkg_tlmethod_v "$prob"; _tlclass_src_v "$prob"
     jq -c --arg h "$host" --argjson now "$EPOCHSECONDS" --argjson k "$k" --argjson nm "$([[ "$numa" == y ]] && echo true || echo false)" \
-       --argjson sl "$ks" --argjson pc "${m:-$PARALLEL_MAX_DEFAULT}" --argjson kn "$korig" \
-       '. + {assigned_to:$h, assigned_at:$now, test_cpus:$k, same_numa:$nm, slots:$sl, par_max:1, par_cap:$pc, cpu_needed:$kn}' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
+       --argjson sl "$ks" --argjson pc "${m:-$PARALLEL_MAX_DEFAULT}" --argjson kn "$korig" --arg tlm "$_PP_TLM" \
+       --arg cls "${QC_HWCLASS:-}" --slurpfile st "$_TLC_SRC" \
+       "$_TLCLASS_DEF"'. + {assigned_to:$h, assigned_at:$now, test_cpus:$k, same_numa:$nm, slots:$sl, par_max:1, par_cap:$pc, cpu_needed:$kn, tl_method:$tlm} | withclass($cls; $st)' "$dest" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest"
     cat "$dest"; printf '\n'
   ) 9>"$QUEUEDIR/.lock"
 }

@@ -455,11 +455,16 @@ for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
       jq -e --arg h "$h" 'any(.[]; .host == $h)' >/dev/null 2>&1 <<<"$judges" && { live=1; break; }
     done
     (( live == 0 )) && noPool+=" $id"
-    # calibrado = algum host DO POOL reportou TL p/ o problema
-    jq -e --arg p "$ppool" '(.hosts // {}) | keys | any(. as $h | ($p|split(" ")|index($h)))' \
+    # calibrado = algum host DO POOL reportou TL p/ o problema — no MÉTODO do problema: com TLMETHOD=kattis
+    # (carimbado no store pelo tl-report/problem_commit; rota de contest não abre pacote), só conta host com a
+    # metade Kattis da tabela (juiz anterior aos dois métodos não a manda: o TL não seria servido)
+    jq -e --arg p "$ppool" '(.method // "moj") as $m | (.hosts // {}) | to_entries
+        | any((.key as $h | ($p|split(" ")|index($h))) and ($m != "kattis" or ((.value.tl_kattis // {}) | length > 0)))' \
       "$(tl_store_file "$id")" >/dev/null 2>&1 || { noTL+=" $id"; continue; }
   else
     if [[ ! -s "$(tl_store_file "$id")" ]]; then noTL+=" $id"; continue; fi
+    jq -e '(.method // "moj") != "kattis" or ([(.hosts // {})[] | (.tl_kattis // {}) | length > 0] | any)' \
+      "$(tl_store_file "$id")" >/dev/null 2>&1 || { noTL+=" $id"; continue; }
   fi
 done
 if (( nprob == 0 )); then
@@ -774,14 +779,34 @@ if mod_on "$contest" inscricoes && reg_enabled "$contest"; then
     ranchor_en=" (anchor: start of round '$_rrnd')"
     ranchor_es=" (ancla: inicio de la ronda '$_rrnd')"
   fi
+  # onde a pessoa se inscreve: o link público; no contest SUPER SECRETO, o link privado (o público responde 404)
+  rwhere="a inscrição fica em /contests/inscricao/?c=$contest"; rwhere_en="registration is at /contests/inscricao/?c=$contest"
+  rwhere_es="la inscripción está en /contests/inscricao/?c=$contest"
+  if contest_is_secret "$contest"; then
+    rwhere="a inscrição é pelo link privado (Pessoas › Inscrições)"; rwhere_en="registration is through the private link (People › Registrations)"
+    rwhere_es="la inscripción es por el enlace privado (Personas › Inscripciones)"
+  fi
   if (( rp == 0 )); then
-    add3 registration warn "Inscrição ligada, ninguém inscrito" "com o roster ligado SÓ inscrito entra — a inscrição fica em /contests/inscricao/?c=$contest" \
-      "Registration on, nobody registered" "with the roster on ONLY registered people get in — registration is at /contests/inscricao/?c=$contest" \
-      "Inscripción activada, nadie inscrito" "con el roster activado SOLO entra quien está inscrito — la inscripción está en /contests/inscricao/?c=$contest"
+    add3 registration warn "Inscrição ligada, ninguém inscrito" "com o roster ligado SÓ inscrito entra — $rwhere" \
+      "Registration on, nobody registered" "with the roster on ONLY registered people get in — $rwhere_en" \
+      "Inscripción activada, nadie inscrito" "con el roster activado SOLO entra quien está inscrito — $rwhere_es"
   else
     add3 registration ok "Inscrição ligada" "$rp inscrito(s) · $rt time(s) · janela $rwin, fecha em $rwhen$ranchor" \
       "Registration on" "$rp registered · $rt team(s) · window $rwin, $rwhen_en$ranchor_en" \
       "Inscripción activada" "$rp inscrito(s) · $rt equipo(s) · ventana $rwin, $rwhen_es$ranchor_es"
+  fi
+  # LINK PRIVADO (contest SUPER SECRETO, lib/registration.sh): sem a chave, NINGUÉM de fora se inscreve — a rota responde o
+  # 404 de contest inexistente. Com a chave, só quem tem o link (e o convidado de um time, pela DM).
+  if contest_is_secret "$contest"; then
+    if reg_link_key "$contest" >/dev/null; then
+      add3 reg_private_link ok "Link privado de inscrição ativo" "contest super secreto: só quem tem o link vê a inscrição (o convite de time manda o link na DM)" \
+        "Private registration link active" "super secret contest: only people with the link see the registration (a team invite sends the link by DM)" \
+        "Enlace privado de inscripción activo" "competencia súper secreta: solo quien tiene el enlace ve la inscripción (la invitación de equipo envía el enlace por DM)"
+    else
+      add3 reg_private_link warn "Contest super secreto sem link de inscrição" "ninguém de fora consegue se inscrever: gere o link em Pessoas › Inscrições e mande-o no grupo" \
+        "Super secret contest without a registration link" "nobody from outside can register: generate the link in People › Registrations and send it to the group" \
+        "Competencia súper secreta sin enlace de inscripción" "nadie de afuera puede inscribirse: genera el enlace en Personas › Inscripciones y envíalo al grupo"
+    fi
   fi
   # AQUECIMENTO: a porta fica ABERTA (qualquer conta da fonte entra) até a promoção da prova
   if [[ "$(reg_round_kind "$contest")" == warmup ]]; then

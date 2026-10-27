@@ -91,6 +91,11 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   "Resposta inválida do servidor" na tela, sem NADA no log — hoje o `ok_json` monta o corpo
   antes do cabeçalho e uma falha do jq vira `500 build_fail` com o stderr no error.log.
   Teste que fecha a porta: caso *oversized* (>128 KiB) no smoke — ver `smoke-contest-jplag.sh`.
+  ⚠ **E conteúdo grande nunca atravessa `while read`**: o `read` do bash lê PIPE byte a byte (um `read(2)` por
+  caractere). O `/judge/calib-report` lia cada report (base64) assim: 61 MB levavam 30 s segurando o lock do problema
+  — os outros juízes da mesma calibração tomavam 409 `busy` — e passavam do teto do curl do agente. Hoje um jq tira
+  nome+conteúdo em TSV e o `gawk` grava cada um num arquivo (1,8 s); o bash só lê os nomes (26/10/2026, quando o
+  agente passou a mandar todos os reports, até 10 MB cada). Teste: `smoke-calib-sols.sh` (MUITOS reports).
 - **Sessão única por time + índice de sessões (`lib/session-index.sh`, 2026-09-02)**: a sessão
   grava `MKEY` (chave de máquina: `m:<machine_id>/<boot_id>` do UA do mlinux — o boot_id é
   OBRIGATÓRIO porque o machine_id vem CLONADO em sedes inteiras —, senão `ip:<ip>`) e é indexada
@@ -350,6 +355,13 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   ligado** (doutrina do `cohorts.json`: ausente = comportamento de sempre, custo zero). Vale só p/
   contest com `USERS_FROM` (quem se inscreve é a conta da FONTE, pela página `/contests/inscricao/`
   do site principal — o token é por ORIGEM e o subdomínio do contest não vê a sessão do treino).
+  **Contest SUPER SECRETO (`SECRET=1`, 27/10/2026)**: a rota do competidor só abre com a chave do **LINK PRIVADO**
+  (`k` na query ou no corpo; `reg_link_ok`, chave em `contests/<c>/secrets/registration-link.key`, 32 hex, 600) —
+  sem ela, o 404 de contest inexistente BYTE A BYTE (a mensagem antiga, "Contest não encontrado", denunciava o
+  secreto) e ANTES de todo 409/403 da rota. O admin gera/troca/revoga em `admin/registrations` (`link-rotate`/
+  `link-revoke`; `private_link` no GET, `url` só p/ o admin — o `.cjudge` vê só se existe); a chave nunca vai ao
+  audit; o convite (`inv_link`) leva a chave; a Central (`reg_private_link`) avisa secreto sem link;
+  `moj-contest inscricoes link`. Teste: seção "LINK PRIVADO" do `smoke-registration.sh`.
   Janela no conf (`REG_OPEN`/`REG_CLOSE`/`REG_LATE_MINUTES`/`REG_TEAM_MAX`/`REG_TEAMS`); atrasado
   cai em coorte `unranked`. **A âncora é a PROVA OFICIAL** (`reg_official_window`: 1ª rodada
   não-arquivada `kind=official` do `rounds.json`), nunca a rodada corrente — o AQUECIMENTO pode
@@ -569,10 +581,75 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   (2) **`TLOVERRIDE[<lang>|default]`** no conf do PACOTE = o autor manda no TL — julgamento
   (build-and-test) e TODA exibição usam o efetivo (`tl_store_served` aplica; servidor lê por
   **grep**, `tl_conf_overrides`/`tl_override_apply` em lib/tl-store.sh — conf de autor NUNCA é
-  sourced no servidor); (3) **test-run** (`/problems/test-run`, `moj testrun`) roda solução
+  sourced no servidor). **O `TLMOD[<lang>.sum|.mult]` também entra (26/10/2026)**: o juiz soma/multiplica
+  por cima da tabela ANTES do override, e o servidor exibia a tabela crua (404 pacotes têm `TLMOD[spim.sum]=1`).
+  Regra ÚNICA em jq, `_TL_EFF_DEF` (`tl_eff($cal; $ov; $m)`), usada por `tl_override_apply`/`tl_by_method_json`/
+  `tl_store_served`, pelo `calib.sh` (`effof`) e pelo `status.sh` (o `tl_mods` vem carimbado no índice de donos);
+  `tl_conf_mods` lê o conf (sem source; só linguagem canônica, sem `default` — o juiz procura
+  `TLMOD[$LANGUAGE.sum]`). Cópia LITERAL no mojtools `gen-problem-json.sh`; `smoke-tl-mods.sh` confere a regra
+  contra o PRÓPRIO trecho do build-and-test e as duas cópias. Rotas que exibem TL mandam `tl_mods` ao lado do
+  `tl_override`. **JUÍZES IDÊNTICOS, MESMO TL (26/10/2026)**: o `register` deriva `hwclass` dos specs
+  (`<arch>|<cpu>|<ncpu>|<GiB em blocos de 4>`), o `tl-report` carimba `hosts[h].class` no store, o heartbeat exporta
+  `QC_HWCLASS` e o claim (`q_claim`/`q_claim_id`, `_TLCLASS_DEF` no sched-lib, `--slurpfile` do store no MESMO jq
+  que carimba o job) manda `tl_class` = o máx da classe; o agente julga pelo maior entre ela e a própria tabela
+  (`tl.job` + `MOJ_TLFILE`). O `_SCHED_TLMAX_DEF` do sched-lib é cópia LITERAL do `_TL_MAX_DEF` (o heartbeat não
+  carrega o tl-store); `smoke-sched-tlclass.sh` confere. `/problems/calib` mostra `hosts[].class` e `classes[]`;
+  `bin/tl-class-backfill.sh` carimba store antigo. **RAIAS DA CALIBRAÇÃO (26/10/2026)**: `upd_claim`/`cmd_claim` dão
+  G = min(`CALIB_PAR_MAX`=4, livres ÷ k_slots, maior fase) grupos (`_calib_lanes_v`; 1 com job na fila; soluções
+  contadas com `find` — a API não tem glob) e carimbam `par_max`/`par_cap`/`slots = G × k_slots`; o calibreitor
+  roda uma solução por grupo (mojtools); `smoke-calib-lanes.sh`. **SIMULAÇÃO E SUGESTÃO DO TL (26/10/2026)**:
+  `lib/tl-sim.sh` (`TLSIM_JQ`, composto DEPOIS de `CALX_JQ` e `_TL_EFF_DEF` no MESMO jq do `/problems/calib`;
+  `tl_conf_cf` lê o fator, inclusive `"A+B"` = off+cf, a conta do bc do calibreitor) dá `tl_sim` (W servido, linhas
+  por cf do MOJ e por r do Kattis com o TL EFETIVO e as soluções que sairiam erradas/não medidas, o intervalo de cf)
+  e `tl_suggest` (códigos); com calibração em voo não calcula (`tl_sim_state: calibrating`; ~160 ms no fixture de
+  10 juízes × 30 soluções × 100 testes). A web (`renderTlSim`, aba Limites, "aplicar" só preenche os campos) e o
+  `moj calib` só mostram. **SALVAR RECALIBRA** (26/10/2026, decisão do Ribas): o save do editor — e o envio de pacote —
+  que muda a `version` (pkg_judge_version) de um problema JÁ calibrado (ou com calibração em voo) faz o editor pedir a
+  calibração sozinho nos juízes que o tinham calibrado e estão online (nenhum = um juiz livre): `recalibIfOutdated`, que
+  compara com o `calib` que o próprio `loadValidation` pós-save buscou (um poll atrasado sobrescreve o LASTCALIB). O
+  servidor e a CLI não mudaram (o `problem_commit` segue pedindo só ao virar kattis sem a metade); enunciado e
+  `TLMETHOD` não mudam a versão. Teste: `smoke-save-recalib.gjs.sh`. Testes: `smoke-tl-sim.sh`, `smoke-tl-sim.gjs.sh`; (3) **test-run** (`/problems/test-run`, `moj testrun`) roda solução
   avulsa no juiz com o contest **sentinela `_testrun`** (id de contest criável começa com
   `[a-z0-9]` — sentinela inatingível), desviado p/ `run/testrun/` no `ingest_result` — nunca
   history. Gate de tudo: `require_problem_edit`. Testes: `smoke-{tl-override,calib-sols,testrun}.sh`.
+- **OS DOIS MÉTODOS DE TL (26/10/2026; pedido do Ribas: o do Kattis first class ao lado do MOJ)** — formato em
+  `docs/PACOTE.md` §10 "Métodos de TL", motor em `mojtools/tl-methods.sh`. A calibração mede SEMPRE os dois (o mesmo
+  dado: o pior tempo AC das good por linguagem) e o conf escolhe (`TLMETHOD=moj|kattis` + `KATTIS_AC_TO_TIME_LIMIT`/
+  `KATTIS_TIME_LIMIT_TO_TLE`/`KATTIS_TIME_RESOLUTION`); Kattis POR LINGUAGEM, default = o menor; `TLOVERRIDE` vence os
+  dois. **Trocar o método não recalibra**: a linha `TLMETHOD` fica fora dos DOIS carimbos do tl-checksum, então (1) o
+  claim põe `tl_method` no job (`sched-lib.sh` `_pkg_tlmethod_v`, um `read` do conf — fora do `.cmeta` de propósito)
+  e o agente o repassa ao build-and-test; (2) o store guarda as duas metades por host (`hosts[h].tl`/`tl_kattis`, o
+  `/judge/tl-report` saneia os dois) e o método em `.method` (carimbado no tl-report e no `problem_commit`, p/ o
+  sumário do Painel); (3) TODO leitor do TL pergunta o método: `tl_store_served` (4º arg, senão o conf, no mesmo
+  arquivo do TLOVERRIDE, sem processo: `tl_conf_method_to`), `tl_store_served_for/_hosts` (campo), `calib.sh`,
+  `status.sh` (do sumário), `get.sh`/`tl.sh`/`ops/problemtl.sh`, o preflight (store `.method`) e o
+  `gen-problem-json.sh` (mojtools). Kattis sem a metade calibrada = `{}`, NUNCA o MOJ no lugar; virar kattis sem
+  nenhum juiz com a metade pede UMA calibração completa (`problem_commit` → `cal_request`). O juízo das soluções
+  (`lib/calib-expect.sh` `calx(…; $m; $kp)`) escolhe `code` × `code_alt` pela `method` da linha (o juiz julga
+  pass/slow/wrong pelos dois na calibração) e aplica as margens do Kattis (`tl_no_margin`, `tle_no_margin`,
+  `tle_unmeasured`); linha sem o juízo = `unmeasured` (fora do sumário). O `problem_commit` só marca o sumário velho
+  se a VERSÃO do pacote mudou — senão RECALCULA (`calx_summary_write`). O `/judge/calib-report` JUNTA por
+  categoria/arquivo na mesma versão. Testes: `smoke-tl-method.sh`, `smoke-calib-expect.sh` (1b), `smoke-sched-width.sh`,
+  `smoke-limits-tab.gjs.sh`, `smoke-sols-expect.gjs.sh`; mojtools `make test-calib test-kattis`.
+- **LOCKS do store de TL e da calibração (26/10/2026)**: todo ler-e-regravar de `run/tl/<id>.json` passa por
+  `_tl_locked <id>` (`lib/tl-store.sh`: `run/tl/<id>.lock`, `flock -w 10`, rc 75 ⇒ o tl-report responde 500) — dois
+  juízes reportando juntos perdiam a entrada de um (o último `mv` vencia); o sumário das soluções por `_calx_locked`
+  (`run/calib-sum/<id>.lock`) e o `/judge/calib-report` segura `run/calib/<id>/.lock` a requisição inteira (409
+  `busy`). Ordem: dir da calibração → calib-sum → sumário agregado; e o id do TL → sumário. O carimbo fresco
+  (`_tl_fresh_edit`) não grava sem o lock. Teste: `smoke-tl-store-lock.sh` (20 juízes concorrentes).
+- **ESTADO DE RUNTIME DO PROBLEMA SEGUE O ID (26/10/2026)**: delete e move passam pelas funções únicas —
+  `tl_state_drop/move` (`lib/tl-store.sh`: store de TL + memos `.cks/.pkv`, validação, chaves dos sumários via
+  `_summary_drop`, carimbo fresco; o move REESCREVE o `.id` de dentro — o rebuild a frio chaveia por ele),
+  `calib_state_drop/move` (`lib/calib-expect.sh`: `run/calib/<id>/` sob o lock dele; o move refaz o sumário das
+  soluções no id novo) e `sched_calib_drop <id> [inprogress]` (sched-lib: a fila de calibração; o `/ops/calib-cancel`
+  é a mesma função). Report de juiz de problema que não existe mais = **404 `problem_gone`** antes de qualquer
+  escrita (`tl-report`/`calib-report`, e de novo sob o lock: `tl_store_record` rc 3). Estado órfão de antes:
+  `server/bin/problem-state-sweep.sh [--apply]`. ⚠ API roda `noglob`: o `rm "$rdir"/*.html` do calib-report nunca
+  apagou nada — `find -delete`. Estado novo por id ⇒ entra nessas funções. Testes: `smoke-problem-state.sh`,
+  `smoke-judge-gone.sh`.
+- **O `conf` e o `tl` do PACOTE nunca são `source`ados no servidor** (incidente de 26/10/2026): o `kattis/sidecar.sh`
+  (create/edit/upload) e o fallback do `gen-problem-json.sh` faziam — um `X=$(…)` no conf do autor executava código
+  na API. Hoje é tudo regex (mojtools `kt_conf_json`, `tl_conf_*` aqui); teste: mojtools `make test-no-source`.
 - **"PRONTO" = pacote × calibração × soluções × entradas × issues** (relato do Arthur Botelho,
   22/09/2026: "validado" seguia verde com solução de veredicto errado). "Validado" era só a conferência
   ESTÁTICA do `validate-problem.sh` — virou **Pacote** nas telas e na CLI. O juízo "cada solução fez o que

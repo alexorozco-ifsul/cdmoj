@@ -13,6 +13,14 @@
 : "${CONTESTSDIR:=/home/ribas/moj/contests}"
 
 tl_store_file(){ printf '%s/%s.json' "$TL_STORE_DIR" "$1"; }   # id tem '#', não tem '/': seguro
+# _tl_locked <id> <comando…> — roda o comando sob o flock POR PROBLEMA do store de TL (run/tl/<id>.lock). Todo
+# ler-e-regravar de run/tl/<id>.json passa por aqui: dois juízes reportando ao mesmo tempo perdiam a entrada de
+# um deles (o último `mv` vencia). Ordem dos locks: este e, dentro dele, o do sumário. Timeout de 10 s ⇒ rc 75.
+_tl_locked(){
+  local id="$1"; shift
+  mkdir -p "$TL_STORE_DIR" 2>/dev/null
+  ( flock -w 10 9 || exit 75; "$@" ) 9>>"$TL_STORE_DIR/$id.lock"
+}
 
 # ============ SUMÁRIOS AGREGADOS (mantidos POR EVENTO, não por TTL) ==================
 # O Painel (/problems/status) precisava de run/tl/<id>.json + run/validation/<id>.json de
@@ -24,22 +32,26 @@ tl_store_file(){ printf '%s/%s.json' "$TL_STORE_DIR" "$1"; }   # id tem '#', nã
 TL_SUMMARY="$RUNDIR/tl-summary.json"
 VAL_SUMMARY="$RUNDIR/validation-summary.json"
 VAL_STORE_DIR="$RUNDIR/validation"
-# projeções (as MESMAS do antigo tlmap/valmap do status.sh — a resposta não muda)
-_TL_SUM_PROG='{
+# MÁXIMO entre hosts de uma metade da tabela (tl = método MOJ; tl_kattis = método Kattis — mojtools
+# tl-methods.sh): chaves de linguagem legadas normalizadas (py3/py2 → py, cc/cxx/c++/hpp → cpp, h → c).
+_TL_MAX_DEF='def _tlkey: if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end;
+def tlmax(maps): reduce (maps | to_entries[]) as $e ({}; ($e.key|_tlkey) as $k
+    | .[$k]=([(.[$k]//0),($e.value|tonumber? // 0)]|max)) | with_entries(.value|=tostring);'
+# projeções (as MESMAS do antigo tlmap/valmap do status.sh — a resposta não muda; o método do TL e a metade
+# Kattis entraram em 26/10/2026)
+_TL_SUM_PROG="$_TL_MAX_DEF"'{
    calibrated:(((.hosts // {})|length)>0),
    at:(.updated_at // null), checksum:(.checksum // ""),
-   tl:([.hosts[].tl // {}]
-       | reduce (.[]|to_entries[]) as $e ({};
-           ($e.key | if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end) as $k
-           | .[$k]=([(.[$k]//0),($e.value|tonumber? // 0)]|max))
-       | with_entries(.value|=tostring)) }'
+   method:(if .method == "kattis" then "kattis" else "moj" end),
+   tl:tlmax((.hosts // {})[] | .tl // {}),
+   tl_kattis:tlmax((.hosts // {})[] | .tl_kattis // {}) }'
 _VAL_SUM_PROG='{ok:.ok, checks:(.checks // []), at:(.at // null),
    render_warnings:(.render_warnings // "")}'
 
 _summary_rebuild(){  # <dir> <prog> <out> — chamar SOB o flock do chamador; tmp+mv atômico
   local dir="$1" prog="$2" out="$3" tmp="$3.tmp.${BASHPID}"
   find "$dir" -maxdepth 1 -name '*.json' -exec cat {} + 2>/dev/null \
-    | jq -sc "map(select(.id != null) | {key:.id, value:$prog}) | from_entries" > "$tmp" 2>/dev/null
+    | jq -sc "map(select(.id != null) | {key:.id, value:($prog)}) | from_entries" > "$tmp" 2>/dev/null
   [[ -s "$tmp" ]] || echo '{}' > "$tmp"
   jq -e . "$tmp" >/dev/null 2>&1 && mv -f "$tmp" "$out" || rm -f "$tmp"
 }
@@ -56,6 +68,15 @@ _summary_upsert(){   # <id> <src-file> <prog> <out> — funde 1 chave (entrada p
 _summary_ensure(){   # <dir> <prog> <out> — leitor: rebuild a frio (1×), depois só stat
   [[ -s "$3" ]] && return 0
   ( flock 9; [[ -s "$3" ]] || _summary_rebuild "$1" "$2" "$3" ) 9>>"$3.lock"
+}
+# _summary_drop <out> <id> — tira a chave do id do sumário agregado, sob o MESMO lock do upsert (delete/move)
+_summary_drop(){
+  local out="$1" id="$2"
+  [[ -n "$id" && -s "$out" ]] || return 0
+  ( flock 9; t="$out.tmp.${BASHPID}"
+    jq -c --arg id "$id" 'del(.[$id])' "$out" > "$t" 2>/dev/null && [[ -s "$t" ]] && mv -f "$t" "$out" || rm -f "$t"
+  ) 9>>"$out.lock"
+  return 0
 }
 tl_summary_upsert(){  _summary_upsert "$1" "$(tl_store_file "$1")" "$_TL_SUM_PROG" "$TL_SUMMARY"; }
 tl_summary_ensure(){  _summary_ensure "$TL_STORE_DIR" "$_TL_SUM_PROG" "$TL_SUMMARY"; }
@@ -185,7 +206,7 @@ tl_fresh_file(){ printf '%s/treino/var/tl-checksum-fresh.json' "$CONTESTSDIR"; }
 _tl_fresh_edit(){   # <programa-jq> [args-jq…] — reescreve o arquivo sob flock; lixo = recomeça de {}
   local f t prog="$1"; shift; f="$(tl_fresh_file)"; t="$f.tmp.$BASHPID"   # BASHPID resolvido ANTES do redirect
   mkdir -p "${f%/*}" 2>/dev/null
-  ( flock -w 5 9 2>/dev/null
+  ( flock -w 5 9 2>/dev/null || exit 0     # sem o lock, não grava (antes seguia sem lock e perdia escrita)
     local cur; cur="$(cat "$f" 2>/dev/null)"; jq -e 'type=="object"' >/dev/null 2>&1 <<<"$cur" || cur='{}'
     printf '%s' "$cur" | jq -c "$@" "$prog" > "$t" 2>/dev/null && [[ -s "$t" ]] && mv -f "$t" "$f" || rm -f "$t"
     [[ "$(<"$f")" == '{}' ]] 2>/dev/null && rm -f "$f"      # vazio não fica para trás (o `-s` curto-circuita a poda)
@@ -226,57 +247,130 @@ tl_index_checksums(){
 # que aquele host calibrou (lib/tl-store.sh `pkg_judge_version`): o TL continua chaveado pelo
 # checksum ESTREITO, mas a entrada do host guarda de QUE versão veio, p/ a tela do autor saber que
 # a calibração daquele juiz é de antes da última mexida nas soluções.
+# 6º/7º args (26/10/2026, os métodos de TL): o mapa da metade KATTIS da tabela do juiz (vazio = juiz/mojtools
+# anterior, sem a metade — o Kattis desse host fica "não calibrado") e o MÉTODO do conf agora (`.method` do
+# store: o sumário do Painel o lê sem abrir pacote; o problem_commit o reescreve quando o conf muda).
+# 8º arg (26/10/2026): a CLASSE DE HARDWARE do juiz (`hwclass` do registro) em hosts[h].class — o claim põe no job o
+# TL da classe (judge-gw/sched-lib.sh `_TLCLASS_DEF`); vazio = juiz sem classe (registro antigo).
 tl_store_record(){
-  local host="$1" id="$2" cks="$3" tl="$4" pkv="${5:-}" f cur tmp
-  [[ -n "$host" && -n "$id" && -n "$cks" ]] || return 1
-  jq -e . >/dev/null 2>&1 <<<"$tl" || tl='{}'
+  [[ -n "${1:-}" && -n "${2:-}" && -n "${3:-}" ]] || return 1
+  _tl_locked "$2" _tl_store_record_locked "$@"
+}
+_tl_store_record_locked(){
+  local host="$1" id="$2" cks="$3" tl="$4" pkv="${5:-}" tlk="${6:-}" meth="${7:-}" cls="${8:-}" f cur tmp
+  # o pacote ainda existe? (sob o lock: o delete apaga o store sob o MESMO lock — um report que passou do 404 do
+  # handler antes do delete não recria o store do problema apagado). rc 3 = o handler responde 404 problem_gone.
+  [[ -n "$(pkg_path "$id")" ]] || return 3
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$tl" || tl='{}'
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$tlk" || tlk='{}'
+  [[ "$meth" == kattis || "$meth" == moj ]] || meth=""
   mkdir -p "$TL_STORE_DIR" 2>/dev/null; f="$(tl_store_file "$id")"; tmp="$f.tmp.${BASHPID}"
   cur="$(cat "$f" 2>/dev/null)"; [[ -n "$cur" ]] || cur='{}'
   ( umask 077; jq -n --argjson cur "$cur" --arg id "$id" --arg h "$host" \
-      --arg cks "$cks" --argjson tl "$tl" --arg pkv "$pkv" --argjson now "$EPOCHSECONDS" '
-      ($tl | reduce to_entries[] as $e ({};
-         ($e.key | if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end) as $k
+      --arg cks "$cks" --argjson tl "$tl" --argjson tlk "$tlk" --arg pkv "$pkv" --arg meth "$meth" --arg cls "$cls" \
+      --argjson now "$EPOCHSECONDS" "$_TL_MAX_DEF"'
+      def norm: reduce to_entries[] as $e ({}; ($e.key | _tlkey) as $k
          | .[$k] = (if has($k) and ((.[$k]|tonumber? // 0) >= ($e.value|tonumber? // 0))
-                    then .[$k] else $e.value end))) as $ntl
+                    then .[$k] else $e.value end));
+      ($tl | norm) as $ntl | ($tlk | norm) as $ntlk
       | ($cur.checksum // "") as $old
       | (if $old==$cks then ($cur.hosts // {}) else {} end) as $hosts
       | {id:$id, checksum:$cks, updated_at:$now,
-         hosts: ($hosts + {($h): ({tl:$ntl, at:$now} + (if $pkv=="" then {} else {pkg_version:$pkv} end))})}
+         hosts: ($hosts + {($h): ({tl:$ntl, at:$now}
+                                  + (if ($ntlk|length) > 0 then {tl_kattis:$ntlk} else {} end)
+                                  + (if $pkv=="" then {} else {pkg_version:$pkv} end)
+                                  + (if $cls=="" then {} else {class:$cls} end))})}
+      + (if $meth != "" then {method:$meth} elif ($cur.method // "") != "" then {method:$cur.method} else {} end)
     ' ) > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" || return 1
   tl_summary_upsert "$id"   # sumário do Painel segue o evento (nunca TTL)
 }
+# tl_store_set_method <id> <moj|kattis> — o conf mudou de método (problem_commit): carimba o store e o sumário
+# do Painel NA HORA. Os TLs dos dois métodos já estão medidos (o TLMETHOD fica fora do tl-checksum): nada a
+# recalibrar. Store ausente (nunca calibrado) = nada a carimbar.
+# tl_state_drop <id> — o problema deixou de existir com esse id (delete): o store de TL (json, .cks, .pkv), as chaves
+# do id nos sumários de TL e de validação, o relatório de validação e o carimbo fresco. Antes o delete deixava o
+# run/tl/<id>.* órfão: contava como "calibrado" no painel dos juízes e o tl-report dos agentes batia nele. O
+# .lock fica (apagá-lo com alguém esperando nele abriria um 2º lock no mesmo id); o sweep o recolhe.
+tl_state_drop(){
+  local id="$1"
+  [[ -n "$id" ]] || return 0
+  _tl_locked "$id" rm -f "$(tl_store_file "$id")" "$TL_STORE_DIR/$id.cks" "$TL_STORE_DIR/$id.pkv"
+  _summary_drop "$TL_SUMMARY" "$id"
+  rm -f "$VAL_STORE_DIR/$id.json" 2>/dev/null
+  _summary_drop "$VAL_SUMMARY" "$id"
+  tl_fresh_drop "$id"
+  return 0
+}
+# tl_state_move <old> <new> — o problema mudou de id (move entre orgs): o store de TL e o de validação vão junto,
+# com o `.id` de DENTRO reescrito (o rebuild a frio dos sumários chaveia pelo `.id` — sem isto o problema movido
+# voltava ao sumário com o id antigo), e os sumários trocam a chave. Os memos .cks/.pkv saem (a assinatura deles
+# inclui o caminho do pacote: o próximo leitor refaz).
+tl_state_move(){
+  local old="$1" new="$2" fo fn vo vn t
+  [[ -n "$old" && -n "$new" && "$old" != "$new" ]] || return 0
+  fo="$(tl_store_file "$old")"; fn="$(tl_store_file "$new")"
+  if [[ -f "$fo" ]]; then
+    _tl_locked "$old" _tl_move_json "$fo" "$fn" "$new"
+    rm -f "$TL_STORE_DIR/$old.cks" "$TL_STORE_DIR/$old.pkv" 2>/dev/null
+    [[ -f "$fn" ]] && tl_summary_upsert "$new"
+  fi
+  _summary_drop "$TL_SUMMARY" "$old"
+  vo="$VAL_STORE_DIR/$old.json"; vn="$VAL_STORE_DIR/$new.json"
+  if [[ -f "$vo" ]]; then
+    _tl_move_json "$vo" "$vn" "$new"
+    [[ -f "$vn" ]] && val_summary_upsert "$new"
+  fi
+  _summary_drop "$VAL_SUMMARY" "$old"
+  tl_fresh_drop "$old"
+  return 0
+}
+# _tl_move_json <de> <para> <novo-id> — copia reescrevendo o `.id` (atômico) e apaga a origem
+_tl_move_json(){
+  local from="$1" to="$2" nid="$3" t
+  t="$to.tmp.${BASHPID}"
+  ( umask 077; jq -c --arg id "$nid" '.id = $id' "$from" ) > "$t" 2>/dev/null && [[ -s "$t" ]] \
+    && mv -f "$t" "$to" && rm -f "$from" || { rm -f "$t"; return 1; }
+}
+tl_store_set_method(){
+  [[ "${2:-}" == kattis || "${2:-}" == moj ]] || return 0
+  [[ -s "$(tl_store_file "$1")" ]] || return 0
+  _tl_locked "$1" _tl_store_set_method_locked "$@"
+}
+_tl_store_set_method_locked(){
+  local id="$1" m="$2" f t
+  f="$(tl_store_file "$id")"; [[ -s "$f" ]] || return 0
+  [[ "$(jq -r '.method // "moj"' "$f" 2>/dev/null)" == "$m" ]] && return 0
+  t="$f.tmp.${BASHPID}"
+  ( umask 077; jq -c --arg m "$m" '.method = $m' "$f" ) > "$t" 2>/dev/null && [[ -s "$t" ]] && mv -f "$t" "$f" \
+    || { rm -f "$t"; return 0; }
+  tl_summary_upsert "$id"
+}
 
-# tl_store_served_for <id> <checksum> -> time_limits (MÁX entre hosts) p/ ESSE checksum;
-# {} se não houver TL p/ a versão (descartado por mudança ou ainda não calibrado).
+# tl_store_served_for <id> <checksum> [tl|tl_kattis] -> time_limits (MÁX entre hosts) p/ ESSE checksum, da
+# metade pedida da tabela (tl = método MOJ, o padrão; tl_kattis = Kattis); {} se não houver TL p/ a versão
+# (descartado por mudança ou ainda não calibrado — ou, no Kattis, só calibrado por juiz anterior à metade).
 # Chaves py3/py2 legadas (stores calibrados antes da unificação) fundem em 'py' por MAX.
 tl_store_served_for(){
-  local id="$1" cks="$2" f; f="$(tl_store_file "$id")"
+  local id="$1" cks="$2" fld="${3:-tl}" f; f="$(tl_store_file "$id")"
+  [[ "$fld" == tl_kattis ]] || fld=tl
   [[ -f "$f" && -n "$cks" ]] || { echo '{}'; return; }
-  jq -c --arg cks "$cks" '
+  jq -c --arg cks "$cks" --arg fld "$fld" "$_TL_MAX_DEF"'
     if (.checksum // "") != $cks or ((.hosts // {})|length)==0 then {}
-    else [ .hosts[].tl // {} ]
-         | reduce (.[]|to_entries[]) as $e ({};
-             ($e.key | if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end) as $k
-             | .[$k]=([(.[$k]//0),($e.value|tonumber? // 0)]|max))
-         | with_entries(.value |= tostring)
-    end' "$f" 2>/dev/null || echo '{}'
+    else tlmax(.hosts[] | .[$fld] // {}) end' "$f" 2>/dev/null || echo '{}'
 }
-# tl_store_served_hosts <id> <checksum> "<h1 h2 …>" -> como tl_store_served_for, mas o MÁX
+# tl_store_served_hosts <id> <checksum> "<h1 h2 …>" [tl|tl_kattis] -> como tl_store_served_for, mas o MÁX
 # é só entre os HOSTS LISTADOS (pool de juízes do contest/problema). Host do pool sem
 # calibração é ignorado; nenhum calibrado -> {}. hosts vazio = todos (delega).
 tl_store_served_hosts(){
-  local id="$1" cks="$2" hosts="$3" f; f="$(tl_store_file "$id")"
-  [[ -n "$hosts" ]] || { tl_store_served_for "$id" "$cks"; return; }
+  local id="$1" cks="$2" hosts="$3" fld="${4:-tl}" f; f="$(tl_store_file "$id")"
+  [[ "$fld" == tl_kattis ]] || fld=tl
+  [[ -n "$hosts" ]] || { tl_store_served_for "$id" "$cks" "$fld"; return; }
   [[ -f "$f" && -n "$cks" ]] || { echo '{}'; return; }
-  jq -c --arg cks "$cks" --arg hs "$hosts" '
+  jq -c --arg cks "$cks" --arg hs "$hosts" --arg fld "$fld" "$_TL_MAX_DEF"'
     ($hs|split(" ")|map(select(length>0))) as $want
     | if (.checksum // "") != $cks then {}
-      else [ (.hosts // {}) | to_entries[] | select(.key as $h | $want|index($h)) | .value.tl // {} ]
-           | reduce (.[]|to_entries[]) as $e ({};
-               ($e.key | if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end) as $k
-               | .[$k]=([(.[$k]//0),($e.value|tonumber? // 0)]|max))
-           | with_entries(.value |= tostring)
-      end' "$f" 2>/dev/null || echo '{}'
+      else tlmax((.hosts // {}) | to_entries[] | select(.key as $h | $want|index($h)) | .value[$fld] // {}) end' \
+    "$f" 2>/dev/null || echo '{}'
 }
 # ===== TLOVERRIDE — o autor decide o TL "na marra" pelo conf do PACOTE ==============
 # Chave associativa no conf: TLOVERRIDE[default]=1.0, TLOVERRIDE[java]=2.5. A calibração
@@ -297,17 +391,104 @@ tl_conf_overrides(){
                 | {((.[0] | if .=="py3" or .=="py2" then "py" elif .=="cc" or .=="cxx" or .=="c++" or .=="hpp" then "cpp" elif .=="h" then "c" else . end)): .[1]}]
                | add // {}'
 }
-# tl_override_apply <tl-json> <ov-json> -> TL efetivo: p/ cada linguagem (união das chaves),
-# TLOVERRIDE[lang] // TLOVERRIDE[default] // calibrado[lang]. Valores string (convenção do store).
+# ===== MÉTODO DO TL (26/10/2026; mojtools tl-methods.sh, cdmoj/docs/PACOTE.md "Métodos de TL") =========
+# TLMETHOD=moj (o padrão) | kattis no conf escolhe a metade da tabela que vale; os juízes medem as duas sempre.
+# Lidos do conf SEM source (o conf é texto do autor) e, o método, sem processo nenhum (nameref).
+# tl_conf_method_to <var> <pkgdir> — o TLMETHOD do conf (a última linha vence, como no source do juiz)
+tl_conf_method_to(){
+  local -n _tlm_out="$1"; local conf="$2/conf" _tlm_c="" _tlm_l
+  _tlm_out=moj
+  [[ -n "$2" && -f "$conf" ]] || return 0
+  _tlm_c="$(<"$conf")" 2>/dev/null || return 0
+  [[ "$_tlm_c" == *TLMETHOD* ]] || return 0
+  while IFS= read -r _tlm_l; do
+    [[ "$_tlm_l" =~ ^[[:space:]]*TLMETHOD=[\"\']?([A-Za-z]*) ]] && _tlm_out="${BASH_REMATCH[1]}"
+  done <<<"$_tlm_c"
+  [[ "$_tlm_out" == kattis ]] || _tlm_out=moj
+  return 0
+}
+# tl_conf_kattis <pkgdir> -> {"a":2,"b":1.5,"r":1}: os parâmetros do Kattis do conf (KATTIS_AC_TO_TIME_LIMIT,
+# KATTIS_TIME_LIMIT_TO_TLE, KATTIS_TIME_RESOLUTION), com a MESMA faixa e os mesmos padrões do tl-methods.sh
+tl_conf_kattis(){
+  local conf="$1/conf" _c="" _l a=2.0 b=1.5 r=1.0
+  [[ -n "$1" && -f "$conf" ]] && _c="$(<"$conf")" 2>/dev/null
+  if [[ "$_c" == *KATTIS_* ]]; then
+    while IFS= read -r _l; do
+      [[ "$_l" =~ ^[[:space:]]*KATTIS_AC_TO_TIME_LIMIT=[\"\']?([0-9.]+) ]] && a="${BASH_REMATCH[1]}"
+      [[ "$_l" =~ ^[[:space:]]*KATTIS_TIME_LIMIT_TO_TLE=[\"\']?([0-9.]+) ]] && b="${BASH_REMATCH[1]}"
+      [[ "$_l" =~ ^[[:space:]]*KATTIS_TIME_RESOLUTION=[\"\']?([0-9.]+) ]] && r="${BASH_REMATCH[1]}"
+    done <<<"$_c"
+  fi
+  jq -cn --arg a "$a" --arg b "$b" --arg r "$r" '
+    def num($d; $lo; $hi; $x): (if test("^([0-9]+\\.?[0-9]*|\\.[0-9]+)$")
+        then ((if startswith(".") then "0" + . else . end) | (if endswith(".") then . + "0" else . end) | tonumber)
+        else null end) as $v
+      | if $v == null or $v > $hi or (if $x then $v <= $lo else $v < $lo end) then $d else $v end;
+    {a: ($a | num(2; 1; 100; false)), b: ($b | num(1.5; 1; 100; false)), r: ($r | num(1; 0; 10; true))}'
+}
+
+# ===== TLMOD sum/mult — o ajuste do conf que o JUIZ aplica por cima da tabela (26/10/2026) ==========
+# O build-and-test faz, p/ a linguagem L do envio: TL = (tabela[L] // tabela[default]) + TLMOD[L.sum], depois
+# × TLMOD[L.mult] (bc -l), e só então o TLOVERRIDE (final). O servidor exibia a tabela crua: 404 pacotes têm
+# TLMOD[spim.sum]=1, e a página da prova mostrava 1 s a menos do que o juiz cobra. Só a chave de linguagem
+# CANÔNICA vale (o juiz procura TLMOD[$LANGUAGE.sum] com o LANGUAGE já normalizado: py3/cc/… nunca casam), e
+# `default` não entra (o juiz não lê TLMOD[default.sum]). A regra mora em _TL_EFF_DEF.
+# tl_conf_mods <pkgdir> -> {"sum":{lang:n},"mult":{lang:n}} (números; a última linha vence), ou {} sem nenhum.
+tl_conf_mods(){
+  local conf="$1/conf" _c
+  [[ -n "$1" && -f "$conf" ]] || { echo '{}'; return; }
+  _c="$(<"$conf")" 2>/dev/null || _c=""
+  [[ "$_c" == *'.sum]'* || "$_c" == *'.mult]'* ]] || { echo '{}'; return; }   # quase todo conf: sem processo
+  sed -nE 's/^[[:space:]]*TLMOD\[([A-Za-z0-9]{1,16})\.(sum|mult)\]=(-?([0-9]+\.?[0-9]*|\.[0-9]+))[[:space:]]*(#.*)?$/\1\t\2\t\3/p' \
+      "$conf" 2>/dev/null \
+    | jq -Rnc '[inputs | split("\t") | select(length == 3 and ((.[2] | tonumber?) != null))
+                | select(.[0] as $l | ["default", "py2", "py3", "cc", "cxx", "hpp", "h"] | index($l) | not)]
+               | if length == 0 then {}
+                 else reduce .[] as $e ({sum: {}, mult: {}}; .[$e[1]][$e[0]] = ($e[2] | tonumber)) end'
+}
+# _TL_EFF_DEF — o TL EFETIVO numa definição jq só (todo lugar que EXIBE TL usa esta; ⚠ cópia LITERAL no
+# mojtools gen-problem-json.sh — o smoke-tl-mods.sh confere que as duas são iguais):
+#   tl_eff($cal; $ov; $m) p/ cada linguagem L (união das chaves do calibrado, do override e dos mods):
+#   $ov[L] // $ov.default // (($cal[L] // $cal.default) + sum[L]) × mult[L], arredondado a 1e-6 (o bc do juiz
+#   não arredonda; isto só limpa o ruído do ponto flutuante). default = $ov.default // $cal.default. Valores
+#   string (convenção do store); linguagem sem base nem override some.
+_TL_EFF_DEF='
+def tl_eff($cal; $ov; $m):
+  ($m.sum // {}) as $s | ($m.mult // {}) as $x
+  | ((($cal | keys) + ($ov | keys) + ($s | keys) + ($x | keys)) | unique) as $ks
+  | reduce $ks[] as $k ({};
+      .[$k] = (if $k == "default" then ($ov["default"] // $cal["default"])
+               else ($ov[$k] // $ov["default"]
+                     // (($cal[$k] // $cal["default"]) as $b
+                         | if $b == null or ((($s | has($k)) or ($x | has($k))) | not) then $b
+                           else (((((($b | tonumber) + ($s[$k] // 0)) * ($x[$k] // 1)) * 1000000) | round) / 1000000)
+                           end))
+               end))
+  | with_entries(select(.value != null) | .value |= tostring);
+'
+
+# tl_override_apply <tl-json> <ov-json> [mods-json] -> TL efetivo (tl_eff): p/ cada linguagem,
+# TLOVERRIDE[lang] // TLOVERRIDE[default] // (calibrado[lang] // calibrado[default]) com o TLMOD sum/mult.
+# Valores string (convenção do store).
 tl_override_apply(){
-  local tl="$1" ov="$2"
+  local tl="$1" ov="$2" m="${3:-}"
   jq -e . >/dev/null 2>&1 <<<"$tl" || tl='{}'
+  [[ -n "$ov" && "$ov" != "null" ]] || ov='{}'
+  [[ -n "$m" && "$m" != "null" ]] || m='{}'
   # era um jq só p/ perguntar "o objeto tem chave?" — o bash responde sem forkar
-  [[ -n "$ov" && "$ov" != "{}" && "$ov" != "null" ]] || { printf '%s' "$tl"; return; }
-  jq -cn --argjson tl "$tl" --argjson ov "$ov" '
-    (($tl|keys) + ($ov|keys) | unique) as $ks
-    | reduce $ks[] as $k ({}; .[$k] = ($ov[$k] // $ov["default"] // $tl[$k]))
-    | with_entries(select(.value != null) | .value |= tostring)'
+  [[ "$ov" != "{}" || "$m" != "{}" ]] || { printf '%s' "$tl"; return; }
+  jq -cn --argjson tl "$tl" --argjson ov "$ov" --argjson m "$m" "$_TL_EFF_DEF"'tl_eff($tl; $ov; $m)'
+}
+
+# tl_by_method_json <id> <checksum> <ov-json> [mods-json] -> {moj:{calibrated, effective}, kattis:{calibrated,
+# effective}}: as DUAS metades lado a lado (as rotas de GESTÃO mostram ao autor o que a troca de método daria); o
+# override e o TLMOD valem nas duas.
+tl_by_method_json(){
+  local m k
+  m="$(tl_store_served_for "$1" "$2" tl)"; k="$(tl_store_served_for "$1" "$2" tl_kattis)"
+  jq -cn --argjson m "$m" --argjson k "$k" --argjson me "$(tl_override_apply "$m" "$3" "${4:-}")" \
+     --argjson ke "$(tl_override_apply "$k" "$3" "${4:-}")" \
+     '{moj:{calibrated:$m, effective:$me}, kattis:{calibrated:$k, effective:$ke}}'
 }
 
 # tl_store_served <id> [hosts] -> time_limits p/ a versão ATUAL do pacote no store do
@@ -319,13 +500,17 @@ tl_override_apply(){
 # mesmo que foi calibrado?" exige rodar o tl-checksum.sh, que LÊ o conteúdo de tests/* — 112,8 MB
 # num contest de 14 problemas. Quem já tem o checksum MATERIALIZADO (o índice de problemas o
 # carimba; é a mesma comparação-de-dois-checksums que o /problems/status faz) deve passá-lo.
+# 4º arg (26/10/2026): o MÉTODO (moj|kattis); ausente = o TLMETHOD do conf (lido sem processo, no mesmo arquivo
+# do TLOVERRIDE). O override é final nos dois métodos; o TLMOD sum/mult do conf entra antes dele (tl_eff).
 tl_store_served(){
-  local pkg tl ov cks="${3:-}"
+  local pkg tl ov cks="${3:-}" meth="${4:-}" fld=tl
   pkg="$(pkg_path "$1")"
   [[ -n "$cks" ]] || cks="$(pkg_tl_checksum "$pkg" "$1")"
-  tl="$(tl_store_served_hosts "$1" "$cks" "${2:-}")"
+  [[ "$meth" == moj || "$meth" == kattis ]] || tl_conf_method_to meth "$pkg"
+  [[ "$meth" == kattis ]] && fld=tl_kattis
+  tl="$(tl_store_served_hosts "$1" "$cks" "${2:-}" "$fld")"
   ov="$(tl_conf_overrides "$pkg")"
-  tl_override_apply "$tl" "$ov"
+  tl_override_apply "$tl" "$ov" "$(tl_conf_mods "$pkg")"
 }
 # tl_store_get <id> -> store bruto (ou {})
 tl_store_get(){ cat "$(tl_store_file "$1")" 2>/dev/null || echo '{}'; }

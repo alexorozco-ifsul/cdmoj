@@ -1,4 +1,4 @@
-<!-- i18n-source: PACOTE.md blob:90267344557b3f9e4756e09b09f4b6734dee9fe0 -->
+<!-- i18n-source: PACOTE.md blob:164af7f7ec105abe461ab3e9558fd9c4eb1eed4c -->
 # MOJ: the problem package (canonical format)
 
 > **Translation note.** This manual is a translation of the Portuguese original. The command-line tools (`moj`, `moj-contest`, `moj-comp`) print their messages in Portuguese, and the command examples below are identical to the original.
@@ -446,11 +446,15 @@ All the keys that `build-and-test.sh` understands:
 
 | Key | Default | What it does | Use today |
 |---|---|---|---|
-| `TLMOD[calibrafactor]` | `1.35` | multiplier applied to the time of the `good` solution to get the time limit. A higher value gives the student more margin | 453 |
+| `TLMOD[calibrafactor]` | `1.35` | multiplier applied to the time of the `good` solution to get the time limit, in the MOJ method. A higher value gives the student more margin | 453 |
+| `TLMETHOD` | `moj` | the **time-limit method** (section 10, "Time-limit methods"): `moj` = `calibrafactor` × worst time + 0.02 s; `kattis` = the method of the Kattis spec (2025-09). Both are per language. Calibration measures both every time: a change **does not require recalibration** (the line is outside the two tl-checksum stamps). On the web: Limits tab; in the CLI: `moj edit` → 8 → 11, and the `KATTIS_*` keys in → 12 | 0 |
+| `KATTIS_AC_TO_TIME_LIMIT` | `2.0` | Kattis method: the time limit is at least this × the worst time of the `good` solutions (from 1 to 100; the `ac_to_time_limit` of the spec) | 0 |
+| `KATTIS_TIME_LIMIT_TO_TLE` | `1.5` | Kattis method: a `slow` solution must exceed this × the time limit on some test (from 1 to 100; the `time_limit_to_tle` of the spec) | 0 |
+| `KATTIS_TIME_RESOLUTION` | `1.0` | Kattis method: the time limit is a multiple of this, rounded up (more than 0 and up to 10 s; the `time_resolution` of the spec) | 0 |
 | `TLMOD[<lang>.drift]` | `0` | tolerance (in seconds) above the time limit before TLE, in that language: the test is TLE only when `tempo − TL > tolerância` (time minus TL is greater than the tolerance) | 404 (`java`) |
 | `TLMOD[default.drift]` | — | the same tolerance for **each** language that does not have its own (`TLMOD[<lang>.drift]` wins). It applies in judging and in the calibration check of the solutions (a `good` within the tolerance is not "diverging") | 0 |
-| `TLMOD[<lang>.sum]` | `0` | adds a fixed value (in seconds) to the time limit of that language | 405 (`spim`) |
-| `TLMOD[<lang>.mult]` | `1` | multiplies the time limit of that language | 0 |
+| `TLMOD[<lang>.sum]` | `0` | adds a fixed value (in seconds) to the time limit of that language. The time limit shown (contest, training, management) already includes the addition. Only the canonical language name counts (`py`, `cpp`; `py3` and `cc` do not), and there is no `TLMOD[default.sum]` | 405 (`spim`) |
+| `TLMOD[<lang>.mult]` | `1` | multiplies the time limit of that language, after the addition. The time limit shown also includes it. `TLOVERRIDE` beats both | 0 |
 | `ULIMITS[-u]` | `1024` | maximum number of processes. Java and other runtimes need more (the archive uses `10000`) | 453 |
 | `ULIMITS[-s]` | `131072` (128 MB, in KB) | stack size. Prefer `STACKLIMITMB` | 0 |
 | `ULIMITS[-f]` | `256000` | maximum size of a file that the program can write | 0 |
@@ -464,17 +468,16 @@ All the keys that `build-and-test.sh` understands:
 | `STOPWHEN_WA` | does not stop | `y` stops at the first Wrong Answer | 0 |
 | `STOPWHEN_TLE` | does not stop | `y` stops at the first Time Limit Exceeded | 0 |
 | `STOPWHEN_RE` | does not stop | `y` stops at the first Runtime Error | 0 |
-
-The three `STOPWHEN_*` and the number of tests go to the served json (`stop_when`, `tests`). In an **ICPC**
-contest only the first failure matters, and the contest 🏁 Home warns about a problem that keeps running after it
-(TCP 2026: a problem with 214 tests and `STOPWHEN_TLE=n` took up to 4 minutes to give TLE).
-
 | `TLERERUN` | `y` | runs the test one more time before it confirms a TLE (prevents TLE from machine noise) | 0 |
 | `CALIBRATIONTL` | `5` | time limit used **during** calibration, before a real TL exists | 0 |
 | `ALLOWTLEDURINGCALIBRATION` | off | `y` accepts a `good` solution with TLE as "calibrated" (the language gets a TL even when it goes over `CALIBRATIONTL` — rare cases of a `good` solution that is deliberately at the limit) | 0 |
 | `SAMPLE` | samples = `tests/input/sample*` | `no` declares that the problem **has no samples** (section 4, "Problem without samples"): the statement has no box and nothing is offered for download. The judge does not read it, and it is not part of the tl-checksum (no recalibration) | 0 |
 | `FUNCTION_LANGS` | none | the **function submission** languages (`FUNCTION_LANGS=c,py`; use the submission language ids: `py`, not `py3`). In these languages the student submits ONLY the function, and the `main` comes from `scripts/<lang>/compile.sh`. The student's editor (training and the contest module `esqueletos`) opens **empty** in these languages: the code skeleton has a `main`, and the student would get a Compilation Error for a duplicate main. **The author declares it**: `scripts/<lang>/compile.sh` alone is not enough, because the same slot also serves for a ban and for OpenMP/MPI, where the student writes the full program. `moj fn` and the "Function submission" template of the web editor write the line; in the editor, it is the **Function submission** field of the Limits tab; in the CLI, `moj edit` → 8 (conf) → 10. The validation rejects a listed language without `scripts/<lang>/compile.sh` and warns about a driver that is not in the list. The servable json carries it as `function_langs`. The judge does not read it, and it is not in the tl-checksum (no recalibration) | 0 |
 | `TLOVERRIDE[<lang>]` / `TLOVERRIDE[default]` | no override | **the author forces the TL** (seconds, per language + default). Calibration continues to run (and its history stays visible), but the FINAL value — in judging (the judge applies it AFTER the `TLMOD`, so it wins over everything) and in EACH display (training, contest, TL sheet of the contest, `/problems/tl`) — is `TLOVERRIDE[lang] // TLOVERRIDE[default] // calibrado[lang]`. Only a literal numeric value (`TLOVERRIDE[java]=2.5`); the server reads it with grep and never runs the conf. ⚠ **Use `TLOVERRIDE[py]`, never `py3`/`py2`.** These are LEGACY keys: the server normalizes them to `py` for display, and the judge does too (since 2026-08-24). Before that date, a `TLOVERRIDE[py3]` was DISPLAYED but not USED IN JUDGING. **Problem management** (Dashboard, editor, `/problems/{get,status,calib,tl}`) also shows the effective value — with a ⚡ badge and the calibrated value next to it. The times on the calibration cards continue to be the MEASUREMENT, because calibration ignores the override on purpose. ⚠ A change to the override changes the tl-checksum ⇒ it starts a recalibration (harmless — the override wins anyway) | 0 |
+
+The three `STOPWHEN_*` and the number of tests go to the served json (`stop_when`, `tests`). In an **ICPC**
+contest only the first failure matters, and the contest 🏁 Home warns about a problem that keeps running after it
+(TCP 2026: a problem with 214 tests and `STOPWHEN_TLE=n` took up to 4 minutes to give TLE).
 
 The column "Use today" counts in how many of the 453 `conf` files of the archive the key appears. A zero
 does not mean that the key does not work. It means that the default is correct for almost all
@@ -549,6 +552,20 @@ if nobody tried). Do not look for a difficulty field to fill in.
 ### `tl` and `tl.<host>`
 
 **You do not write these files.** Calibration makes them, on the judge. See section 10.
+
+Each one has the two halves of the table, one for each time-limit method ("Time-limit methods", section 10):
+
+```
+#Generated by calibreitor on juiz1 (…)
+TL[cpp]=.3035
+TL[py]=1.7750
+TL[default]=.3035
+# Kattis 2025-09: o menor múltiplo de r >= a x pior AC, por linguagem (a=2.0 r=1.0); default = o menor
+declare -A TLKATTIS
+TLKATTIS[cpp]=1
+TLKATTIS[py]=3
+TLKATTIS[default]=1
+```
 
 ## 5. `.moj-meta.json`: the problem metadata
 
@@ -838,15 +855,18 @@ that the student actually uses, with the statement already in HTML.
 
 **You do not write the time limit by hand in the package.** It is **measured**.
 
-A judge downloads the package, runs each solution of `sols/good/`, takes the worst time of each
-language, multiplies it by `TLMOD[calibrafactor]` (1.35 by default) and reports the result to the
-server. The result goes into `run/tl/<id>.json`, stored **per machine**:
+A judge downloads the package, runs each solution of `sols/good/`, takes the worst time of an accepted
+test of each language and calculates the time limit by the **two methods** (below). The result goes to
+the server and into `run/tl/<id>.json`, stored **per machine** (`tl` = MOJ method, `tl_kattis` = Kattis
+method):
 
 ```json
-{ "id": "apc#ajude_simplificado", "checksum": "df7f628e84bfc6c3", "updated_at": 1783534737,
+{ "id": "apc#ajude_simplificado", "checksum": "df7f628e84bfc6c3", "updated_at": 1783534737, "method": "moj",
   "hosts": {
     "cpu1": { "tl": { "c": ".0335", "cpp": ".0335", "java": ".3710", "py": ".1685",
-                      "default": ".0335" }, "at": 1783534737 },
+                      "default": ".0335" },
+              "tl_kattis": { "c": "1", "cpp": "1", "java": "1", "py": "1", "default": "1" },
+              "at": 1783534737, "pkg_version": "…" },
     "cpu2": { "tl": { "…": "…" }, "at": 1783534733 } } }
 ```
 
@@ -855,13 +875,84 @@ submission is not rejected because it went to a slower judge. A language gets a 
 `good` solution in that language was **accepted** on a judge. Without a time limit, the language is not
 available.
 
+**Identical judges judge with the same time limit.** Each machine has a hardware class: the processor,
+the number of CPUs and the memory. When the server hands out a submission, it also sends the largest
+time limit across the machines in the class of the judge. The judge uses the larger of this value and
+its own measurement. Thus, the verdict does not depend on which identical judge got the submission. The
+measurement stays per machine, and the editor shows the one of each judge.
+
 Calibration runs **one test at a time**. In a parallel problem, each test runs with the **k CPUs** of
 `CPUNEEDED` — exactly the way in which judging runs each test (this is why the TL for k=2 is not valid
 for k=4, and a change to the key recalibrates).
 
+Each solution runs one test at a time, but **solutions of the same type run in parallel** when the judge
+has free CPUs and no submission waits in the queue. Each solution gets its own group of CPUs. The `good`
+solutions run first (the time limit comes from them), then the `pass`, `slow` and `wrong` ones. The result
+and the log are the same as in a serial calibration; only the wait is shorter.
+
 The explicit "Calibrate" (editor, `moj calibrate`, publish) runs **all** the solutions. The on-demand
 calibration, which a judge does automatically at the first submission of a new package, runs **only the
 `good` solutions** (it is fast on purpose). After it, the other categories show "without result".
+
+### Time-limit methods: MOJ and Kattis
+
+The time limit comes from ONE value: **W**, the worst time of an accepted test among the `good` solutions
+of each language. With it, calibration calculates the time limit by the **two methods, every time**, and
+the `conf` selects the one that applies (`TLMETHOD`):
+
+| | MOJ (`TLMETHOD=moj`, the default) | Kattis (`TLMETHOD=kattis`) |
+|---|---|---|
+| Per language | `calibrafactor` (1.35) × W + 0.02 s | the smallest multiple of `KATTIS_TIME_RESOLUTION` (1 s) that is ≥ `KATTIS_AC_TO_TIME_LIMIT` (2.0) × W |
+| `default` (language without a `good`) | the smallest of the languages | the smallest of the languages |
+| The `slow` solution | TLE on at least 1 test | TLE on at least 1 test by `KATTIS_TIME_LIMIT_TO_TLE` (1.5) × the time limit |
+| The `good` solution | accepted within the time limit | accepted, and `KATTIS_AC_TO_TIME_LIMIT` × its time fits in the time limit |
+
+Example, with the `good` in C++ at 0.21 s and the one in Python at 1.30 s: MOJ gives C++ 0.30 s and
+Python 1.78 s; Kattis gives C++ 1 s (2 × 0.21 = 0.42, rounded up) and Python 3 s (2 × 1.30 = 2.60).
+
+The Kattis method is the one of the 2025-09 spec ("Problem timing"), with two differences:
+
+- **it is per language**, like everything in MOJ (in the spec, the problem has ONE time limit);
+- a margin violation (a `slow` that does not exceed 1.5 × the time limit) **blocks nothing**: it shows
+  as ≈ in the solution check (the spec would reject the package).
+
+These apply over both methods: `TLMOD[<lang>.sum|.mult]`, the tolerance (`drift`) and `TLOVERRIDE`,
+which is **final** (the explicit `time_limit` of the spec). With `sum`/`mult`, the Kattis time limit is
+no longer a multiple of the resolution.
+
+**A change of method does not require recalibration.** The `TLMETHOD` line is outside the two
+`tl-checksum` stamps, so the time limit does not disappear from the contest at the change. The server
+puts the method in the job when it gives the job to the judge (`tl_method`), and the judge uses the
+correct half of the table. In a full calibration, the `pass`/`slow`/`wrong` solutions are judged **by
+the two methods** at once (the test runs up to the time limit of the other method and up to 1.5 × the
+Kattis one, with a 30 s ceiling), and the editor shows both: the check by the method of the `conf` and a
+chip with the other one ("if you switch"). If the problem was calibrated before the two methods existed
+(no Kattis half), a change to `kattis` requests **one full calibration** at once, and the Kattis time
+limit is served only after it — never the MOJ one in its place. Exception: the server writes the
+`conf` with one final `\n` and no trailing blanks. A `conf` that came by upload with another ending
+changes the stamp at the first save, and that save requests a recalibration, as any `conf` edit does.
+
+> With the default resolution (1 s), almost every problem of the archive (time limits from 0.03 s to
+> 0.5 s in MOJ) gets exactly 1 s in Kattis. Many `slow` solutions that give TLE at 0.3 s today pass at
+> 1 s, and their Kattis chip shows ✗. This is expected, because Kattis requires really slow solutions.
+> For a finer time limit, use `KATTIS_TIME_RESOLUTION=0.1`.
+
+**Time-limit simulation and suggestion.** After the calibration, the server simulates the time limit in other
+settings with the times that the calibration measured. Nothing runs again. In MOJ, the simulation changes the
+factor (`TLMOD[calibrafactor]`); in Kattis, the resolution (`KATTIS_TIME_RESOLUTION`), with the multiplier and
+the margin of the `conf`. Each setting lists the solutions that would get the wrong verdict: a `good` or `pass`
+above the time limit, or a `slow` that does not go above it (in Kattis, above b × the time limit). `TLMOD` and
+`TLOVERRIDE` apply as in judging. A test that died at the calibration time ceiling before it could decide is "not
+measured", and it does not fail the setting. The simulation also suggests the best setting for each method:
+
+- **MOJ:** the current factor, if it keeps everything right; if not, 1.35; if not, the middle of the range of
+  factors that keep everything right. Without a range, it is a conflict: the `pass` needs more time than the
+  `slow` takes.
+- **Kattis:** the largest resolution that keeps everything right; if not, a multiplier that works with the
+  resolution of the `conf`; if not, the largest `slow` margin that works; if not, a conflict.
+
+The Limits tab of the editor shows the tables and the suggestions, and the **apply** button fills in the fields.
+`moj calib` shows the same. Saving writes the `conf`: a new factor or new Kattis parameters recalibrate.
 
 ### Solutions: does each one do what its category requires?
 
@@ -873,7 +964,7 @@ states:
 | State | When |
 |---|---|
 | ✓ **as expected** | the solution did exactly what its category requires (table of the `sols/` section) |
-| ≈ **as expected, other reason** | it did what its category requires, but not in the typical way: `wrong` rejected only by TLE/MLE/RE (no WA); `slow` with TLE, but also with WA/RE in other tests; `good` with TLE and `ALLOWTLEDURINGCALIBRATION=y` |
+| ≈ **as expected, other reason** | it did what its category requires, but not in the typical way: `wrong` rejected only by TLE/MLE/RE (no WA); `slow` with TLE, but also with WA/RE in other tests; `good` with TLE and `ALLOWTLEDURINGCALIBRATION=y`. In the **Kattis** method: `slow` with TLE, but below `KATTIS_TIME_LIMIT_TO_TLE` × the time limit (or the test stopped at the 30 s ceiling before that); `good` accepted, but without the `KATTIS_AC_TO_TIME_LIMIT` × headroom (only possible with `TLOVERRIDE`) |
 | ✗ **diverges** | it did not: `good`/`pass` rejected **or slower than the effective time limit** (e.g., `TLOVERRIDE` below the measured time — in judging it would get TLE); `slow` without TLE; `wrong` accepted |
 | ✗ **did not run** | CE, UE (error of the grader/judge), language not available on the judge, or no verdict: the solution did not exercise the tests, so it proves nothing |
 
@@ -888,9 +979,16 @@ In a scored problem (`tests/score`) the string has the verdict of the worst test
 groups (`Time Limit Exceeded,30p. Pontos | …`; until 2026-09-24 it was always `Wrong,Np`). In both
 cases the decision looks at the tests: a `slow` with TLE is ✓.
 
+The check uses the time-limit method of the `conf`; the editor and `moj calib` also show the other
+method. A calibration made before the two methods existed has no check by the other method: it shows
+"· not measured" (and, if the `conf` starts to use that method, the solution counts as "without result"
+until a recalibration).
+
 The result is valid for the **version** of the package that was calibrated. If you save something that
 calibration exercises (`sols/`, `tests/`, `scripts/`, `conf`), the solutions are marked **"not checked
-since the last edit"** until the next calibration. A save of the statement does not mark them.
+since the last edit"** until the next calibration. A save of the statement does not mark them. A change
+of only `TLMETHOD` (or `SAMPLE`, or `FUNCTION_LANGS`) does not change the version: the check is
+**recalculated** at once, by the new method.
 
 
 ### The checksum, and what starts a recalibration
@@ -902,7 +1000,7 @@ package in cache?"*.
 | | `tl_checksum` (narrow) | `pkg_version` (wide) |
 |---|---|---|
 | How it is calculated | `tl-checksum.sh <pkg>` | `tl-checksum.sh --all-sols <pkg>` |
-| Covers | `conf` (except the line `SAMPLE`), `tests/input/*`, `tests/output/*` (not empty), `tests/score`, `sols/good/*`, `scripts/*` (content **and** execute bit) **except `scripts/validator.cpp`** | all that the narrow stamp covers **+ `sols/pass`, `sols/slow`, `sols/wrong`, `sols/upcoming` + `scripts/validator.cpp`** |
+| Covers | `conf` (except the lines `SAMPLE`, `FUNCTION_LANGS` and `TLMETHOD`), `tests/input/*`, `tests/output/*` (not empty), `tests/score`, `sols/good/*`, `scripts/*` (content **and** execute bit) **except `scripts/validator.cpp`** | all that the narrow stamp covers **+ `sols/pass`, `sols/slow`, `sols/wrong`, `sols/upcoming` + `scripts/validator.cpp`** |
 | What it is for | it ties the **TL** to the package: it is the `checksum` of `run/tl/<id>.json`, the one of the owners index and the one that `/contest/problems` compares | it is the **key of the judge cache** and the identity of a calibration: `/judge/package-meta` returns it as `checksum`, and the agent downloads again when it changes |
 
 Neither of the two covers `docs/enunciado.*`, `tags`, `author` or `.moj-meta.json`
