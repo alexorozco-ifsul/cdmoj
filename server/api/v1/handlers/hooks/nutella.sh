@@ -9,7 +9,7 @@
 # 401 OPACO p/ tudo que não autentica — contest inexistente, sem segredo, assinatura errada, evento
 # velho: a rota é pública e não pode servir de oráculo de "este contest existe / tem integração".
 # Só DEPOIS da assinatura: `image` fora das sedes do contest = 404; evento que não é alerta = 200
-# `ignored`. Corpo > 64 KiB = 413. Repetição (o serviço tenta 3 vezes; alguém reenviando um corpo
+# `ignored`. Corpo > 64 KiB = 413 — para QUALQUER contest, antes de olhar se ele existe. Repetição (o serviço tenta 3 vezes; alguém reenviando um corpo
 # capturado) = 200 `duplicate`, sem efeito.
 #
 #   alert.raised / alert.dismissed  →  contests/<c>/var/nutella-events.log (JSONL):
@@ -22,16 +22,21 @@
 #   aviso — o painel Máquinas › Anomalias mostra tudo.
 [[ "${REQUEST_METHOD:-GET}" == POST ]] || fail 405 "POST only" "method_not_allowed"
 _hk_deny(){ fail 401 "unauthorized" "unauthorized"; }
+# o TETO vem ANTES de olhar o contest: a resposta ao corpo grande é a mesma p/ qualquer contest. A leitura é
+# LIMITADA (head -c) — um Content-Length mentiroso não estica o arquivo. Antes do 413 o resto do corpo é consumido
+# (até 4 MiB): o fcgiwrap entrega o corpo ao script, e o script que sai sem lê-lo vira 502 no nginx.
+_hk_big(){ head -c 4194304 >/dev/null 2>&1; fail 413 "payload too large" "too_large"; }
+_cl="${CONTENT_LENGTH:-0}"; [[ "$_cl" =~ ^[0-9]+$ ]] || _cl=0
+(( _cl <= 65536 )) || _hk_big
+bf="$(mktemp)"
+trap 'rm -f "$bf"' EXIT
+head -c 65537 > "$bf"
+[[ "$(stat -c %s "$bf" 2>/dev/null || echo 0)" -le 65536 ]] || _hk_big
 contest="$(param contest)"
 { [[ -n "$contest" ]] && valid_id "$contest" && [[ -d "$CONTESTSDIR/$contest" ]]; } || _hk_deny
 cdir="$CONTESTSDIR/$contest"
 secf="$cdir/secrets/nutella-webhook.secret"
 [[ -s "$secf" ]] || _hk_deny
-_cl="${CONTENT_LENGTH:-0}"; [[ "$_cl" =~ ^[0-9]+$ ]] || _cl=0
-(( _cl <= 65536 )) || fail 413 "payload too large" "too_large"
-bf="$(read_body_file)"
-trap 'rm -f "$bf"' EXIT
-[[ "$(stat -c %s "$bf" 2>/dev/null || echo 0)" -le 65536 ]] || fail 413 "payload too large" "too_large"
 
 python3 -c '
 import hashlib, hmac, sys

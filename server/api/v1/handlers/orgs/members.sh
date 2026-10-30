@@ -1,15 +1,17 @@
 # /orgs/members  (Bearer)
 #   GET  ?name=<org>  -> {name, members, admins, mine, can_manage, implicit}
 #   POST {name, add?, remove?, admins_add?, admins_remove?} -> idem
-# Só admin da org (ou admin global) gerencia. MEMBROS escrevem em qualquer problema da org; ADMINS
-# também gerem a trava de público. O criador nunca perde membro/admin. Org implícita não tem gestão.
+# Só admin da org (ou SUPERADMIN) gerencia (org_can_manage). MEMBROS escrevem em qualquer problema da
+# org; ADMINS também gerem a trava de público. O criador nunca perde membro/admin. Org implícita não
+# tem gestão. A visibilidade (ver nome/roster) é mais larga: membro da org OU admin DO TREINO
+# (is_platform_admin — metadados, não concede gestão).
 require_auth
 source "$_DIR/lib/orgs.sh"
 if [[ "$REQUEST_METHOD" == GET ]]; then name="$(param name)"
 else body="$(read_body)"; jq -e . >/dev/null 2>&1 <<<"$body" || fail 400 "Invalid JSON body" "bad_json"; name="$(jq -r '.name // empty' <<<"$body")"; fi
 [[ -n "$name" ]] || fail 400 "Missing name" "name_missing"
 org_exists "$name" || fail 404 "Org não encontrada" "not_found"
-{ org_is_member "$name" "$SESSION_LOGIN" || { declare -F is_admin >/dev/null && is_admin; }; } \
+{ org_is_member "$name" "$SESSION_LOGIN" || { declare -F is_platform_admin >/dev/null && is_platform_admin; }; } \
   || fail 404 "Org não encontrada" "not_found"   # não vaza org alheia
 
 cb="$(jq -r --arg n "$name" '.[$n].created_by // ""' "$ORGS_REGISTRY" 2>/dev/null)"
@@ -25,10 +27,17 @@ if [[ "$REQUEST_METHOD" == POST ]]; then
   org_require_valid_logins "$add"
   org_require_valid_logins "$aadd"
   # remove = sai da org (membro e admin); admins_remove = rebaixa a membro. Criador é blindado.
-  newm="$(jq -cn --argjson c "$(org_members "$name")" --argjson a "$add" --argjson aa "$aadd" --argjson r "$rem" --arg cb "$cb" '((($c+$a+$aa)-$r)+[$cb])|unique')"
-  newa="$(jq -cn --argjson c "$(org_admins "$name")"  --argjson aa "$aadd" --argjson ar "$arem" --argjson r "$rem" --arg cb "$cb" '(((($c+$aa)-$ar)-$r)+[$cb])|unique')"
-  org_set_members "$name" "$newm"; org_set_admins "$name" "$newa"
-  audit_log "org-members" "name=$name by=$SESSION_LOGIN"
+  # o ANTES é lido UMA vez: monta o novo E o delta do audit (o delta é exatamente o que foi gravado)
+  oldm="$(org_members "$name")"; olda="$(org_admins "$name")"
+  newm="$(jq -cn --argjson c "$oldm" --argjson a "$add" --argjson aa "$aadd" --argjson r "$rem" --arg cb "$cb" '((($c+$a+$aa)-$r)+[$cb])|unique')"
+  newa="$(jq -cn --argjson c "$olda"  --argjson aa "$aadd" --argjson ar "$arem" --argjson r "$rem" --arg cb "$cb" '(((($c+$aa)-$ar)-$r)+[$cb])|unique')"
+  # o audit só registra o que foi GRAVADO (um delta de quem não entrou seria trilha falsa)
+  { org_set_members "$name" "$newm" && org_set_admins "$name" "$newa"; } || fail 500 "Falha ao gravar a org" "write_fail"
+  # o ANTES/DEPOIS vai junto: a linha diz QUEM entrou/saiu
+  audit_log "org-members" "name=$name by=$SESSION_LOGIN $(jq -rn --argjson om "$oldm" --argjson nm "$newm" \
+    --argjson oa "$olda" --argjson na "$newa" '
+    "members:+[" + (($nm - $om)|join(",")) + "] -[" + (($om - $nm)|join(",")) + "]"
+    + " admins:+[" + (($na - $oa)|join(",")) + "] -[" + (($oa - $na)|join(",")) + "]"')"
 fi
 cm=false; org_can_manage "$name" "$SESSION_LOGIN" && cm=true
 ok_json '{name:$n, members:$m, admins:$a, mine:($cb==$me), can_manage:$cm, implicit:$im}' \

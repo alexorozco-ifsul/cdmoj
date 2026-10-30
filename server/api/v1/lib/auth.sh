@@ -88,6 +88,30 @@ require_auth_contest() {  # require_auth_contest <contest>
 
 # papéis por substring no username (convenção do MOJ)
 is_admin(){ [[ "$SESSION_LOGIN" == *.admin ]]; }
+# is_platform_admin — ".admin DO TREINO" (metadados/visibilidade do acervo: ver orgs/get.sh,
+# orgs/members.sh GET, judge/list.sh). `is_admin` sozinho é só o sufixo e vale p/ o `<criador>.admin` LOCAL de
+# QUALQUER contest (papel é isento do host-lock); o acervo do treino se amarra a `SESSION_CONTEST==treino`.
+# ⚠ NÃO é "pode gerenciar" — gestão real (org_can_manage, coll_can_manage) é só dono OU `is_platform_superadmin`,
+# mesmo dentro do treino. Autoria mora no treino — o choke de CONTEST é o router (segmentos problems/orgs); isto é
+# a trava gêmea de lib.
+is_platform_admin(){ [[ "${SESSION_CONTEST:-}" == treino ]] && is_admin; }
+# author_treino_record <contest> <login> <rota> — trilha da RECUSA cross-contest em /problems|/orgs
+# (router.sh), teto 1 linha/5min por login+rota (molde do team-host-block em lib/team-host.sh — uma
+# rajada de pedidos não enche o admin-audit.log). Custo zero no caminho feliz: só chamada no
+# caminho de recusa. `SESSION_LOGIN=…` no prefixo do comando faz o `audit_log` (que sempre lê
+# $SESSION_LOGIN) atribuir a linha ao login de verdade, mesmo antes de qualquer `load_session` rodar.
+author_treino_record(){
+  local c="$1" l="$2" route="$3" d f now last=0
+  d="${RUNDIR:-}/author-guard"; [[ -n "${RUNDIR:-}" ]] || return 0
+  mkdir -p "$d" 2>/dev/null
+  f="$d/$(printf '%s_%s' "$l" "$route" | tr -c 'A-Za-z0-9._-' '_')"
+  [[ -f "$f" ]] && read -r last < "$f" 2>/dev/null
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  now="$EPOCHSECONDS"
+  (( now - last >= 300 )) || return 0
+  printf '%s' "$now" > "$f" 2>/dev/null
+  SESSION_LOGIN="$l" audit_log "author-treino-block" "contest=$c route=$route"
+}
 # SUPER-ADMINS (2026-09-15): lista `SUPERADMINS` no conf do TREINO (logins separados por espaço; só
 # quem tem o servidor edita — bootstrap deliberado, sem UI). É `.admin` E está na lista. Poderes:
 # vê/remove/duplica contest de QUALQUER dono na aba Contests do painel do treino (o `.admin` comum
@@ -98,6 +122,22 @@ superadmin_login(){ # <login>
   [[ " $list " == *" $l "* ]]
 }
 is_superadmin(){ superadmin_login "$SESSION_LOGIN"; }
+# is_platform_superadmin — SUPERADMIN numa sessão DO TREINO. É o atalho global de GESTÃO do acervo
+# (org_can_manage/coll_can_manage) e a flag `can_manage` que a UI mostra (orgs/list, problems/collections):
+# o mesmo predicado nas duas pontas, senão a tela oferece o botão que a API recusa. O `is_superadmin`
+# sozinho só confere o NOME na lista, e numa sessão de contest o `.admin` é conta LOCAL que o criador batiza
+# como quiser (ver require_treino_superadmin) — a amarração ao treino é o que prova.
+is_platform_superadmin(){ is_platform_admin && is_superadmin; }
+# treino_role_write_ok <contest> <login> — pode a sessão criar/remover ou trocar a SENHA de <login> em <contest>?
+# Conta de PAPEL do TREINO (o super-admin incluso) só pelo super-admin numa sessão do treino, ou pela própria conta.
+# Fora de requisição autenticada (bin/, daemons, cadastro e recuperação pelo Telegram, que é o próprio dono) não se
+# aplica. Cumprida no CAMINHO DE ESCRITA (user_create e account_merge que grava `.password`, lib/users.sh) e checada
+# antes nas rotas, que dizem o 403.
+treino_role_write_ok(){
+  [[ "$1" == treino ]] && is_reserved_role_login "$2" && [[ -n "${SESSION_LOGIN:-}" && "$2" != "$SESSION_LOGIN" ]] \
+    || return 0
+  is_platform_superadmin
+}
 # .cjudge (juiz-chefe) HERDA os poderes de juiz; .admin também é juiz.
 is_judge(){ [[ "$SESSION_LOGIN" == *.judge || "$SESSION_LOGIN" == *.cjudge || "$SESSION_LOGIN" == *.admin ]]; }
 is_chief(){ [[ "$SESSION_LOGIN" == *.cjudge ]]; }
@@ -184,6 +224,28 @@ client_ip(){
   printf '%s' "$ip" | tr -cd '0-9a-fA-F.:'
 }
 
+# login_refused_log <contest> <login-digitado> <código> <http> — a TENTATIVA DE LOGIN RECUSADA (senha errada, login
+# fechado ou ainda não aberto, gate de navegador, inscrição, endereço errado…) vai a var/login-refused.log do
+# contest: epoch \t login \t ip \t ua_b64 \t código \t http. O login só entra se a conta EXISTE no contest (ou na
+# fonte USERS_FROM) — senão `?`: o que se digita no campo de login às vezes é a senha. Ao passar de LOGIN_REFUSED_MAX
+# (5 MiB) o arquivo GIRA para `.1` (uma geração guardada; o disco fica em 2× o teto) e a gravação segue no novo — um
+# laço de tentativas não enche o disco nem cala a trilha. Leitor (só o atual): /contest/admin/access-log (`refused`)
+# e, no treino, o /treino/admin/activity-log.
+login_refused_log(){
+  local c="$1" u="${2:-}" code="${3:-}" http="${4:-}" f sz who="?" src ua
+  valid_id "$c" && [[ -d "$CONTESTSDIR/$c/var" ]] || return 0
+  f="$CONTESTSDIR/$c/var/login-refused.log"
+  if [[ -f "$f" ]]; then sz="$(stat -c %s "$f" 2>/dev/null)"
+    (( ${sz:-0} < ${LOGIN_REFUSED_MAX:-5242880} )) || mv -f "$f" "$f.1" 2>/dev/null || true; fi
+  if [[ -n "$u" ]] && valid_id "$u"; then
+    if [[ -f "$CONTESTSDIR/$c/users/$u/account.json" ]]; then who="$u"
+    else src="$(_users_source "$c")"; [[ "$src" != "$c" && -f "$CONTESTSDIR/$src/users/$u/account.json" ]] && who="$u"; fi
+  fi
+  ua="$(printf '%s' "${HTTP_USER_AGENT:-}" | head -c 512 | base64 -w0 2>/dev/null)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$who" "$(client_ip)" "$ua" "${code//[^A-Za-z0-9_]/}" "${http//[^0-9]/}" \
+    >> "$f" 2>/dev/null || true
+}
+
 # create_session <contest> <login> <name> [actor] -> ecoa o token (uuid)
 # <actor> só é gravado quando a sessão é de um TIME (o membro que autenticou) — ver
 # SESSION_ACTOR acima e o alias em handlers/auth/login.sh.
@@ -222,7 +284,8 @@ remove_contest_sessions(){
   printf '%s' "${n:-0}"
 }
 # remove_contest_sessions_v <contest> [login…] -> uma linha por sessão removida:
-# token \t login \t mkey  (p/ quem precisa registrar o evento — logout-user, logout-mismatch)
+# token \t login \t mkey  (p/ quem precisa registrar o evento — logout-user, logout-mismatch).
+# `RCS_KEEP_TOKEN=<token>` no ambiente poupa essa sessão (troca da própria senha: as OUTRAS caem).
 #
 # COM login: PRÉ-FILTRO POR TEXTO — UM `grep` sobre o diretório inteiro acha os arquivos com a linha
 # `LOGIN=<login>` (a forma que o create_session grava, `%q`, e a crua), e só ESSES são lidos por
@@ -242,6 +305,7 @@ remove_contest_sessions_v(){
     CONTEST=""; LOGIN=""; MKEY=""; source "$f" 2>/dev/null
     [[ "$CONTEST" == "$c" ]] || continue
     if (( ${#want[@]} )); then [[ -n "$LOGIN" && -n "${W[$LOGIN]:-}" ]] || continue; fi
+    [[ -n "${RCS_KEEP_TOKEN:-}" && "${f##*/}" == "$RCS_KEEP_TOKEN" ]] && continue   # a sessão de quem pediu fica
     rm -f "$f" && printf '%s\t%s\t%s\n' "${f##*/}" "$LOGIN" "$MKEY"
   done < <(if (( ${#want[@]} )); then
              find "$SESSIONDIR" -maxdepth 1 -type f -print0 2>/dev/null | xargs -0 -r grep -lxZF "${pats[@]}" 2>/dev/null
@@ -249,6 +313,26 @@ remove_contest_sessions_v(){
              sess_files_of "$c"
            fi)
   return 0
+}
+
+# remove_account_sessions <fonte> <login> -> nº de sessões removidas: TODAS as da conta <login> de <fonte> — no
+# contest <fonte> e nos que herdam os usuários dela (USERS_FROM), em que ela é o LOGIN ou o ATOR (time por alias).
+# A população do rename_contest_sessions, com o pré-filtro por texto do remove_contest_sessions_v.
+# `RCS_KEEP_TOKEN=<token>` poupa a sessão de quem pediu.
+remove_account_sessions(){
+  local src="$1" w="$2" q n=0 f CONTEST LOGIN USERFULLNAME LOGINAT IP UA_B64 MKEY ACTOR
+  [[ -n "$src" && -n "$w" ]] || { printf '0'; return 0; }
+  printf -v q '%q' "$w"
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" ]] || continue
+    CONTEST=""; LOGIN=""; ACTOR=""; source "$f" 2>/dev/null
+    [[ -n "$CONTEST" && ( "$LOGIN" == "$w" || "$ACTOR" == "$w" ) ]] || continue
+    [[ "$(_users_source "$CONTEST")" == "$src" ]] || continue
+    [[ -n "${RCS_KEEP_TOKEN:-}" && "${f##*/}" == "$RCS_KEEP_TOKEN" ]] && continue
+    rm -f "$f" && ((n++))
+  done < <(find "$SESSIONDIR" -maxdepth 1 -type f -print0 2>/dev/null \
+             | xargs -0 -r grep -lxZF -e "LOGIN=$q" -e "LOGIN=$w" -e "ACTOR=$q" -e "ACTOR=$w" 2>/dev/null)
+  printf '%s' "$n"
 }
 
 # rename_contest_sessions <contest> <old> <new> -> ecoa o nº de sessões reescritas.

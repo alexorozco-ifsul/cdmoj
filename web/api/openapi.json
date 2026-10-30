@@ -3,7 +3,7 @@
   "info": {
     "title": "MOJ API",
     "version": "v1",
-    "description": "API REST do MOJ (Melhor Online Judge). Backend bash atrás de nginx+fcgiwrap. Auth via `Authorization: Bearer <token>`. Histórico e placar são TXT; o resto é JSON com envelope `{success:true,…}` ou `{success:false,error:{message,code}}`. Horários em EPOCH. Aviso de CLI desatualizada: resposta a uma CLI (UA `moj[-tool]/<build>`) leva `X-Moj-Cli-Status: current|outdated|dev|legacy` e `X-Moj-Cli-Latest: <build servida>`; CLI antiga sem marcador (curl/* + Bearer) recebe a dica \"rode moj update\" anexada à error.message."
+    "description": "API REST do MOJ (Melhor Online Judge). Backend bash atrás de nginx+fcgiwrap. Auth via `Authorization: Bearer <token>`. Histórico e placar são TXT; o resto é JSON com envelope `{success:true,…}` ou `{success:false,error:{message,code}}`. Horários em EPOCH. Aviso de CLI desatualizada: resposta a uma CLI (UA `moj[-tool]/<build>`) leva `X-Moj-Cli-Status: current|outdated|dev|legacy` e `X-Moj-Cli-Latest: <build servida>`; CLI antiga sem marcador (curl/* + Bearer) recebe a dica \"rode moj update\" anexada à error.message. AUTORIA É ATIVIDADE DO TREINO (28/10/2026): toda rota /problems/* e /orgs/* exige sessão DO TREINO — 403 `author_treino_only` para sessão de qualquer outro contest, mesmo um papel (`.admin` etc., isento do team-host); dentro do treino, gerir org/coleção ALHEIA (não a própria) exige ser SUPERADMIN numa sessão do treino (`is_platform_superadmin`), nunca só o sufixo `.admin`; a flag `can_manage` das listagens usa o mesmo predicado."
   },
   "servers": [
     {
@@ -304,7 +304,7 @@
             "description": "host_required — conta de TIME de um contest (≠ treino) fora do subdomínio do contest (IP cru, site principal ou outro subdomínio); error.url = o endereço certo (https://<id>.<host>/contest/), error.contest. Também login_disabled, login_not_open, not_registered…"
           }
         },
-        "description": "Em contest (≠ treino), a resposta inclui server_utc, offline_pubkey_pem e beacon (kit da submissão offline do moj-comp). TIME SÓ PELO SUBDOMÍNIO (lib/team-host.sh): o time entra só pelo subdomínio do contest, e QUALQUER requisição com o token de um time fora dele responde 403 host_required (o logout sempre passa). Papel, treino e id que não vira rótulo de DNS ficam de fora. TEAM_HOST_LOCK (1 padrão | observe | 0) e o override run/team-host-lock (0 | observe)."
+        "description": "Em contest (≠ treino), a resposta inclui server_utc, offline_pubkey_pem e beacon (kit da submissão offline do moj-comp). Toda recusa depois das credenciais lidas vai a var/login-refused.log do contest (código, IP, navegador; login só se a conta existe) — ver /contest/admin/access-log. TIME SÓ PELO SUBDOMÍNIO (lib/team-host.sh): o time entra só pelo subdomínio do contest, e QUALQUER requisição com o token de um time fora dele responde 403 host_required (o logout sempre passa). Papel, treino e id que não vira rótulo de DNS ficam de fora. TEAM_HOST_LOCK (1 padrão | observe | 0) e o override run/team-host-lock (0 | observe)."
       }
     },
     "/auth/status": {
@@ -457,7 +457,7 @@
         "tags": [
           "treino"
         ],
-        "summary": "Resolvidos/tentados de um usuário",
+        "summary": "Resolvidos/tentados de um usuário — sem ?user = o login de uma sessão DO TREINO (outro contest: 400 user_missing); problema PRIVADO sai da lista, menos p/ o próprio dono do history ; perfil privado = listas vazias p/ quem não é o dono nem admin do treino",
         "parameters": [
           {
             "name": "user",
@@ -470,6 +470,9 @@
         "responses": {
           "200": {
             "description": "{solved:[ids],attempted:[ids]}"
+          },
+          "503": {
+            "description": "index_unavailable: índice de problemas ilegível (só p/ quem não é o dono do history — falha fechada)"
           }
         }
       }
@@ -510,7 +513,7 @@
         "tags": [
           "treino"
         ],
-        "summary": "Histórico completo do usuário (TXT)",
+        "summary": "Histórico completo do usuário (TXT) — sem ?user = o login de uma sessão DO TREINO (outro contest: 400 user_missing); linha de problema PRIVADO sai p/ quem não é o dono do history",
         "parameters": [
           {
             "name": "user",
@@ -526,6 +529,9 @@
             "content": {
               "text/plain": {}
             }
+          },
+          "503": {
+            "description": "index_unavailable: índice de problemas ilegível (só p/ quem não é o dono do history — falha fechada)"
           }
         }
       }
@@ -729,12 +735,47 @@
         }
       }
     },
+    "/treino/admin/audit-log": {
+      "get": {
+        "tags": [
+          "treino-admin"
+        ],
+        "summary": "admin-audit.log do treino (sem day: as últimas 1000 linhas), mais recente primeiro. A mesma regra de visibilidade do activity-log (lib/admin-feed.sh): linha de problema privado que o admin não pode ver, de org de que ele não é membro, e delete/org-delete saem; o SUPERADMIN vê tudo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "YYYY-MM-DD"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{day, entries:[{time,admin,action,details}]}"
+          },
+          "400": {
+            "description": "day_invalid"
+          },
+          "403": {
+            "description": "admin_required (sessão do treino de um .admin)"
+          }
+        }
+      }
+    },
     "/treino/admin/activity-log": {
       "get": {
         "tags": [
           "treino-admin"
         ],
-        "summary": "Feed COMPLETO de atividade do treino (login/submit/verdict/read/admin; calib opt-in) com filtros e format=csv (range inteiro p/ análise)",
+        "summary": "Feed COMPLETO de atividade do treino (login/submit/verdict/read/admin; calib opt-in) com filtros e format=csv (range inteiro p/ análise). Leituras da autoria (28/10/2026): pkg-source, pkg-test, pkg-diff, calib-report-view, testrun-report-view. Tentativa de login recusada = kind login, action login-refused (detalhe: código + navegador). Linha que cita problema privado que o admin não pode ver (org#prob em qualquer lugar: id=, from=/to=, submissão e veredicto), org de que não é membro, ou delete/org-delete sai do feed e do CSV (lib/admin-feed.sh; o SUPERADMIN vê tudo; índice ilegível = some toda linha que cita problema ou org).",
         "security": [
           {
             "bearerAuth": []
@@ -2557,7 +2598,7 @@
             "description": "image_unknown — a imagem não é sede deste contest"
           },
           "413": {
-            "description": "too_large — corpo > 64 KiB"
+            "description": "too_large — corpo > 64 KiB; conferido ANTES de olhar o contest (o mesmo 413 p/ contest inexistente); leitura limitada a 64 KiB"
           },
           "422": {
             "description": "mac_invalid"
@@ -3373,7 +3414,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Adicionar usuário",
+        "summary": "Adicionar usuário (auditado: adduser)",
         "security": [
           {
             "bearerAuth": []
@@ -3408,6 +3449,9 @@
         "responses": {
           "200": {
             "description": "{login,password}"
+          },
+          "403": {
+            "description": "superadmin_required: no treino, conta de PAPEL (.admin/.judge/…) só pelo super-admin numa sessão do treino"
           }
         }
       }
@@ -3417,7 +3461,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Trocar senha",
+        "summary": "Trocar senha (auditado: passwd)",
         "security": [
           {
             "bearerAuth": []
@@ -3445,7 +3489,13 @@
         },
         "responses": {
           "200": {
-            "description": "ok"
+            "description": "ok; reset reabilita (tira disabled) e derruba as sessões abertas da conta"
+          },
+          "403": {
+            "description": "superadmin_required: no treino, senha de conta de PAPEL (o super-admin incluso) só pelo super-admin numa sessão do treino"
+          },
+          "409": {
+            "description": "shared_users: contest com USERS_FROM e a conta entra pela senha da fonte (conta LOCAL segue); também overlay de participante (shared_overlay) e senha interna !… (lápide de removido, conta de TIME)"
           }
         }
       }
@@ -3490,7 +3540,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Sincronizar treino",
+        "summary": "Sincroniza o acervo do treino inteiro (ação de PLATAFORMA — SUPER-ADMIN do treino)",
         "security": [
           {
             "bearerAuth": []
@@ -3499,6 +3549,9 @@
         "responses": {
           "200": {
             "description": "ok"
+          },
+          "403": {
+            "description": "sessão fora do treino (auth_contest) ou .admin comum, não super (superadmin_required)"
           }
         }
       }
@@ -3913,7 +3966,10 @@
             "description": "id em uso/reservado"
           },
           "422": {
-            "description": "validação (no_problems = problems[] vazio sem allow_empty)"
+            "description": "validação (no_problems = problems[] vazio sem allow_empty); spec_invalid: o spec não se lê (a guarda de problemas falha FECHADA)"
+          },
+          "404": {
+            "description": "problem_denied: problema (problem_id OU bank_id, no topo ou numa rodada) que o login não pode ver — cc_spec_guard"
           }
         }
       }
@@ -3961,6 +4017,12 @@
           },
           "400": {
             "description": "tar inválido"
+          },
+          "404": {
+            "description": "problem_denied: problema que o login não pode ver (topo ou rodada), sem listar ids — a mesma guarda do create/duplicate"
+          },
+          "503": {
+            "description": "index_unavailable: índice de problemas indisponível"
           }
         }
       }
@@ -4176,7 +4238,7 @@
         "tags": [
           "contest-create"
         ],
-        "summary": "save|delete|rename template (save: template{} do formulário OU from_contest; spec relativizado + whitelist — nunca guarda usuários/senhas/id)",
+        "summary": "save|delete|rename template (save: template{} do formulário OU from_contest; spec relativizado + whitelist — nunca guarda usuários/senhas/id) from_contest segue a regra do export/duplicate (cc_contest_visible_to; senão 404).",
         "requestBody": {
           "required": true,
           "content": {
@@ -4261,7 +4323,7 @@
             "description": "attachment <id>-spec.json"
           },
           "404": {
-            "description": "contest inexistente, sem created-by, ou o login não é dono/admin"
+            "description": "contest inexistente, sem created-by, ou o login não é dono/admin; o dono do contest = arquivo owner, senão o created-by (cc_contest_owner)"
           }
         }
       }
@@ -4319,7 +4381,7 @@
             "description": "mesmo retorno do create"
           },
           "404": {
-            "description": "from inexistente/sem acesso (dono ou admin)"
+            "description": "from inexistente/sem acesso (dono ou admin); problem_denied: a mesma guarda do create (cc_spec_guard); o dono do from = owner › created-by"
           }
         }
       }
@@ -5255,6 +5317,9 @@
         "responses": {
           "200": {
             "description": "{user:{login,password,fullname,email}}"
+          },
+          "403": {
+            "description": "superadmin_required: contest=treino e conta de PAPEL (o super-admin incluso) — só o super-admin numa sessão do treino"
           }
         }
       }
@@ -5264,7 +5329,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Carga de usuários em lote (skip|update; conta privilegiada existente nunca é resetada; fullname = nome do time; univ_short/univ_full/country/region opcionais gravam o .team — carga única de credenciais+time). Nome/escola com ':' = gravado com '∶' e listado em adjusted[]; skipped[].reason = login_invalid|colon (senha/email)|exists|privileged|duplicate|write_failed",
+        "summary": "Carga de usuários em lote (skip|update; conta privilegiada existente nunca é resetada; fullname = nome do time; univ_short/univ_full/country/region opcionais gravam o .team — carga única de credenciais+time). Nome/escola com ':' = gravado com '∶' e listado em adjusted[]; skipped[].reason = login_invalid|colon (senha/email)|exists|privileged|duplicate|write_failed (contest=treino: conta de papel, nova ou existente, sai como skipped privileged p/ quem não é o super-admin)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -5330,6 +5395,9 @@
         "responses": {
           "200": {
             "description": "{created[],updated[],skipped:[{login,reason}],counts}"
+          },
+          "400": {
+            "description": "treino_forbidden: on_existing=update (reset em massa) no treino"
           }
         }
       }
@@ -5369,6 +5437,9 @@
           },
           "409": {
             "description": "não pode remover a si mesmo"
+          },
+          "403": {
+            "description": "superadmin_required: contest=treino e conta de PAPEL — só o super-admin"
           }
         }
       }
@@ -5462,7 +5533,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Log de acessos do contest",
+        "summary": "Log de acessos do contest (logins + alertas) e as tentativas de login RECUSADAS do mesmo período: refused[] = {time, login (vazio = conta inexistente), ip, user_agent, code (o do /auth/login), http}",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -5497,7 +5568,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "login_start 0 = apaga a abertura pr\u00f3pria do login (LOGIN_START_TIME sai do conf). priority = lista-publica|lista-privada|prova (super = 403 priority_forbidden; contest em super = 403 priority_locked — só o super-admin muda, em /treino/admin/contest-priority; outro = 422 priority_invalid), auditada no contest e na trilha do treino. show_editor:false com o módulo esqueletos ligado = 409 module_needs_editor, recusado antes de gravar qualquer campo. Atualiza configurações (auditado; locale = pt|en|es — idioma da interface, do papel impresso e do relatório; outro valor = 422 locale_invalid; tz = fuso IANA da prova, 422 tz_invalid se não existir no zoneinfo e null/vazio volta ao padrão da instalação; judges[] = pool de juízes — hostnames do registro, vazio remove: escalonador ESTRITO, pool offline segura a fila; penalty_minutes int default 20, penalty_verdicts array de wa/tle/mle/rte/ce — editar em prova recomputa o placar; show_log:true grava SHOWLOG=1 explícito — religa o log mesmo em modo icpc)",
+        "summary": "login_start 0 = apaga a abertura pr\u00f3pria do login (LOGIN_START_TIME sai do conf). priority = lista-publica|lista-privada|prova (super = 403 priority_forbidden; contest em super = 403 priority_locked — só o super-admin muda, em /treino/admin/contest-priority; outro = 422 priority_invalid), auditada no contest e na trilha do treino. show_editor:false com o módulo esqueletos ligado = 409 module_needs_editor, recusado antes de gravar qualquer campo. Atualiza configurações (auditado com o valor anterior: CHAVE=antes→depois; locale = pt|en|es — idioma da interface, do papel impresso e do relatório; outro valor = 422 locale_invalid; tz = fuso IANA da prova, 422 tz_invalid se não existir no zoneinfo e null/vazio volta ao padrão da instalação; judges[] = pool de juízes — hostnames do registro, vazio remove: escalonador ESTRITO, pool offline segura a fila; penalty_minutes int default 20, penalty_verdicts array de wa/tle/mle/rte/ce — editar em prova recomputa o placar; show_log:true grava SHOWLOG=1 explícito — religa o log mesmo em modo icpc)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -7512,6 +7583,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "não é membro da org (ou sessão fora do treino: author_treino_only)"
+          },
+          "404": {
+            "description": "não encontrado (nunca distingue 'inexistente' de 'privado alheio')"
           }
         }
       }
@@ -7846,6 +7923,9 @@
         "responses": {
           "200": {
             "description": "{repo,owner}"
+          },
+          "409": {
+            "description": "implicit: org implícita; repo_taken: já existe e não é admin dela; name_is_login: org nova com o nome de um login do treino"
           }
         }
       }
@@ -7929,6 +8009,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "não é membro da org (ou sessão fora do treino: author_treino_only)"
+          },
+          "404": {
+            "description": "não encontrado (nunca distingue 'inexistente' de 'privado alheio')"
           }
         }
       }
@@ -8046,6 +8132,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "não é membro da org (ou sessão fora do treino: author_treino_only)"
+          },
+          "404": {
+            "description": "não encontrado (nunca distingue 'inexistente' de 'privado alheio')"
           }
         }
       }
@@ -8146,6 +8238,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "não é membro da org (ou sessão fora do treino: author_treino_only)"
+          },
+          "404": {
+            "description": "não encontrado (nunca distingue 'inexistente' de 'privado alheio')"
           }
         }
       }
@@ -8309,6 +8407,12 @@
           },
           "409": {
             "description": "stale_rev: o problema mudou depois do base_rev — {error:{code:\"stale_rev\",message,current_rev,changed_by,changed_at}}; nada gravado"
+          },
+          "403": {
+            "description": "não é membro da org (ou sessão fora do treino: author_treino_only)"
+          },
+          "404": {
+            "description": "não encontrado (nunca distingue 'inexistente' de 'privado alheio')"
           }
         },
         "description": "docs_files = round-trip das imagens de docs/ ([{name,content_b64}]); examples[].explanation vive em docs/notes/<sample>.md (legado sample-notes.json só leitura)."
@@ -8426,7 +8530,7 @@
             "description": "confirm_mismatch (confirm != id) ou id inválido"
           },
           "403": {
-            "description": "sem permissão de escrita"
+            "description": "sem permissão de escrita (ou sessão fora do treino: author_treino_only)"
           }
         }
       }
@@ -8472,6 +8576,12 @@
         "responses": {
           "200": {
             "description": "{id,public,reqid?, calibration:queued|up_to_date|\"\"} — up_to_date = TL vigente já é desta versão do pacote (nada enfileirado)"
+          },
+          "403": {
+            "description": "não é membro da org (ou sessão fora do treino: author_treino_only)"
+          },
+          "404": {
+            "description": "não encontrado (nunca distingue 'inexistente' de 'privado alheio')"
           }
         }
       }
@@ -8551,6 +8661,9 @@
         "responses": {
           "200": {
             "description": "{repo,collaborators}"
+          },
+          "404": {
+            "description": "repo_missing: org inexistente OU o login não é membro dela nem admin do treino (o MESMO 404)"
           }
         }
       },
@@ -8645,7 +8758,7 @@
             "description": "{id, from}"
           },
           "403": {
-            "description": "não é membro das orgs"
+            "description": "não é membro das orgs (ou sessão fora do treino: author_treino_only)"
           },
           "409": {
             "description": "público/em uso, ou nome colide no destino"
@@ -8708,7 +8821,7 @@
           "orgs"
         ],
         "summary": "Cria org (criador vira membro+admin; exige cc_can_create)",
-        "description": "Cada login de members/admins precisa EXISTIR no treino e PODER CRIAR PROBLEMAS (cc_can_create) — 422/404/403 senão, recusa atômica (a org nem nasce).",
+        "description": "Cada login de members/admins precisa EXISTIR no treino e PODER CRIAR PROBLEMAS (cc_can_create) — 422/404/403 senão, recusa atômica (a org nem nasce). Sessão fora do treino: 403 author_treino_only (ver descrição global da API). Org EXISTENTE: só o admin dela ou o SUPERADMIN numa sessão do treino (is_platform_superadmin, não is_admin cru) pode 'recriar' — e org IMPLÍCITA nunca aceita, nem do superadmin (409 implicit, mesma regra de /orgs/members). Org NOVA com o nome de um login do treino: 409 name_is_login; com sufixo de papel (.admin, .judge, …: só de login): 400 name_invalid (no /problems/repo-create, repo_invalid).",
         "security": [
           {
             "bearerAuth": []
@@ -8755,7 +8868,10 @@
             "description": "org criada"
           },
           "403": {
-            "description": "sem permissão de criação"
+            "description": "sem permissão de criação (ou sessão fora do treino: author_treino_only)"
+          },
+          "409": {
+            "description": "org já existe (taken: não é admin dela/não é super) ou org IMPLÍCITA (implicit, nem o superadmin gere); name_is_login: org nova com o nome de um login do treino (é o nome da org pessoal dele)"
           }
         }
       }
@@ -8792,7 +8908,7 @@
           "orgs"
         ],
         "summary": "Gerencia membros/admins (só admin da org)",
-        "description": "add/admins_add validam cada login (existe no treino + cc_can_create; 422 login_invalid / 404 user_notfound / 403 cannot_create, recusa atômica); remove/admins_remove não validam (lixo já gravado precisa poder sair).",
+        "description": "add/admins_add validam cada login (existe no treino + cc_can_create; 422 login_invalid / 404 user_notfound / 403 cannot_create, recusa atômica); remove/admins_remove não validam (lixo já gravado precisa poder sair). Gestão é dono da org OU superadmin numa sessão do treino (is_platform_superadmin; nunca is_admin cru); org IMPLÍCITA nunca tem gestão, nem do superadmin (409 implicit).",
         "security": [
           {
             "bearerAuth": []
@@ -8845,7 +8961,10 @@
             "description": "idem"
           },
           "403": {
-            "description": "não é admin da org"
+            "description": "não é admin da org/SUPERADMIN (ou sessão fora do treino: author_treino_only)"
+          },
+          "409": {
+            "description": "org implícita não tem gestão de membros"
           }
         }
       }
@@ -9382,6 +9501,27 @@
         "responses": {
           "200": {
             "description": "{success, action, host, config}"
+          }
+        }
+      }
+    },
+    "/judge/list": {
+      "get": {
+        "tags": [
+          "judge"
+        ],
+        "summary": "Registro dos juízes (specs, inventário, estado, último report de atualização) — admin DO TREINO (require_treino_admin; o parque é da plataforma).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "lista dos juízes registrados"
+          },
+          "403": {
+            "description": "admin_required (sessão do treino de um .admin)"
           }
         }
       }

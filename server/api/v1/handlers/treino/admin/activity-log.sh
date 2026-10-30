@@ -1,10 +1,12 @@
 # GET /treino/admin/activity-log[?since=&until=&kinds=&action=&user=&limit=&format=csv]  (.admin)
-# Feed cronológico COMPLETO do treino livre, juntando SEIS fontes no instante exato:
+# Feed cronológico COMPLETO do treino livre, juntando SETE fontes no instante exato:
 #   - var/access.log                   (logins: epoch\tlogin\tip\tua_b64)         -> kind=login
+#   - var/login-refused.log            (tentativas RECUSADAS: motivo = o código)  -> kind=login, login-refused
 #   - users/<login>/history            (1 SUBMISSÃO por linha, no sub_epoch)      -> kind=submit
 #   - users/<login>/results/<id>.json  (VEREDICTO do juiz, no finalized_at)       -> kind=verdict
-#   - var/activity-YYYY-MM.log         (LEITURAS: problem-view/log-view/
-#                                       source-download; epoch\tlogin\tev\tdet\tip) -> kind=read
+#   - var/activity-YYYY-MM.log         (LEITURAS: problem-view/log-view/source-download e, da
+#                                       autoria, pkg-source/pkg-test/pkg-diff/calib-report-view/
+#                                       testrun-report-view; epoch\tlogin\tev\tdet\tip) -> kind=read
 #   - var/admin-audit.log              (ações de admin/autoria)                   -> kind=admin
 #   - idem, ações de MÁQUINA (tl-report/calib-report) — EXCLUÍDAS por default     -> kind=calib
 # kinds= lista csv (default: tudo MENOS calib). format=csv baixa o range inteiro p/ análise
@@ -26,7 +28,13 @@ if [[ "$fmt" == csv ]]; then SRC_MAX=200000; RES_MAX=50000; limit=1000000; fi
 
 cdir="$CONTESTSDIR/treino"
 EV="$(mktemp)" || fail 500 "Falha ao criar temporário" "tmp_failed"
-trap 'rm -f "$EV"' EXIT
+HID="$(mktemp)" || fail 500 "Falha ao criar temporário" "tmp_failed"
+trap 'rm -f "$EV" "$HID"' EXIT
+
+# PRIVADO NÃO LISTA NEM P/ .admin — o que este viewer não pode ver sai do feed e do CSV (lib/admin-feed.sh, a mesma
+# regra do /treino/admin/audit-log; o SUPERADMIN vê tudo).
+source "$_LIBDIR/admin-feed.sh"
+feed_hidden_file "$HID"
 
 read_tail() { [[ -f "$1" ]] && tail -n "$SRC_MAX" "$1" 2>/dev/null || true; }
 since_tsv() { awk -F'\t' -v s="$since" -v u="$until_" 'NF && $1+0 >= s && $1+0 <= u'; }
@@ -57,6 +65,13 @@ results_ndjson() {
     | { time:(.[0]|tonumber? // 0), who:(.[1]//"?"), kind:"login", action:"login",
         details:((.[3]//"") | try @base64d catch ""), ip:(.[2]//"") }'
 
+  # LOGIN RECUSADO — login-refused.log (auth/login → login_refused_log; `?` = conta inexistente). O motivo é o
+  # código do /auth/login; vai como kind=login, ação login-refused
+  read_tail "$cdir/var/login-refused.log" | since_tsv | jq -R -c '
+    select(length>0) | split("\t")
+    | { time:(.[0]|tonumber? // 0), who:(.[1]//"?"), kind:"login", action:"login-refused",
+        details:("\(.[4]//"") · \((.[3]//"") | try @base64d catch "")"), ip:(.[2]//"") }'
+
   # SUBMISSÃO — store por-usuário (formato global de 7 campos; verdict pode ter ":")
   emit_history_sorted treino "$SRC_MAX" \
     | awk -F: -v s="$since" -v u="$until_" 'NF>=7 && $(NF-1)+0 >= s && $(NF-1)+0 <= u' \
@@ -80,7 +95,7 @@ results_ndjson() {
   true
 } > "$EV" 2>/dev/null
 
-FILTER='
+FILTER="$FEED_VISIBLE_DEF"'
   $ev
   | map(select((.time // 0) > 0 and (.time) >= $since and (.time) <= $until))
   | (($ks | split(",")) | map(select(length>0))) as $kl
@@ -88,10 +103,11 @@ FILTER='
      else map(select(.kind as $k | ($kl|index($k)) != null)) end)
   | (if $act=="" then . else map(select(((.action//"")|ascii_downcase)|contains($act|ascii_downcase))) end)
   | (if $usr=="" then . else map(select(((.who//"")|ascii_downcase)|contains($usr|ascii_downcase))) end)
+  | map(select(feed_visible($hid[0])))
   | sort_by(-.time) | .[:$lim]'
 
 if [[ "$fmt" == csv ]]; then
-  body="$(jq -rn --slurpfile ev "$EV" \
+  body="$(jq -rn --slurpfile ev "$EV" --slurpfile hid "$HID" \
     --argjson since "$since" --argjson until "$until_" --arg ks "$kinds" \
     --arg act "$action" --arg usr "$user" --argjson lim "$limit" "
     ${FILTER}
@@ -104,7 +120,7 @@ if [[ "$fmt" == csv ]]; then
   exit 0
 fi
 
-body="$(jq -cn --slurpfile ev "$EV" \
+body="$(jq -cn --slurpfile ev "$EV" --slurpfile hid "$HID" \
   --argjson since "$since" --argjson until "$until_" --arg ks "$kinds" \
   --arg act "$action" --arg usr "$user" --argjson lim "$limit" "
   ${FILTER}

@@ -21,9 +21,13 @@ org_is_admin(){ jq -e --arg u "$2" 'index($u)' >/dev/null 2>&1 <<<"$(org_admins 
 # org_public_allowed <org> -> 0 se a org PERMITE que seus problemas fiquem públicos.
 org_public_allowed(){ [[ -f "$ORGS_REGISTRY" ]] && jq -e --arg n "$1" '.[$n].public_allowed==true' >/dev/null 2>&1 < "$ORGS_REGISTRY"; }
 org_is_implicit(){ [[ -f "$ORGS_REGISTRY" ]] && jq -e --arg n "$1" '.[$n].implicit==true' >/dev/null 2>&1 < "$ORGS_REGISTRY"; }
-# org_can_manage <org> <login> — admin da org OU admin global do treino (.admin). Gestão de membros/trava.
+# org_can_manage <org> <login> — admin da org OU SUPERADMIN da plataforma. O atalho global é
+# `is_platform_superadmin` (super NUMA SESSÃO DO TREINO), NÃO `is_admin`/`is_platform_admin`: gerir uma org inclui o
+# gestor em members+admins (org_register), e isso é acesso ao acervo dela — fica com o dono e o super-admin.
+# `is_platform_admin` segue certo p/ checagem de VISIBILIDADE (ver orgs/get.sh, orgs/members.sh GET) — não concede
+# gestão/acesso.
 org_can_manage(){
-  { declare -F is_admin >/dev/null && is_admin; } && return 0
+  { declare -F is_platform_superadmin >/dev/null && is_platform_superadmin; } && return 0
   org_is_admin "$1" "$2"
 }
 # org_list_for <login> -> JSON array de nomes de org de que o login é membro/admin (inclui a implícita).
@@ -53,7 +57,8 @@ org_require_valid_logins(){
 
 # ---- escrita do registro (atômica) --------------------------------------------------------
 # org_register <org> <creator> [members-csv] [admins-csv] [title] [public_allowed:true|false]
-# O criador entra como membro E admin. public_allowed só LIGA (nunca desliga aqui). Idempotente.
+# O criador entra como membro E admin. public_allowed só LIGA (nunca desliga aqui) — e NUNCA numa org
+# IMPLÍCITA (privada por definição, a mesma regra do 409 implicit_private do org_set_public_allowed). Idempotente.
 org_register(){
   local n="$1" cr="$2" m="${3:-}" a="${4:-}" t="${5:-}" pa="${6:-false}" cur tmp
   cur="$(_orgs_read)"; mkdir -p "$(dirname "$ORGS_REGISTRY")" 2>/dev/null; tmp="$ORGS_REGISTRY.tmp.${BASHPID}"
@@ -68,7 +73,8 @@ org_register(){
           title:(if $t=="" then ($old.title // $n) else $t end),
           members:((($old.members // []) + [$cr] + ($m|split(",")|map(select(length>0)))) | unique),
           admins: ((($old.admins  // []) + [$cr] + ($a|split(",")|map(select(length>0)))) | unique),
-          public_allowed:(if $pa=="true" then true else ($old.public_allowed // false) end),
+          public_allowed:(if ($old.implicit // false) then false
+                          elif $pa=="true" then true else ($old.public_allowed // false) end),
           at:$now }) }' ) > "$tmp" 2>/dev/null && [[ -s "$tmp" ]] && mv -f "$tmp" "$ORGS_REGISTRY" || rm -f "$tmp"
 }
 # orgs_rename_login <old> <new> — cascata do RENAME DE CONTA nas orgs: troca o login em

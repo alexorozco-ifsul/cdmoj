@@ -46,8 +46,9 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   esquisita, POST, `scope=mine`, coorte fora do padrão) ele DECLINA fechando a conexão sem
   resposta ⇒ nginx 502 ⇒ `@moj_fcgiwrap` ⇒ o bash responde E regenera o cache (que o porteiro
   volta a servir). A preguiça de regeneração do bash continua exercitada por construção.
-  Também DECLINA (03/10/2026) IP preso pela trava de sede (`RUNDIR/site-lock/<ip>`: o 403 e a isenção de papel
-  são do bash) e sessão de PAPEL cuja conta só existe na fonte `USERS_FROM` (o `_shared_role_ok` é do bash) — e
+  Também DECLINA (03/10/2026) IP preso pela trava de sede (`RUNDIR/site-lock/<ip>` com alguma linha VALENDO — `until`
+  ≥ agora, a conta do `sl_check`; vencida não conta, 29/10/2026: um arquivo esquecido mandava ao bash todo pedido do
+  laboratório; o 403 e a isenção de papel são do bash) e sessão de PAPEL cuja conta só existe na fonte `USERS_FROM` (o `_shared_role_ok` é do bash) — e
   (16/10/2026) sessão de TIME fora do subdomínio do contest dela (`CONTEST_HOST` ≠ contest; o `host_required` é do bash).
   ⚠ As VARIANTES espelhadas nele são REGRAS DE SEGURANÇA (papel da nav, coorte, autor da
   lista, congelado×completo, anônimo×nominal) — mudou a regra no handler/lib bash ⇒ mude no porteiro E rode
@@ -130,7 +131,11 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `router.sh` responde 403 `site_locked` a outro alvo (papel isento; `auth/logout` passa) — custo
   `[[ -f ]]` p/ IP não preso. **Toda reivindicação nova e todo bloqueio vão ao audit** (com teto de
   1 linha/5 min por ip+alvo) e aos painéis Máquinas › Gate & trava (reivindicações/soltar/prender)
-  e Máquinas › Anomalias (bloqueios). Rota `/contest/admin/site-lock`.
+  e Máquinas › Anomalias (bloqueios). Rota `/contest/admin/site-lock`. O lock por IP fica no shell de quem grava
+  (`_sl_lock` põe o fd em `SL_FD`; NUNCA `$(_sl_lock …)` — o lock morreria com o subshell) e a linha VENCIDA sai pela
+  varredura `sl_sweep` depois de `SITE_LOCK_KEEP_EXPIRED_S` (7 dias — até lá o painel Gate & trava a mostra como vencida,
+  com os contadores do IP), que o judged roda no shard 0 a cada `SITE_LOCK_SWEEP_EVERY_S` (600 s; `judged.sh
+  --site-lock-sweep` roda uma vez). Teste: `smoke-site-lock.sh` (o lock espera de verdade; a varredura).
 - **TIME SÓ PELO SUBDOMÍNIO DO PRÓPRIO CONTEST (`lib/team-host.sh`, 16/10/2026, sempre ligado)**: numa máquina travada
   (o firewall do Maratona Linux filtra por NOME) o time chegava pelo IP cru ou pelo site principal (`?c=OUTRO`) e logava
   em outro contest. Conta de TIME (login sem sufixo de papel) de contest ≠ treino só LOGA e só USA o contest com
@@ -791,7 +796,11 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   rotação MENSAL pelo nome; separado do admin-audit, que é dominado por tl-report). O feed
   `GET /treino/admin/activity-log` (aba 📜 Atividade) unifica 6 fontes + `format=csv`.
   **Evento novo de leitura ⇒ instrumente com `activity_log`** (login/submit/verdict já são
-  deriváveis de access.log/history/results — não duplique).
+  deriváveis de access.log/history/results — não duplique). Leituras da AUTORIA (28/10/2026): `pkg-source`, `pkg-test`,
+  `pkg-diff`, `calib-report-view`, `testrun-report-view` (download/export já iam ao admin-audit); evento novo ganha
+  rótulo pt/en/es no `RACT` de `web/treino/admin/admin.js`. `audit_log`/`activity_log` de sessão de OUTRO contest
+  terminam em ` sess=<contest>` (4/5 colunas de sempre): o login sozinho não separa o `<criador>.admin` de cada
+  contest. Trilhas e retenção: `docs/ADMIN.md` §12.
 - **Escrita do competidor fora da submissão (backup, clarification) segue a JANELA do `/submit`**
   (`competitor_write_guard` em `lib/contest-gate.sh`, 2026-09-15): time/`.mon` só durante a prova
   (403 `contest_not_started`/`contest_ended`, fim efetivo da sessão), `.staff`/`.cstaff`/`.animeitor`
@@ -1300,7 +1309,9 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   config/time-overrides/webcast/team-assets); GET nunca liga; desligar é sempre manual. Handler novo
   de módulo ⇒ `mod_enable` ao gravar + asserção no `smoke-contest-modules.sh` (seção mod_enable). Rota `admin/modules` GET/POST; `basic` e
   `settings` expõem `modules[]`. **Spec UNIFICADO** (`cc_apply_modules_spec`/`cc_modules_spec` em
-  `lib/contest-create.sh`): `spec.modules = {id: true | {on?, …seção…}}` — cada seção grava pelo
+  `lib/contest-create.sh`): `spec.modules = {id: true | {on?, …seção…}}` — seção com `on:false` não liga o módulo
+  NEM grava os dados/variáveis dela (`_sec` e o `msec` do conf; o `on` se testa com `!=`/`==`, nunca com `//`, porque
+  `false // ""` dá "") — cada seção grava pelo
   MESMO arquivo/conf que o painel edita (formato no cabeçalho da função); export devolve só módulos
   ligados, dados reeditáveis, NUNCA segredo (chave nutellaboot, chaves de webcast → o create gera
   chaves NOVAS a partir de `views`); template tira `rounds/active/time_overrides`; duplicate desloca
@@ -1497,6 +1508,69 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   - o detalhe vai p/ `var/admin-actions/`, o audit leva uma linha curta e há aviso aos super-admins (DM/grupo).
   Ação nova de vários alvos usa a lib. O `contest-remove` é do dono ou do super, com `confirm` = o id. Teste:
   `smoke-treino-admin-guard.sh`. Doc: `docs/ADMIN.md` §11.
+- **AUTORIA É ATIVIDADE DO TREINO (28/10/2026)** — as rotas de autoria (`/problems/*`, `/orgs/*`) e a gestão do acervo
+  seguem estas regras. Os gates de autoria identificam pelo LOGIN (`require_problem_edit`/`_view`,
+  `owners_visible_for`), e o mesmo nome em outro contest é outra conta: todo criador tem um `<criador>.admin` LOCAL,
+  isento do host-lock.
+  (1) O **`router.sh`** corta os segmentos **`problems` e `orgs`** com **403 `author_treino_only`** p/ sessão com
+  `SESSION_CONTEST != treino` (choke único; todo handler desses segmentos exige auth; 403 uniforme; recusa auditada
+  com teto de 5 min por login+rota, molde do team-host-block; vale também com a trava de host afrouxada —
+  `run/team-host-lock` observe|0).
+  (2) A GESTÃO (`org_can_manage`/`coll_can_manage`) é do dono OU do **`is_platform_superadmin`** (SUPERADMIN numa
+  sessão DO TREINO — o `superadmin_login` só confere o nome), e a flag `can_manage` de `orgs/list`/
+  `problems/collections` usa o MESMO predicado (a tela não oferece o que a API recusa). **`is_platform_admin`**
+  (treino + `.admin`) é só VISIBILIDADE (nome/roster de org em `orgs/get`/`orgs/members` GET e `/judge/list`) — nunca
+  concede gestão. **Org IMPLÍCITA nunca aceita "gestão" por `/orgs/create`**, nem do SUPERADMIN (a regra do
+  `/orgs/members`).
+  `/admin/synctreino` e `/judge/list` (ações de plataforma) usam `require_treino_superadmin`/`require_treino_admin`. O
+  `moj`/editor web logam no treino; o `moj` ignora o `MOJ_CONTEST` (é do `moj-contest`/`moj-comp`) e dá dica no 403
+  `author_treino_only` (moj-cli `test/author-treino.sh`). Testes: `smoke-cross-contest-identity.sh` (sessão de outro
+  contest, mesmo login com a trava afrouxada, gestão no treino, a flag da UI × o portão, a trava de lib, controles com
+  SUPERADMIN e com `.admin` comum, a org implícita, o teto do audit) + a asserção de escopo do `synctreino` em
+  `smoke-handlers.sh`.
+  **Regras irmãs (28/10/2026):**
+  - `contest-create/{create,duplicate,import}` usam a guarda única **`cc_spec_guard`** (lib/contest-create.sh): itera
+    como o `cc_create` (topo + TODAS as rodadas de `modules.rodadas`), confere `problem_id` E `bank_id` e falha FECHADA.
+  - No treino, criar/remover/trocar a SENHA de conta de PAPEL só pelo super (`treino_role_write_ok` em lib/auth.sh,
+    cumprida no `user_create` e no `account_merge` que grava `.password` — rc 77 — e checada antes nas rotas:
+    `/admin/passwd|adduser`, `/contest/admin/user-add|users-bulk|user-remove?contest=treino`); no treino o
+    `users-bulk` `on_existing:update` é 400 `treino_forbidden`. O `/admin/passwd` reabilita e derruba as sessões (como
+    o user-add) e, em contest compartilhado, recusa conta sem senha local própria (`shared_overlay`, vazia, conta de
+    TIME).
+  - `history-full` e `solvetry`: sessão do treino, privado só p/ o dono, perfil privado e dir órfão; índice ilegível =
+    503 p/ quem não é o dono. "É privado?" tem fonte ÚNICA `private_problem_ids` (lib/problems.sh: índice ∪ json só em
+    jsons-private) e "pode ver" o `OWNERS_VIS_DEF` (o predicado do owners_visible_for — nunca copiado).
+  - O feed da Atividade e o `/treino/admin/audit-log` passam pela MESMA regra, `lib/admin-feed.sh` (`feed_hidden_file`
+    + `FEED_VISIBLE_DEF`): some a linha com `org#prob` que o admin não vê em QUALQUER lugar (id=, from=/to=,
+    submissão, veredicto), org-*/repo-* de org alheia e o `delete` de problema; índice ilegível = some toda linha que
+    cita problema ou org, o resto segue (super vê tudo). `audit_log_to` também carimba `sess=` quando a sessão é de
+    outro contest.
+  - export/duplicate/templates resolvem o dono por `cc_contest_owner`, e o `templates` `from_contest` usa o
+    `cc_contest_visible_to` do export. O GET de `repo-collaborators` é só p/ membro (o MESMO 404 da inexistente). Org
+    nova com nome de LOGIN = 409 `name_is_login` (é a org pessoal dele); `org_register` nunca liga `public_allowed` em
+    org implícita. O 413 do `hooks/nutella` vem antes de olhar o contest; a home anônima deixa de fora dir órfão (sem
+    `account.json`).
+  Testes nos smokes de cada rota (contest-create, handlers, orgs, store-v2, contest-templates, nutella-hook,
+  open-training, cross-contest-identity).
+  **Trilhas (28/10/2026):** contas do treino — `username-change`, `password-change` (com IP; as outras sessões DO
+  TREINO caem, a da requisição fica: `RCS_KEEP_TOKEN` no `remove_contest_sessions`), `password-recover` (caem TODAS:
+  `remove_account_sessions` — treino, contests com `USERS_FROM=treino` e time em que ela é o ator) e `signup`;
+  plataforma — `synctreino`; contest — `set-verdict` (quem pediu), `contest-extend`, `rejudge` pelo `/admin/rejudge` e
+  `jplag-view`; leitura de teste do pacote = `pkg-test`. **Login NOVO igual ao nome de uma org do treino que não é dele =
+  "em uso"** em toda porta (`login_blocked_by_org <login> [<quem>]`, lib/users.sh): signup e `tg_unique_login` (sem
+  `<quem>`: o cadastro nunca herda o nome), troca de handle, promoção e `user_rename` (`<quem>` = o login atual),
+  `user_create`, `adduser`/`user-add`/`users-bulk` e `managed-create` com login dado (`<quem>` = o próprio: a org
+  pessoal de uma conta removida não impede recriá-la) e o login derivado do `managed-create` (sem `<quem>`). Sufixo de
+  papel (`is_reserved_role_login`) é só de LOGIN: `/orgs/create` e `/problems/repo-create` o recusam em org nova (a
+  implícita de uma conta de papel segue nascendo pelo `ensure_implicit_org`). O `org-delete` sai dos feeds p/ quem não é
+  super. O webhook do nutella consome o excesso do corpo (até 4 MiB) antes do 413.
+  **Trilhas (29/10/2026):** a TENTATIVA DE LOGIN RECUSADA vai a `var/login-refused.log` do contest (`login_refused_log`,
+  lib/auth.sh, chamada pelo gancho `_fail_hook` que o `auth/login.sh` define — o `fail` o roda uma vez; login só se a
+  conta existe, senão `?`; ao passar de `LOGIN_REFUSED_MAX` gira p/ `.1`) e aparece no `/contest/admin/access-log` (`refused`, Pessoas ›
+  Sessões) e no feed do treino (`login-refused`); o arquivo entra na cópia do arquivamento de rodada. `settings` audita
+  `CHAVE=antes→depois`; `contest-create` (criar/duplicar/importar) leva `cc_audit_summary` (contas, problemas,
+  rodadas, módulos); ação AUTOMÁTICA entra com autor `auto-…` (`auto-fim` no desligamento do alimentador do telão) e a
+  1ª geração do par de chaves offline vira `offline-key`.
 - **Painel do treino › Contests (2026-09-15)**: `SUPERADMINS` no conf do TREINO (logins; sem UI de
   propósito) ⇒ `superadmin_login`/`is_superadmin` (`lib/auth.sh`). **`cc_contest_visible_to <viewer>
   <owner>`** (`lib/contest-create.sh`) é a FONTE ÚNICA de "quem vê o contest de quem" — super-admin

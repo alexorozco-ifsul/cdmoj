@@ -190,6 +190,7 @@ echo "== contest/set-verdict (POST judge) =="
 call "/contest/set-verdict" POST "contest=$CONTEST" "$TOKEN" '{"problem_id":"A","verdict":"Accepted","username":"alice"}'
 check "set-verdict queued" 'okstatus && [[ "$BODY" == *\"status\":\"queued\"* ]]'
 check "set-verdict spool file created" '[[ -n "$(ls "$SPOOL"/$CONTEST:*:setverdict:A 2>/dev/null)" ]]'
+check "set-verdict vai ao audit do contest (quem pediu, alvo, veredicto)" 'grep -qP "\tset-verdict\tid=[0-9a-f]+ user=alice prob=A verdict=Accepted$" "$C/var/admin-audit.log"'
 
 echo "== contest/rejudge (POST admin, store-v2) =="
 call "/contest/rejudge" POST "contest=$CONTEST" "$TOKEN" '{"ids":["'"$SID"'"]}'
@@ -234,20 +235,106 @@ acall "/admin/passwd" POST "" "$TOKEN" '{"contest":"'"$CONTEST"'","login":"smoke
 check "passwd 200" '[[ "$OUT" == *"Status: 200"* ]]'
 check "senha trocada no account.json" '[[ "$(jq -r .password "$TMPC/$CONTEST/users/smoketest.user/account.json")" == "NEWPW123" ]]'
 check "fullname preservado" '[[ "$(jq -r .fullname "$TMPC/$CONTEST/users/smoketest.user/account.json")" == "Smoke Test User" ]]'
+check "passwd vai ao audit do contest" 'grep -qP "\tpasswd\tlogin=smoketest.user" "$TMPC/$CONTEST/var/admin-audit.log"'
+
+# TREINO: conta de PAPEL só pelo super-admin (treino_role_write_ok)
+cp -r "$T" "$TMPC/treino"; fx_user "$TMPC/treino" teach.admin t "Teach"
+cp "$SESS/$TTOK" "$SESS2/$TTOK"
+KTOK="12121212-3434-5656-7878-909090909090"
+printf 'CONTEST=treino\nLOGIN=teach.admin\nUSERFULLNAME=Teach\nLOGINAT=%s\n' "$EPOCHSECONDS" > "$SESS2/$KTOK"
+acall "/admin/passwd" POST "" "$KTOK" '{"contest":"treino","login":"plat.admin","newpass":"tomei"}'
+check "treino: .admin comum troca senha do SUPER = 403 superadmin_required" '[[ "$OUT" == *"Status: 403"* && "$BODY" == *superadmin_required* ]] && [[ "$(jq -r .password "$TMPC/treino/users/plat.admin/account.json")" == p ]]'
+acall "/admin/passwd" POST "" "$KTOK" '{"contest":"treino","login":"alice","newpass":"nova1"}'
+check "treino: .admin comum troca senha de conta comum = 200 (atendimento segue)" '[[ "$OUT" == *"Status: 200"* ]]'
+acall "/admin/passwd" POST "" "$TTOK" '{"contest":"treino","login":"teach.admin","newpass":"nova2"}'
+check "treino: o SUPER troca senha de conta de papel = 200" '[[ "$OUT" == *"Status: 200"* ]]'
+check "…e a sessão aberta do teach.admin caiu (reset derruba)" '[[ ! -f "$SESS2/$KTOK" ]]'
+printf 'CONTEST=treino\nLOGIN=teach.admin\nUSERFULLNAME=Teach\nLOGINAT=%s\n' "$EPOCHSECONDS" > "$SESS2/$KTOK"   # novo login
+acall "/admin/adduser" POST "" "$KTOK" '{"contest":"treino","login":"novo.admin","fullname":"Novo"}'
+check "treino: .admin comum cria conta de PAPEL = 403" '[[ "$OUT" == *"Status: 403"* && ! -d "$TMPC/treino/users/novo.admin" ]]'
+acall "/admin/adduser" POST "" "$KTOK" '{"contest":"treino","login":"novo","fullname":"Novo"}'
+check "treino: .admin comum cria conta comum = 200 + audit" '[[ "$OUT" == *"Status: 200"* ]] && grep -qP "\tadduser\tlogin=novo$" "$TMPC/treino/var/admin-audit.log"'
+# nome de uma org do treino = login em uso (o nome de um login é o da org pessoal dele)
+echo '{"orgy":{"members":["alice"],"admins":["alice"],"created_by":"alice"}}' > "$TMPC/treino/var/orgs.json"
+acall "/admin/adduser" POST "" "$KTOK" '{"contest":"treino","login":"orgy","fullname":"Y"}'
+check "treino: adduser com o nome de uma org = 409 user_exists" '[[ "$OUT" == *"Status: 409"* && "$BODY" == *user_exists* && ! -d "$TMPC/treino/users/orgy" ]]'
+acall "/contest/admin/users-bulk" POST "contest=treino" "$KTOK" '{"users":[{"login":"orgy"}]}'
+check "treino: users-bulk pula o nome de uma org (exists)" '[[ ! -d "$TMPC/treino/users/orgy" && "$(jq -r ".skipped[0].reason" <<<"$BODY")" == exists ]]'
+# a org pessoal de uma conta REMOVIDA (admin = o próprio login) não impede o admin de recriá-la
+echo '{"orgy":{"members":["alice"],"admins":["alice"],"created_by":"alice"},"solo":{"implicit":true,"members":["solo"],"admins":["solo"]},"duo":{"implicit":true,"members":["duo"],"admins":["duo"]},"trio":{"implicit":true,"members":["trio"],"admins":["trio"]}}' > "$TMPC/treino/var/orgs.json"
+acall "/admin/adduser" POST "" "$KTOK" '{"contest":"treino","login":"solo","fullname":"Solo"}'
+check "treino: adduser recria a conta dona da org pessoal = 200" '[[ "$OUT" == *"Status: 200"* && -f "$TMPC/treino/users/solo/account.json" ]]'
+acall "/contest/admin/users-bulk" POST "contest=treino" "$KTOK" '{"users":[{"login":"duo"}]}'
+check "treino: users-bulk idem (cria)" '[[ -f "$TMPC/treino/users/duo/account.json" && "$(jq -r ".skipped | length" <<<"$BODY")" == 0 ]]'
+acall "/contest/admin/user-add" POST "contest=treino" "$KTOK" '{"login":"trio","password":"t1","fullname":"Trio"}'
+check "treino: user-add idem = 200" '[[ "$OUT" == *"Status: 200"* && -f "$TMPC/treino/users/trio/account.json" ]]'
+acall "/contest/admin/user-add" POST "contest=treino" "$KTOK" '{"login":"orgy","password":"t1","fullname":"Y"}'
+check "treino: user-add com o nome de uma org de outra conta = 409" '[[ "$OUT" == *"Status: 409"* && "$BODY" == *user_exists* && ! -d "$TMPC/treino/users/orgy" ]]'
+# contest COMPARTILHADO: senha da FONTE não vira senha local (409 shared_users, como o users-set-password)
+mkdir -p "$TMPC/shr/var"; printf 'CONTEST_ID=shr\nUSERS_FROM=treino\nCONTEST_END=9999999999\n' > "$TMPC/shr/conf"
+fx_user "$TMPC/shr" shr.admin s "Admin"; fx_user "$TMPC/shr" x.judge j "Juiz"
+mkdir -p "$TMPC/shr/users/alice"; printf '{"login":"alice","fullname":"Alice Silva"}\n' > "$TMPC/shr/users/alice/account.json"
+STOK="23232323-4545-6767-8989-010101010101"
+printf 'CONTEST=shr\nLOGIN=shr.admin\nUSERFULLNAME=Admin\nLOGINAT=%s\n' "$EPOCHSECONDS" > "$SESS2/$STOK"
+acall "/admin/passwd" POST "" "$STOK" '{"contest":"shr","login":"alice","newpass":"x1"}'
+check "compartilhado: participante da fonte = 409 shared_users, sem senha local" '[[ "$OUT" == *"Status: 409"* && "$BODY" == *shared_users* ]] && [[ "$(jq -r ".password // \"\"" "$TMPC/shr/users/alice/account.json")" == "" ]]'
+acall "/admin/passwd" POST "" "$STOK" '{"contest":"shr","login":"x.judge","newpass":"x2"}'
+check "compartilhado: conta LOCAL (juiz) segue trocando = 200" '[[ "$OUT" == *"Status: 200"* ]]'
+# senha interna `!…` (lápide de removido/desabilitado, conta de TIME) também não vira senha de login
+mkdir -p "$TMPC/shr/users/removido" "$TMPC/shr/users/time-azul"
+printf '{"login":"removido","password":"!x9","shared_overlay":true,"disqualified":true}\n' > "$TMPC/shr/users/removido/account.json"
+printf '{"login":"time-azul","password":"!3f2a-uuid","fullname":"Azul"}\n' > "$TMPC/shr/users/time-azul/account.json"
+acall "/admin/passwd" POST "" "$STOK" '{"contest":"shr","login":"removido","newpass":"volta"}'
+check "compartilhado: lápide do removido (shared_overlay, !…) = 409, segue barrado" '[[ "$OUT" == *"Status: 409"* ]] && [[ "$(jq -r .password "$TMPC/shr/users/removido/account.json")" == "!x9" ]]'
+acall "/admin/passwd" POST "" "$STOK" '{"contest":"shr","login":"time-azul","newpass":"direto"}'
+check "compartilhado: conta de TIME (!<uuid>) = 409"  '[[ "$OUT" == *"Status: 409"* ]]'
+# conta LOCAL desabilitada (`!…` SEM overlay, ex.: um fiscal de sede) segue reabilitável — como no user-add
+mkdir -p "$TMPC/shr/users/fiscal1"; printf '{"login":"fiscal1","password":"!d1s","disabled":true,"fullname":"Fiscal"}\n' > "$TMPC/shr/users/fiscal1/account.json"
+acall "/admin/passwd" POST "" "$STOK" '{"contest":"shr","login":"fiscal1","newpass":"volta1"}'
+check "compartilhado: conta LOCAL desabilitada = 200 e reabilitada" '[[ "$OUT" == *"Status: 200"* ]] && [[ "$(jq -r ".password + \" \" + ((.disabled // false)|tostring)" "$TMPC/shr/users/fiscal1/account.json")" == "volta1 false" ]]'
+# reset = reabilitar + derrubar as sessões abertas da conta (sessão não expira: o token de quem tinha a senha vazada)
+jq '.disabled=true' "$TMPC/shr/users/x.judge/account.json" > "$TMPC/j" && mv "$TMPC/j" "$TMPC/shr/users/x.judge/account.json"
+JTOK="45454545-6767-8989-0101-232323232323"
+printf 'CONTEST=shr\nLOGIN=x.judge\nUSERFULLNAME=Juiz\nLOGINAT=%s\n' "$EPOCHSECONDS" > "$SESS2/$JTOK"
+acall "/admin/passwd" POST "" "$STOK" '{"contest":"shr","login":"x.judge","newpass":"x3"}'
+check "reset reabilita (tira o disabled) e derruba a sessão aberta" '[[ "$OUT" == *"Status: 200"* ]] && [[ "$(jq -r ".disabled // false" "$TMPC/shr/users/x.judge/account.json")" == false ]] && [[ ! -f "$SESS2/$JTOK" ]]'
+
+# a regra vale no CAMINHO DE ESCRITA — também nas rotas /contest/admin/*?contest=treino
+acall "/contest/admin/user-add" POST "contest=treino" "$KTOK" '{"login":"plat.admin","password":"trocada"}'
+check "user-add?contest=treino: .admin comum reseta o SUPER = 403" '[[ "$OUT" == *"Status: 403"* && "$BODY" == *superadmin_required* ]] && [[ "$(jq -r .password "$TMPC/treino/users/plat.admin/account.json")" == p ]]'
+acall "/contest/admin/users-bulk" POST "contest=treino" "$KTOK" '{"users":[{"login":"novo2.admin"},{"login":"plat.admin","password":"trocada"}]}'
+check "users-bulk?contest=treino: conta de papel (nova e o super) pulada como privileged" '[[ ! -d "$TMPC/treino/users/novo2.admin" ]] && [[ "$(jq -r .password "$TMPC/treino/users/plat.admin/account.json")" == p ]] && [[ "$(jq -r "[.skipped[]|select(.reason==\"privileged\")]|length" <<<"$BODY")" == 2 ]]'
+acall "/contest/admin/user-remove" POST "contest=treino" "$KTOK" '{"login":"plat.admin"}'
+check "user-remove?contest=treino: .admin comum remove o SUPER = 403" '[[ "$OUT" == *"Status: 403"* && -f "$TMPC/treino/users/plat.admin/account.json" ]]'
+acall "/contest/admin/user-add" POST "contest=treino" "$TTOK" '{"login":"juiz.judge","password":"j1"}'
+check "user-add?contest=treino: o SUPER cria conta de papel = 200" '[[ "$OUT" == *"Status: 200"* && -f "$TMPC/treino/users/juiz.judge/account.json" ]]'
+acall "/admin/passwd" POST "" "$KTOK" '{"contest":"treino","login":"fantasma.admin","newpass":"x"}'
+check "papel INEXISTENTE também = 403 (a mesma resposta)" '[[ "$OUT" == *"Status: 403"* ]]'
+acall "/admin/passwd" POST "" "$KTOK" '{"contest":"treino","login":"teach.admin","newpass":"minha"}'
+check "a PRÓPRIA senha segue trocável pelo .admin comum" '[[ "$OUT" == *"Status: 200"* ]] && [[ "$(jq -r .password "$TMPC/treino/users/teach.admin/account.json")" == minha ]]'
 
 echo "== admin/contest/extend (POST admin) =="
 acall "/admin/contest/extend" POST "" "$TOKEN" '{"contest":"'"$CONTEST"'","end_epoch":1999999999}'
 check "extend 200" '[[ "$OUT" == *"Status: 200"* ]]'
 check "extend appended CONTEST_END" 'tail -1 "$TMPC/$CONTEST/conf" | grep -qx "CONTEST_END=1999999999"'
+check "extend vai ao audit do contest (de/para)" 'grep -qP "\tcontest-extend\tde=[0-9]+ para=1999999999$" "$TMPC/$CONTEST/var/admin-audit.log"'
 rm -rf "$TMPC" "$SESS2"
 
-echo "== admin/synctreino (POST admin) =="
+echo "== admin/synctreino (ação de PLATAFORMA: só .admin do TREINO, 28/10/2026) =="
 call "/admin/synctreino" POST "" "$TOKEN"
-check "synctreino queued + spool" 'okstatus && [[ -n "$(ls "$SPOOL"/treino:*:synctreino:* 2>/dev/null)" ]]'
+check "synctreino: .admin de contest recusado" '[[ "$OUT" == *"Status: 403"* ]] && [[ -z "$(ls "$SPOOL"/treino:*:synctreino:* 2>/dev/null)" ]]'
+call "/admin/synctreino" POST "" "$TTOK"
+check "synctreino: .admin do treino enfileira + spool" 'okstatus && [[ -n "$(ls "$SPOOL"/treino:*:synctreino:* 2>/dev/null)" ]]'
+check "synctreino vai ao audit do treino" 'grep -qP "\tplat.admin\tsynctreino\tid=" "$T/var/admin-audit.log"'
 
 echo "== admin/rejudge (bot alias) =="
 call "/admin/rejudge" POST "" "$TOKEN" '{"contest":"'"$CONTEST"'","problem":"A"}'
 check "admin/rejudge problem queued" 'okstatus && [[ -n "$(ls "$SPOOL"/$CONTEST:*:rejulgarproblema:A 2>/dev/null)" ]]'
+check "admin/rejudge vai ao audit do contest" 'grep -qP "\trejudge-problem\tprob=A via=admin$" "$C/var/admin-audit.log"'
+call "/admin/rejudge" POST "" "$TOKEN" '{"contest":"'"$CONTEST"'","ids":["rjA1","rjB2","../x"]}'
+check "admin/rejudge: id inválido na lista = 400 e NENHUM vai ao spool" '[[ "$OUT" == *"Status: 400"* && "$BODY" == *id_invalid* && -z "$(ls "$SPOOL"/$CONTEST:*:rjA1:* "$SPOOL"/$CONTEST:*:rjB2:* 2>/dev/null)" ]]'
+call "/admin/rejudge" POST "" "$TOKEN" '{"contest":"'"$CONTEST"'","ids":["rjA1","rjB2"]}'
+check "admin/rejudge por ids: spool + audit" 'okstatus && [[ -n "$(ls "$SPOOL"/$CONTEST:*:rjA1:*rejulgar:rjA1 2>/dev/null)" ]] && grep -qP "\trejudge\tids=rjA1,rjB2 count=2 via=admin$" "$C/var/admin-audit.log"'
 
 echo "== ops/queue (admin do treino) =="
 call "/ops/queue" GET "" "$TOKEN"

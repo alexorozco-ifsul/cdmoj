@@ -109,8 +109,13 @@ _reason() {
 }
 
 # fail <http-status> <message> [error-code] — envelope de erro + encerra.
+# `_fail_hook <http> <código>`, se o handler o definir, roda UMA vez antes da resposta (o auth/login registra a
+# tentativa recusada). Função só existe na requisição que a definiu: o molde roda cada uma num subshell.
 fail() {
   local code="${1:-400}" msg="$2" ecode="${3:-$1}" x="${FAIL_EXTRA:-}"
+  if [[ -z "${_FAIL_HOOK_RAN:-}" ]] && declare -F _fail_hook >/dev/null; then
+    _FAIL_HOOK_RAN=1; _fail_hook "$code" "$ecode" 2>/dev/null || true
+  fi
   # CLI ANTIGA (sem marcador no UA, não lê cabeçalho): a dica "rode moj update" vai NA mensagem
   type cli_status_compute &>/dev/null && { cli_status_compute; msg="$msg${CLI_HINT:-}"; }
   # FAIL_EXTRA (objeto JSON, opcional): campos a mais DENTRO de `error` — o 409 stale_rev do editor
@@ -467,9 +472,13 @@ require_method() {  # require_method <METHOD>
 
 # audit_log <action> <details> — registra ação administrativa (treino) com quem fez.
 # Formato tab-sep: epoch \t admin_login \t action \t details
+# Sessão de OUTRO contest ganha ` sess=<contest>` no fim dos details (formato inalterado: 4 colunas): o login
+# sozinho não identifica a conta — o `<criador>.admin` de cada contest é uma conta LOCAL. Sessão do treino (o normal
+# aqui) não ganha nada.
 audit_log() {
   local who="${SESSION_LOGIN:-?}" det="${2//$'\t'/ }"
   det="${det//$'\n'/ }"
+  [[ -n "${SESSION_CONTEST:-}" && "$SESSION_CONTEST" != treino ]] && det+=" sess=$SESSION_CONTEST"
   mkdir -p "$CONTESTSDIR/treino/var" 2>/dev/null
   printf '%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$who" "$1" "$det" \
     >> "$CONTESTSDIR/treino/var/admin-audit.log" 2>/dev/null || true
@@ -484,6 +493,9 @@ audit_log() {
 activity_log() {
   local who="${SESSION_LOGIN:-anon}" det="${2//$'\t'/ }" ym ip="-"
   det="${det//$'\n'/ }"
+  # idem audit_log; o log-view/source-download de contest já trazem `c=<contest>` — não repete
+  [[ -n "${SESSION_CONTEST:-}" && "$SESSION_CONTEST" != treino && " $det " != *" c=$SESSION_CONTEST "* ]] \
+    && det+=" sess=$SESSION_CONTEST"
   printf -v ym '%(%Y-%m)T' "$EPOCHSECONDS"
   declare -F client_ip >/dev/null 2>&1 && ip="$(client_ip)"
   mkdir -p "$CONTESTSDIR/treino/var" 2>/dev/null
@@ -497,6 +509,9 @@ audit_log_to() {
   local c="$1" who="${SESSION_LOGIN:-?}" det="${3//$'\t'/ }"
   det="${det//$'\n'/ }"
   valid_id "$c" || return 0
+  # a regra do audit_log: sessão de OUTRO contest (que não o do log) ganha ` sess=<contest>` — o login sozinho não
+  # separa o `<criador>.admin` de cada contest (ex.: contest-priority/relatorio-* gravam no log do treino)
+  [[ -n "${SESSION_CONTEST:-}" && "$SESSION_CONTEST" != "$c" ]] && det+=" sess=$SESSION_CONTEST"
   [[ -d "$CONTESTSDIR/$c/var" ]] || mkdir -p "$CONTESTSDIR/$c/var" 2>/dev/null   # o mkdir era um fork por linha de audit
   printf '%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$who" "$2" "$det" \
     >> "$CONTESTSDIR/$c/var/admin-audit.log" 2>/dev/null || true
