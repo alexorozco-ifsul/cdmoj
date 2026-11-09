@@ -17,6 +17,7 @@ import { openHtmlReport } from '/shared/submission-links.js';
 import { balloonColorHex, balloonSVG, balloonEdge, balloonTint } from '/contest/score/score-colors.js';
 import { pickStmtLang, makeStmtLangChips, setChipsActive, rememberStmtLang, stmtHtmlLang } from '/shared/statement-langs.js';
 import { decorateSamples, downloadSamplesZip, SAMPLES_TAB_SCRIPT } from '/shared/statement-samples.js';
+import { tlClockBadge } from '/shared/tl-clock.js';
 import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const qs = new URLSearchParams(location.search);
@@ -737,7 +738,11 @@ function toggleDetail(p, item, toggle, submitWrap) {
     const rl = resolveLangs(p.languages || []);
     const restricted = Array.isArray(p.languages) && p.languages.length > 0 && rl !== LANGUAGES;
     let chips;   // [{label, time}]
-    if (restricted) {
+    // TL ÚNICO (TLUNIFIED=y): o mesmo em toda linguagem — um chip só (se um ajuste por linguagem do conf desfez a
+    // igualdade, os chips de sempre: a tela nunca esconde um TL diferente)
+    if (p.tl_unified && Object.keys(tl).length && new Set(Object.values(tl).map((v) => String(+v))).size === 1) {
+      chips = [{ label: T('todas as linguagens', 'all languages', 'todos los lenguajes'), time: Object.values(tl)[0] }];
+    } else if (restricted) {
       chips = rl.map((l) => ({ label: l.label, time: tl[l.id] != null ? tl[l.id] : tl.default }))
         .filter((c) => c.time != null);
     } else {
@@ -748,6 +753,7 @@ function toggleDetail(p, item, toggle, submitWrap) {
     if (chips.length) {
       const tlBlock = el('div', { class: 'tl-block' },
         el('span', { class: 'tl-label' }, '⏱ ' + T('Tempo limite', 'Time limit', 'Límite de tiempo')));
+      const clk = tlClockBadge(p); if (clk) tlBlock.append(clk);   // TL de CPU (TLCLOCK=cpu no pacote)
       chips.forEach((c) => tlBlock.append(el('span', { class: 'tl-chip' },
         el('b', {}, c.label), el('span', { class: 'tl-time' }, fmtTime(c.time)))));
       detail.append(tlBlock);

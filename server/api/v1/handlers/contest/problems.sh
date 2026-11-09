@@ -222,12 +222,20 @@ for (( i=0; i<${#PROBS[@]}; i+=5 )); do
   # nelas. Vem do json servível, como o has_samples: rota de contest não abre o pacote. Um jq só p/ os
   # dois campos; json antigo sem o campo = [].
   if [[ -n "$BJF" ]]; then
-    HAS_SMP=false; FNL='[]'
-    IFS=$'\t' read -r HAS_SMP FNL < <(jq -r '[([(.samples // [])[] | select((.too_big // false) | not)] | length > 0),
-        ([(.function_langs // [])[] | select(type == "string")] | tojson)] | @tsv' "$BJF" 2>/dev/null)
+    # tl_clock/wall_tl: o RELÓGIO do TL (TLCLOCK=cpu no conf do pacote, 05/11/2026) — a página diz "(CPU)" no TL.
+    # No mesmo jq; json antigo sem o campo = parede.
+    HAS_SMP=false; FNL='[]'; TLCLK=wall; WTL=""; TLU=false
+    IFS=$'\t' read -r HAS_SMP FNL TLCLK WTL TLU < <(jq -r '[([(.samples // [])[] | select((.too_big // false) | not)] | length > 0),
+        ([(.function_langs // [])[] | select(type == "string")] | tojson),
+        (if .tl_clock == "cpu" then "cpu" else "wall" end),
+        (if (.wall_tl | type) == "number" then (.wall_tl | tostring) else "-" end),
+        (.tl_unified == true)] | @tsv' "$BJF" 2>/dev/null)
     [[ "$HAS_SMP" == true ]] || HAS_SMP=false
     [[ "$FNL" == \[* ]] || FNL='[]'
-    args+=( --argjson fnl "$FNL" ); filt+=", has_samples:$HAS_SMP, function_langs:\$fnl"
+    [[ "$TLCLK" == cpu ]] || TLCLK=wall
+    [[ "$WTL" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]] || WTL=null
+    [[ "$TLU" == true ]] || TLU=false   # TL único (TLUNIFIED=y): a sanfona mostra UM chip
+    args+=( --argjson fnl "$FNL" ); filt+=", has_samples:$HAS_SMP, function_langs:\$fnl, tl_clock:\"$TLCLK\", wall_tl:$WTL, tl_unified:$TLU"
   fi
   # enunciado pode ser uma URL externa
   if [[ "$STATEMENT" == *http* ]]; then

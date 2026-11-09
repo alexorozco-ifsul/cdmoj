@@ -85,6 +85,13 @@ ck "aviso nota-sem-traducao(sample2,en)" 'grep -q "nota-sem-traducao(sample2,en)
 printf 'Salida test.\n\n## Entrada\n\nx\n\n## Salida\n\ny\n' > "$P/docs/enunciado.es.md"
 VALIDATE_RUN_SOLS=0 TREINO_JSONS="$FIX/treino/var/jsons" bash "$MOJTOOLS_DIR/validate-problem.sh" "$P" "col#pa" >/dev/null 2>&1
 ck "## Salida passa na seção de saída ES" '[[ "$(jq -r ".checks[]|select(.name==\"secao_saida_es\")|.ok" "$V")" == true ]]'
+# INTERATIVO (05/11/2026): uma seção de Interação vale pelo par Entrada/Saída — a convenção do Kattis
+printf 'Interacción test.\n\n## Interacción\n\nEl juez envía N.\n' > "$P/docs/enunciado.es.md"
+VALIDATE_RUN_SOLS=0 TREINO_JSONS="$FIX/treino/var/jsons" bash "$MOJTOOLS_DIR/validate-problem.sh" "$P" "col#pa" >/dev/null 2>&1
+ck "## Interacción vale pela entrada E pela saída ES (dispensada)" '[[ "$(jq -r "[.checks[]|select(.name==\"secao_entrada_es\" or .name==\"secao_saida_es\")|.ok]|all" "$V")" == true && "$(jq -r ".checks[]|select(.name==\"secao_entrada_es\")|.detail" "$V")" == dispensada* ]]'
+printf 'Sin secciones.\n\n## Notas\n\nx\n' > "$P/docs/enunciado.es.md"
+VALIDATE_RUN_SOLS=0 TREINO_JSONS="$FIX/treino/var/jsons" bash "$MOJTOOLS_DIR/validate-problem.sh" "$P" "col#pa" >/dev/null 2>&1
+ck "…e sem nenhuma das formas segue reprovando"  '[[ "$(jq -r ".checks[]|select(.name==\"secao_entrada_es\")|.ok" "$V")" == false && "$(jq -r .ok "$V")" == false ]]'
 rm -f "$P/docs/enunciado.es.md"
 TREINO_JSONS="$FIX/treino/var/jsons" MOJ_TL_STORE="$RUN/tl" bash "$MOJTOOLS_DIR/gen-problem-json.sh" "$P" "col#pa" >/dev/null 2>&1
 
@@ -171,6 +178,14 @@ ck "langs não-lista = 400"               '[[ "$(code)" == "400 Bad Request" ]]'
 echo "== /contest/problems e /contest/statement por idioma =="
 call /contest/problems GET time01 "contest=sl"
 ck "lista: oferecidos [pt,en,es], default en, A tem [pt,en] (es sem arquivo)" '[[ "$(jq -c ".statement_langs, .default_statement_lang, .problems[0].statement_langs" <<<"$BODY" | paste -sd" ")" == "[\"pt\",\"en\",\"es\"] \"en\" [\"pt\",\"en\"]" ]]'
+# relógio do TL (TLCLOCK=cpu no pacote, 05/11/2026): vem do json servível, sem abrir o pacote
+ck "/contest/problems: tl_clock wall (o padrão), wall_tl null e tl_unified false" '[[ "$(jq -c ".problems[0].tl_clock, .problems[0].wall_tl, .problems[0].tl_unified" <<<"$BODY" | paste -sd" ")" == "\"wall\" null false" ]]'
+cp "$J" "$RUN/json.bak"; jq -c '. + {tl_clock:"cpu", wall_tl:8, tl_unified:true}' "$RUN/json.bak" > "$J"
+# (no servidor a troca do relógio recalibra, e o TL novo em run/tl invalida o cache da rota; aqui, à mão)
+rm -f "$C"/var/problems-cache.*
+call /contest/problems GET time01 "contest=sl"
+ck "/contest/problems: tl_clock cpu, wall_tl 8 e tl_unified true do json servível" '[[ "$(jq -c ".problems[0].tl_clock, .problems[0].wall_tl, .problems[0].tl_unified" <<<"$BODY" | paste -sd" ")" == "\"cpu\" 8 true" ]]'
+cat "$RUN/json.bak" > "$J"; rm -f "$C"/var/problems-cache.*
 call /contest/statement GET time01 "contest=sl&problem=A&lang=en"
 ck "lang=en: 200 com o texto EN e X-MOJ-Statement-Lang en" '[[ "$(code)" == "200 OK" ]] && grep -q "Read N and print N" <<<"$BODY" && [[ "$(hdr X-MOJ-Statement-Lang)" == en ]]'
 call /contest/statement GET time01 "contest=sl&problem=A"

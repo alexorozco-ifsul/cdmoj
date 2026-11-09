@@ -22,7 +22,7 @@ else
   trap 'nginx -p "$T" -c "$T/nginx.conf" -s stop >/dev/null 2>&1; rm -rf "$T"' EXIT
   mkdir -p "$T/logs" "$T/run"
   # só o que o teste precisa do moj.conf: o map do host de contest e um server que inclui o snippet
-  sed "s#@WORKROOT@#${ROOT%/cdmoj}#g; s#@ROUTER@#/nao/usado#g; /include \/etc\/nginx\/moj-/d" "$TPL" > "$T/app.conf"
+  sed "s#@WORKROOT@#${ROOT%/cdmoj}#g; s#@ROUTER@#/nao/usado#g; /include[[:space:]]\+\/etc\/nginx\/moj-/d" "$TPL" > "$T/app.conf"
   cat > "$T/nginx.conf" <<EOF
 worker_processes 1; pid $T/run/nginx.pid; error_log $T/logs/error.log;
 events { worker_connections 16; }
@@ -34,6 +34,7 @@ http {
   map \$moj_contest_host \$moj_shed_file { "" "$T/shed"; default "/nonexistent"; }
   map \$arg_id \$moj_legacy_probid { default ""; }
   limit_conn_zone \$moj_site_conn zone=moj_site:1m;
+$(sed -n '/^# >>> MÍDIA DE TIME/,/^# <<< MÍDIA DE TIME/p' "$ROOT/server/etc/nginx/moj-prod.conf.in" | sed "s#@WORKROOT@#${ROOT%/cdmoj}#g")
   server { listen 127.0.0.1:$PORT; server_name moj.test ~^[a-z0-9][a-z0-9._-]*\.moj\.test\$; include $T/app.conf; }
 }
 EOF

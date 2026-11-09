@@ -3,7 +3,9 @@
 # tempos que a calibração mediu (run/calib/<id>/<juiz>.json), o servidor diz como sairia o TL em outras configurações
 # (cf do MOJ; resolução, a e b do Kattis), que soluções sairiam erradas em cada uma e qual configuração sugere.
 # Casos: o normal (2 juízes, W = o máx entre eles), o teste morto no teto ("não medido"), o conflito (lenta mais rápida
-# que a pass), o maior r do Kattis, ajustar o a, ajustar o b, o TLMOD sum e o TLOVERRIDE[default] (nada a sugerir).
+# que a pass), o maior r do Kattis, ajustar o a, ajustar o b, o TLMOD sum, o TLOVERRIDE[default] (nada a sugerir) e o
+# relógio de CPU com a slow que dorme e morre pela PAREDE (`wall`: TLE certo até o TL com que rodou) e o TL ÚNICO
+# (TLUNIFIED=y: toda linguagem com o TL do maior W).
 set -u
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"; ROUTER="$ROOT/api/v1/router.sh"
 : "${MOJTOOLS_DIR:=$(cd "$ROOT/../../mojtools" 2>/dev/null && pwd)}"; export MOJTOOLS_DIR
@@ -87,6 +89,31 @@ mk po 'CALIBRATIONTL=5\nTLOVERRIDE[default]=2\n'
 host po j1 "$G1" "$PS" "$S1"
 get po
 ck "TLOVERRIDE[default]: o TL é 2 em toda linha e não há o que sugerir" '[[ "$(row moj 3 | jq -r .tl.c)" == 2 && "$(jq -c ".tl_suggest | [.moj.state, .moj.why, .kattis.state]" <<<"$BODY")" == "[\"none\",\"override\",\"none\"]" && "$(jq -c .tl_sim.overrides <<<"$BODY")" == "[\"default\"]" ]]'
+
+echo "== relógio de CPU: a slow que DORME morre pela parede (wall:true) com CPU abaixo do TL (E2E de 05/11/2026) =="
+mk pw 'CALIBRATIONTL=5\nTLCLOCK=cpu\n'
+GW="$(sol good sol.c c Accepted,100p 8 AC:0.02 AC:0.23 AC:0.23)"
+SO='{"file":"orphan.c","lang":"c","category":"slow","verdict":"Time Limit Exceeded,0p","method":"moj","etl":3,"tests":[{"name":"t1","code":"TLE","time":1.23,"tl":0.3305},{"name":"t2","code":"TLE","time":1.76,"tl":0.3305}]}'
+SW='{"file":"sleep.c","lang":"c","category":"slow","verdict":"Time Limit Exceeded,0p","method":"moj","etl":3,"tests":[{"name":"t1","code":"TLE","time":0.02,"tl":0.3305,"code_alt":"TLE","tl_alt":1,"wall":true},{"name":"t2","code":"TLE","time":0.23,"tl":0.3305,"code_alt":"TLE","tl_alt":1,"wall":true}]}'
+host pw j1 "$GW" "$SO" "$SW"; get pw
+DBG="$(jq -c "[.tl_sim.moj.rows[] | {cf, tl: .tl.c, fail, unmeasured}], .tl_suggest" <<<"$BODY")"
+ck "MOJ fator 1,35 (o TL da calibração, 0,3305): a que dorme NÃO reprova (era \"✗ slow/sleep.c\" em toda linha)" '[[ "$(row moj 1.35 | jq -c "[.tl.c, .ok, .fail, .unmeasured]")" == "[0.3305,true,[],[]]" ]]'
+ck "fator 1 (TL menor): TLE certo também"       '[[ "$(row moj 1 | jq -c "[.ok, .unmeasured]")" == "[true,[]]" ]]'
+ck "fator 2 (TL acima do que rodou): não medido, sem reprovar" '[[ "$(row moj 2 | jq -c "[.ok, .unmeasured]")" == "[true,[\"slow/sleep.c\"]]" ]]'
+ck "sugestão MOJ: manter o 1,35 (antes: conflito)" '[[ "$(jq -c ".tl_suggest.moj | [.state, .cf]" <<<"$BODY")" == "[\"keep\",1.35]" ]]'
+ck "sugestão Kattis: sem conflito (r 1 vale; a que dorme fica não medida)" '[[ "$(jq -r ".tl_suggest.kattis.state" <<<"$BODY")" != conflict && "$(row kattis 1 r | jq -c "[.ok, .unmeasured]")" == "[true,[\"slow/sleep.c\"]]" ]]'
+ck "juízo da solução: a que dorme é ✓ (tle) pelo MOJ e pelo Kattis (a parede é ≥ 3 × TL ≥ b × TL)" '[[ "$(jq -c "[.hosts[0].sols[] | select(.file == \"sleep.c\") | .expect.why, .expect_alt.state, .expect_alt.why]" <<<"$BODY")" == "[\"tle\",\"ok\",\"tle\"]" ]]'
+
+echo "== TL ÚNICO (TLUNIFIED=y): toda linguagem com o TL do maior W; a slow em C que passa no TL do py aparece =="
+mk pu 'CALIBRATIONTL=5\nTLUNIFIED=y\n'
+GU1="$(sol good a.c c Accepted,100p 7.2 AC:0.20)"; GU2="$(sol good b.py py Accepted,100p 7.2 AC:1.00)"
+SU="$(sol slow m.c c 'Time Limit Exceeded,0p' 3.0 AC:0.10 TLE:0.60)"
+host pu j1 "$GU1" "$GU2" "$SU"; get pu
+DBG="$(jq -c "[.tl_sim.moj.rows[] | {cf, tl, fail}], .tl_suggest.moj" <<<"$BODY")"
+ck "fator 1,35: c e py com o MESMO TL (1,35 × 1,00 + 0,02 = 1,37) e a slow em C reprova" '[[ "$(row moj 1.35 | jq -c "[.tl.c, .tl.py, .tl.default, .fail]")" == "[1.37,1.37,1.37,[\"slow/m.c\"]]" ]]'
+ck "sugestão MOJ: conflito entre a good em py e a slow em C" '[[ "$(jq -c ".tl_suggest.moj | [.state, .pass, .slow]" <<<"$BODY")" == "[\"conflict\",\"good/b.py\",\"slow/m.c\"]" ]]'
+mk pu 'CALIBRATIONTL=5\n'; get pu
+ck "sem a chave: por linguagem (c 0,29), e a slow em C dá TLE (configuração certa)" '[[ "$(row moj 1.35 | jq -c "[.tl.c, .ok]")" == "[0.29,true]" ]]'
 
 echo "== sem calibração: tl_sim null; com calibração em voo, não calcula =="
 mk pv 'CALIBRATIONTL=5\n'

@@ -509,6 +509,14 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   pós-freeze saía IGUAL nas duas visões e só os ACs ganhavam "?" (TCP 2026: a plateia sabia quem NÃO tinha
   acertado). Leitores do TXT casam o PREFIXO `tentativas/-` (report-gen, `cellWait`, `cellTitle`,
   `sc_board_rows`); o `c-frz` faz o celular mostrar "?" em vez de ✗. Teste: `smoke-score-reveal.sh`.
+- **O POLL DO PLACAR E DA FILA DO JUIZ SOBREVIVE A ERRO** (05/11/2026, véspera da LATAM): um 429 (quebra-circuito do
+  contest), 502 ou falha de rede trocava a tabela por "Falha ao carregar" e o poll PARAVA — a aba ficava sem placar até o
+  F5, e o F5 em massa é a própria rajada. Hoje o `score.js` mantém o placar anterior, mostra o aviso `#scoreStale` e tenta
+  de novo com espera crescente (10–20, 20–40, teto 30–60 s); o 1º sucesso volta ao ritmo normal; `pollGen` mata a cadeia
+  velha (início da prova × troca de coorte rodavam duas); o disparo do INÍCIO sai com dispersão de até 1,5 s; e a peça do
+  boot que falhou (`teams`, `regions`, `balloons`…) é pedida de novo no próximo poll bem-sucedido (`BOOT_RETRY`). Contest
+  secreto com 401/403 = convite ao login, sem reagendar. O `judge.js` (`review/list`) idem, parando só em 401/403. Poll
+  NOVO segue a mesma regra: erro reagenda, nunca para. Testes: `smoke-score-poll.gjs.sh`, `smoke-judge-poll.gjs.sh`.
 - **PLACAR ANÔNIMO É CORTADO NA API** (`SCORE_ANON=1`, 03/10/2026, decisão do Ribas; era só a TELA — o TXT com nomes ia
   a todos): fora da ORGANIZAÇÃO (o conjunto da estatística: admin, chefe, juiz, `.mon`, `.animeitor`) o `/contest/score`
   responde o agregado `var/placar-anon.json` (`X-MOJ-Anon: 1`; `gen_anon` no `build.sh`, do placar PÚBLICO; antes do
@@ -576,6 +584,48 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `/contest/teams` vira `t.photoUrl` e o link só renderiza com o placar **ABERTO**
   (`opts.showPhotos = !frozenView`, pelo cabeçalho `X-MOJ-Frozen`) — no freeze a foto
   denunciaria presença. Galeria do telão e o painel **Pessoas › Times** seguem como antes.
+  **BRASÃO, FOTO, MÚSICA E O PADRÃO SAEM DO DISCO PELO NGINX** (05/11/2026; relato do Ribas: no placar de 500+ times o
+  `max-age=60` sem validador e o re-render de cada poll rebaixavam ~500 brasões por minuto por aba, um bash cada no balde
+  do contest — o do `/submit`; 121 × 429 só de brasão num dia; foto, música e o padrão vieram no mesmo dia, a pedido
+  dele): `location = /api/v1/contest/{team-logo,team-photo,team-music,placeholder}` do `moj-app.conf.in` (seção "MÍDIA DE TIME") fazem `try_files … @moj_media`. O
+  `map` `$moj_media_c` (bloco "MÍDIA DE TIME" IGUAL nos dois `moj-prod*.conf.in`) só aceita o contest em `[A-Za-z0-9._-]`
+  sem ponto/hífen no começo e sem `..` (`$arg_*` chega CRU; o `valid_id`) e com host vazio ou IGUAL a ele (o
+  `contest_mismatch`, por retro-referência na chave `contest|host`); o `$moj_team_dir` junta o user com a mesma lista; o
+  resto cai no bash, que segue sendo a
+  AUTORIDADE — a doutrina do porteiro: o nginx serve só o caso feliz. FOTO: `photo.webp` › `photo.png` (a ordem do
+  `tp_file`); `thumb` não vazio (a regra do bash) = só a `photo.thumb.webp`; sem foto = bash (a PADRÃO, `X-MOJ-Photo`).
+  MÚSICA: o `music.mp3` (gravação atômica, sem derivado), com `Range`/206 que o bash nunca teve. O PADRÃO (a rota
+  `/contest/placeholder` e o time sem foto/música, que é o que o telão externo pede na revelação) sai do `@moj_padrao`:
+  o do contest › o de fábrica do CHECKOUT (`cdmoj/server/etc/team-placeholder.*` — o bash lê o da imagem; mesmo commit),
+  na ordem do `tp_placeholder`/`tm_placeholder`, com `X-MOJ-Photo`/`X-MOJ-Music: placeholder` e `public, max-age=60` (com
+  `v` também: o padrão troca). Só com o contest EXISTENTE (`-f conf`, a regra do `require_contest`); `kind` com `%` ou
+  `|` = bash (o nginx não decodifica); e miniatura pedida de quem TEM foto (`photo.webp`/`.png` no disco) = bash, que a
+  gera — nunca o padrão no lugar da foto do time. Entrar no `@moj_padrao` é por `try_files` (um `error_page` ali faria o
+  418 dele virar error_page recursivo, que o nginx não segue).
+  ⚠ **INVARIANTE da miniatura: existe ⇒ é da foto ATUAL** — o nginx não faz o `-nt` do `tp_thumb`. Quem grava a garante:
+  `tp_store` apaga a velha e troca a foto sob o flock dela (`.thumb.lock`; se a nova não sai, falta miniatura e o bash a
+  gera), `tp_remove` apaga a miniatura primeiro, `photos-to-webp.sh` idem. Escritor NOVO de `photo.*` passa pelo
+  `tp_store`/`tp_remove` (teste: `smoke-animeitor.sh`, com `convert` que falha só no 320x320). Cache: URL com `v` =
+  `immutable` (o **`logo_v`** do `/contest/teams` = mtime do `logo.png` em ms, que o placar e o painel Times põem na
+  URL; a galeria do telão manda o mtime da foto e da música); sem `v` = o cache de sempre (brasão 10 min, miniatura
+  1 dia, foto e música 1 min — o telão externo busca as duas sem `v`) + ETag; os handlers bash respondem o mesmo
+  cabeçalho. ⚠ A TRAVA DE SEDE
+  não se repete no nginx (`run/site-lock` é 700 de propósito): um IP preso baixa brasão/foto de outro contest pelo site
+  principal — é mídia pública; o resto segue barrado. O que cai no bash vai à
+  **`@moj_media`**: zona PRÓPRIA `moj_media` de 16 em voo (com site 16 + contest 32 = o pool de 64), sem o breaker do
+  contest, com o microcache e o freio do treino. **CORS (08/11/2026, revelação da LATAM):** os 4 blocos e o `@moj_media` mandam `Access-Control-Allow-Origin: *` (`always`) e o padrão/bash expõem `X-MOJ-Photo`/`X-MOJ-Music` — o Animeitor lê a mídia no NAVEGADOR com `crossOrigin`/fetch (a `<img>` comum não precisa; a mídia nunca levou o cabeçalho e a revelação quebrou com "erro de CORS"); a API comum segue sem CORS. Mudou um desses templates ⇒ reinstalar o nginx no deploy (e rodar os
+  smokes de nginx NO SERVIDOR: lá os `include /etc/nginx/moj-*` casam arquivos reais). Testes:
+  `smoke-team-media-nginx.sh` (nginx de teste com o snippet e o bloco REAIS; `fastcgi_pass` vira um eco da rota),
+  `smoke-contest-teams.sh` (`logo_v`), `smoke-score-flag-title.gjs.sh` (a URL), `smoke-animeitor.sh` (a miniatura).
+  **O `/contest/teams` É CACHEADO POR ASSINATURA** (05/11/2026, véspera da LATAM: 168 ms com 625 contas, 363 ms com
+  2.331, e toda carga do placar o pede): o `find` de sempre (login, arquivo, mtime e TAMANHO de cada
+  `account.json`/foto/brasão) + o `CH_JSON` + o `CH_WANT` viram um md5; igual ao `var/teams-cache/v<visão>.sig` = serve o
+  `.json` guardado. NÃO serve o `.score-dirty` (muda a cada veredicto) nem o mtime do dir da conta (o `metrics.json` é
+  gravado por tmp+mv). Regras do resp_cache: a VISÃO vai no nome e na assinatura; o próprio handler e a `lib/cohorts.sh`
+  entram por `-nt` (deploy invalida). Montagem sob `{ flock; } 9>lock` (NUNCA `exec {fd}>` — falha de redirect num
+  `exec` mata o shell, e o `2>/dev/null` dele vale p/ o resto da requisição). Medido: 168 → 107 ms (625), 363 → 179 ms
+  (2.331); o que sobra é o custo fixo da rota + os 4 jq da `lib/cohorts.sh` (~33 ms, antes de qualquer cache). Teste:
+  seção "cache por assinatura" do `smoke-contest-teams.sh` (envenena o JSON guardado p/ provar que serve do cache).
 - **Calibração/TL — 3 mecanismos de autoria (2026-08-19)**: (1) o `/problems/calib` devolve
   **`sols`** estruturado por host (`[{file,lang,category,verdict,tests:[{name,code,time,tl}]}]`,
   do `.calib-sols.json` do calibreitor via `/judge/calib-report` — que PRESERVA sols/reports
@@ -636,6 +686,36 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   se a VERSÃO do pacote mudou — senão RECALCULA (`calx_summary_write`). O `/judge/calib-report` JUNTA por
   categoria/arquivo na mesma versão. Testes: `smoke-tl-method.sh`, `smoke-calib-expect.sh` (1b), `smoke-sched-width.sh`,
   `smoke-limits-tab.gjs.sh`, `smoke-sols-expect.gjs.sh`; mojtools `make test-calib test-kattis`.
+- **RELÓGIO DO TL (05/11/2026; pedido do Roberto/Ribas: TL de CPU p/ problema ICPC, a parede como teto maior)** — formato
+  em `docs/PACOTE.md` §10 "Relógio do TL", motor no mojtools (`build-and-test.sh`, `test-tl-clock.sh`). `TLCLOCK=wall|cpu`
+  (padrão `wall`: nada muda) e `WALLTL=<s>` (mínimo do teto de parede) no conf. É o CONTRÁRIO do `TLMETHOD`: as duas
+  linhas ficam DENTRO do `tl_checksum` (o W medido muda de natureza ⇒ trocar recalibra), então NADA vai no job — o juiz
+  lê o conf do próprio cache — e o servidor só EXIBE: `tl_conf_clock_to <var> <var-walltl> <pkg>` (`lib/tl-store.sh`,
+  nameref, sem source, última linha vence; `WALLTL` só em forma de número JSON — vai por `--argjson`) em
+  `problems/{get,tl,calib}` e `ops/problemtl`; `tl_clock` do índice de donos (`gen-problem-owners.sh`) no
+  `problems/status`; `tl_clock`/`wall_tl` do json servível (`gen-problem-json.sh`) no `/treino/problem` e no
+  `/contest/problems` (no MESMO jq do `has_samples` — rota de contest não abre pacote). Aluno: selo "tempo de CPU" com a
+  explicação do teto (`web/shared/tl-clock.js`, fonte única do treino e do contest; a frase é a mesma do `tl_cpu` do
+  `_doc_t`); folha de TL da prova: † no problema + nota (`_doc_tl_matrix` lê o `tl_clock` do json do banco). Editor:
+  `cf_tlclock`/`cf_walltl` na aba Limites (`CF_SEL` agora leva `[id, chave, default, valores, topo?]` — só o TLMETHOD
+  vai ao topo) e aviso de `cpu` + `CPUNEEDED>1` (o `validate-problem.sh` reprova, `conf_tlclock_sane`). Painel: pílula
+  "CPU"; Central: item informativo `tl_clock` (ok, nunca aviso — é escolha do autor). **Morte pela PAREDE** (o `wall: true`
+  que o calibreitor põe no teste do `sols`): o tempo é o CPU, que pode ficar abaixo do TL — a simulação (`tl-sim.sh`,
+  `wk` = o menor `tl` com que um teste morreu pela parede) o conta como TLE certo em todo TL ≤ wk e "não medido" acima, e
+  o juízo do Kattis (`calx`, `$wallk`) como lento de verdade; o editor (`testsTable`) e o `moj calib` marcam "parede".
+  Sem isso a `slow` que dorme dava "nenhum fator serve" (achado no E2E de 05/11/2026). Testes: `smoke-tl-clock.sh`,
+  `smoke-limits-tab.gjs.sh`, `smoke-preflight.sh`, `smoke-statement-langs.sh` (o `/contest/problems`).
+- **TL ÚNICO (05/11/2026; pedido do Roberto p/ a LATAM)** — formato em `docs/PACOTE.md` §10 "TL único", motor no mojtools
+  (`tl_unify_table`). `TLUNIFIED=y` no conf = o mesmo TL em toda linguagem = o MÁX da tabela do método (as fórmulas
+  crescem com o W; a tabela dos juízes segue por linguagem). No servidor é UM ponto: `tl_conf_mods` leva `unified: true`
+  e o `tl_eff` (`_TL_EFF_DEF`, def `tl_unify`) unifica o calibrado ANTES do TLMOD/override — todo leitor (served, rotas,
+  `effof`, `tls_eff`, folha de TL) herda; os consumidores do `tl_mods` só leem `.sum`/`.mult`. O índice de donos leva
+  `tl_unified` (e o `unified` no `tl_mods`, p/ o `status.sh`); o json servível leva `tl_unified` (o `/contest/problems`
+  lê no MESMO jq do `tl_clock`). Simulação: com `$m.unified` o W de cada solução é o máx W (`tls_cfint`). Aluno: UM chip
+  "todas as linguagens" só quando todos os valores são iguais (ajuste por linguagem desfaz a igualdade e volta aos chips
+  de sempre). Editor `cf_tlunified` (`CF_YN`, padrão n); Painel pílula "TL único". DENTRO do tl-checksum (ligar
+  recalibra). Testes: `smoke-tl-unified.sh`, `smoke-tl-sim.sh`, `smoke-tl-mods.sh` (a cópia literal),
+  `smoke-limits-tab.gjs.sh`, `smoke-statement-langs.sh`.
 - **LOCKS do store de TL e da calibração (26/10/2026)**: todo ler-e-regravar de `run/tl/<id>.json` passa por
   `_tl_locked <id>` (`lib/tl-store.sh`: `run/tl/<id>.lock`, `flock -w 10`, rc 75 ⇒ o tl-report responde 500) — dois
   juízes reportando juntos perdiam a entrada de um (o último `mv` vencia); o sumário das soluções por `_calx_locked`
@@ -1334,7 +1414,10 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   rc 3; geográfica do PDF em INTEIROS; lista de espera + `promote_next`; teste `smoke-classify-pda.sh`) e
   `latam-mundial` (`classify-mundial.sh`, no contest do Campeonato; prêmios informativos; `smoke-classify-mundial.sh`) e
   `manual` (`classify-manual.sh`, seletiva: o painel mostra o placar e cada promoção é um `add` com motivo opcional, até
-  `slots` — 409 `slots_full`; `smoke-classify-manual.sh`).
+  `slots` — 409 `slots_full`; o `add` aceita também as vias do catálogo (menos `comite`) e as da `config.labels` do estágio,
+  e `relabel {id, via}` troca só a via de um `add` — a regra é o `_via_ok` do handler, espelhado no `viaOptions` do painel;
+  `config.via_order` opcional ordena as seções; o formulário do painel só mexe em `slots` e preserva o resto da config;
+  `smoke-classify-manual.sh`).
   Testes: `smoke-contest-modules.sh` (57), `smoke-preflight.sh`, `smoke-contest-create.sh`.
 - **MÓDULO `esqueletos` (esqueleto de código no editor do time, issue #40 do Alex Orozco, 30/09/2026)**:
   no contest o editor abre VAZIO (o time escreve o código DELE por completo — o PR #34 foi recusado por isso);
@@ -1496,7 +1579,10 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   (`find`). O jq do coletor mora em VARIÁVEIS — o
   `jq-portability.sh` não o compila: rode os smokes com o jq 1.7 antes de deployar. Teste
   com mock: `smoke-contest-nutella.sh`. Comando novo se valida na imagem de TESTE `26tete`,
-  nunca numa sede real.
+  nunca numa sede real. **Trava de tela (06/11/2026)**: mora no SERVIDOR do nutellaboot; só
+  `POST …/lock|unlock` (ações `lock`/`unlock` do `/contest/nutella`, botões 🔒/🔓 do painel) a mudam —
+  `cantouch`/`donottouch` por `…/commands` voltam na mesma volta do long-poll e saíram da lista do painel.
+  `precontest` ("Iniciar prova") e `cleanhomenow` APAGAM as homes: o painel pede o id da sede digitado.
 - **PAINEL DO TREINO: admin × super-admin e AÇÃO DE VÁRIOS ALVOS (16/10/2026)** — um `.admin` comum deslogou 1.310
   contas de uma vez (ele mesmo e o super-admin no meio), e as `/ops` aceitavam o `.admin` LOCAL de qualquer contest.
   Portões em `lib/auth.sh`: **`require_treino_admin`** (sessão DO TREINO + `.admin`) e **`require_treino_superadmin`**

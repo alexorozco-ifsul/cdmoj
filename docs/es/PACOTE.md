@@ -1,4 +1,4 @@
-<!-- i18n-source: PACOTE.md blob:164af7f7ec105abe461ab3e9558fd9c4eb1eed4c -->
+<!-- i18n-source: PACOTE.md blob:ce4d266a52f5d7304839304a8aaec6fc236a8f4b -->
 # MOJ: el paquete de problema (formato canónico)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -134,6 +134,10 @@ Tres reglas que exige el filtro de calidad:
 
 1. **Las secciones `## Entrada` y `## Saída` son obligatorias.** Sin ellas el problema no pasa la
    validación. (El validador también acepta `## Input`, `## Output` y `## Salida`, y de uno a tres `#`.)
+   En el problema **interactivo**, una sección `## Interacción` vale por las dos. También valen
+   `## Interação` e `## Interaction`. Describe en ella la conversación con el árbitro. No escribas
+   `## Entrada` solo para remitir a la Interacción. Atención: `SAMPLE=no` no quita las secciones. En el envío
+   de función, `## Entrada` describe los parámetros y `## Salida` describe el valor de retorno.
 2. **El título no va en el texto.** Una primera línea `% Título do problema` es **legado**: el
    renderizador la quita. El título verdadero es el campo `display_title` del `.moj-meta.json`
    (sección 5), y el renderizador inyecta un `<h1>` a partir de él.
@@ -439,6 +443,9 @@ Todas las claves que entiende `build-and-test.sh`:
 |---|---|---|---|
 | `TLMOD[calibrafactor]` | `1.35` | multiplicador aplicado al tiempo de la solución `good` para obtener el tiempo límite, en el método MOJ. Subirlo le da holgura al estudiante | 453 |
 | `TLMETHOD` | `moj` | el **método del tiempo límite** (sección 10, "Métodos de TL"): `moj` = `calibrafactor` × peor tiempo + 0,02 s; `kattis` = el método de la spec de Kattis (2025-09). Los dos son por lenguaje. La calibración mide los dos siempre: cambiarlo **no pide recalibración** (la línea queda fuera de los dos sellos del tl-checksum). En la web: pestaña Límites; en la CLI: `moj edit` → 8 → 11, y las `KATTIS_*` en → 12 | 0 |
+| `TLCLOCK` | `wall` | el **reloj del tiempo límite** (sección 10, "Reloj del TL"): `wall` = tiempo de reloj de pared, como siempre; `cpu` = tiempo de CPU (user+sys), con el reloj de pared solo como techo mayor, que atrapa a quien queda bloqueado o duerme. Para problemas estilo ICPC; **no** para problemas paralelos (`CPUNEEDED` > 1 reprueba el paquete). **Cambiarlo recalibra**. En la web: pestaña Límites; en la CLI: `moj edit` → 8 → 13 | 0 |
+| `WALLTL` | — | solo con `TLCLOCK=cpu`: el **mínimo** del techo de reloj de pared, en segundos (de 1 a 60). El techo es el mayor entre 3 × el tiempo límite, el techo de CPU + 1 s y esto. **Cambiarlo recalibra**. En la CLI: `moj edit` → 8 → 14 | 0 |
+| `TLUNIFIED` | `n` | **TL único** (sección 10, "TL único"): `y` = el mismo tiempo límite en todos los lenguajes, el mayor entre ellos (el del peor tiempo entre todas las `good`), en los dos métodos — el modelo de la spec de Kattis. **Cambiarlo recalibra**. En la web: pestaña Límites; en la CLI: `moj edit` → 8 → 15 | 0 |
 | `KATTIS_AC_TO_TIME_LIMIT` | `2.0` | método Kattis: el tiempo límite es al menos esto × el peor tiempo de las `good` (de 1 a 100; el `ac_to_time_limit` de la spec) | 0 |
 | `KATTIS_TIME_LIMIT_TO_TLE` | `1.5` | método Kattis: la solución `slow` tiene que superar esto × el tiempo límite en alguna prueba (de 1 a 100; el `time_limit_to_tle` de la spec) | 0 |
 | `KATTIS_TIME_RESOLUTION` | `1.0` | método Kattis: el tiempo límite es múltiplo de esto, redondeado hacia arriba (más de 0 y hasta 10 s; el `time_resolution` de la spec) | 0 |
@@ -816,8 +823,8 @@ estaban verificadas (relato de Arthur Botelho, 22/09/2026).
 | `has_author` | existe el archivo `author` |
 | `has_statement` | existe `docs/enunciado.{md,org,tex}` |
 | `html_builds` | pandoc logra renderizar el enunciado |
-| `secao_entrada` | el enunciado tiene `## Entrada` |
-| `secao_saida` | el enunciado tiene `## Saída` (acepta `Output` y `Salida`) |
+| `secao_entrada` | el enunciado tiene `## Entrada`, o una sección `## Interacción` (problema interactivo) |
+| `secao_saida` | el enunciado tiene `## Saída` (acepta `Output` y `Salida`), o una sección `## Interacción` |
 | `html_builds_<lang>`, `secao_entrada_<lang>`, `secao_saida_<lang>` | lo mismo, para cada traducción `docs/enunciado.<lang>.md` presente |
 | `examples_present` | existe al menos un par input/output |
 | `tests_paired` | todo input tiene su output, y viceversa |
@@ -937,6 +944,70 @@ de cada método:
 La pestaña Límites del editor muestra las tablas y las sugerencias, y el botón **aplicar** completa los campos.
 `moj calib` muestra lo mismo. Guardar graba el `conf`: un factor nuevo o parámetros de Kattis nuevos recalibran.
 
+### Reloj del TL: pared o CPU
+
+El tiempo límite se cobra en el **reloj de pared** (`TLCLOCK=wall`, por defecto): el tiempo real que tardó la
+prueba. Es lo que sirve a los problemas paralelos (OpenMP/MPI), en los que el programa usa varias CPUs a la vez, y es
+como se calibró todo problema del acervo.
+
+En un problema estilo ICPC se puede cobrar por **tiempo de CPU** (`TLCLOCK=cpu`): el `user + sys` del programa. El
+reloj de pared pasa a ser solo un **techo mayor**, que atrapa al programa bloqueado esperando algo, o al que duerme
+(`sleep`) para gastar tiempo sin gastar CPU:
+
+| | Pared (`wall`, por defecto) | CPU (`cpu`) |
+|---|---|---|
+| Qué se compara con el tiempo límite | el tiempo de reloj de pared de la prueba | el tiempo de CPU (user+sys) |
+| Cuándo es TLE | pared − TL > tolerancia | CPU − TL > tolerancia, **o** la prueba llegó al techo de reloj de pared |
+| Techo de reloj de pared de cada prueba | TL + 2,2 s | el mayor entre 3 × TL, el techo de CPU + 1 s y el `WALLTL` |
+| Techo de CPU | — | TL + 2,2 s, redondeado hacia arriba (`ulimit -t` en la jaula) |
+| La calibración mide | reloj de pared | CPU |
+| De dónde viene el CPU | — | el `cpu.stat` del cgroup de la prueba (exacto: cuenta todo proceso, incluso un hijo que el programa no esperó); en un juez sin ese cgroup, el `user + sys` de la jaula, sin los hijos no esperados |
+
+Ejemplo, con tiempo límite de 1 s: un programa que gasta 0,8 s de CPU pero tarda 2,5 s de reloj de pared (esperando
+I/O, máquina disputada) es aceptado con el reloj de CPU y da TLE con el de pared. Un programa que duerme 10 s da TLE
+en los dos: en el de CPU, cuando llega al techo de reloj de pared de 5 s (el techo de CPU es de 4 s: 1 + 2,2, redondeado hacia arriba).
+
+- **Cambiar el reloj recalibra**, y cambiar el `WALLTL` también: las dos líneas quedan dentro del `tl_checksum`,
+  porque el tiempo medido cambia de naturaleza. Es lo contrario del `TLMETHOD`.
+- **No sirve a problemas paralelos.** El tiempo de CPU suma los hilos, y el speedup se volvería costo:
+  `TLCLOCK=cpu` con `CPUNEEDED` > 1 reprueba el paquete.
+- **En un problema interactivo** el tiempo de CPU es el de la jaula entera, árbitro y jugador, como el reloj de
+  pared. El jugador que se traba esperando al árbitro (sin `flush`) no gasta CPU y da TLE en el techo de reloj de
+  pared.
+- **La JVM y .NET** gastan CPU en hilos propios (recolector de basura, JIT). La calibración por lenguaje lo
+  absorbe, porque mide de la misma forma.
+- **El estudiante lo ve**: el tiempo límite aparece con el sello "tiempo de CPU" en el entrenamiento y en la
+  competencia, con la explicación del techo de reloj de pared. La hoja de tiempos límite de la competencia marca el
+  problema con † y lo explica en una nota, en los tres idiomas.
+- En el reporte de la evaluación, los tiempos son de CPU, y cada prueba muestra también el reloj de pared.
+- En la calibración, la prueba detenida en el techo de reloj de pared lleva la marca **pared** (en el editor y en
+  `moj calib`): su tiempo es el de CPU, que puede quedar por debajo del TL. La simulación del TL lo sabe: una `slow` que
+  duerme da TLE con certeza en todo TL hasta aquel con el que corrió, y queda "no medida" por encima, sin reprobar la
+  configuración.
+
+### TL único: el mismo en todos los lenguajes
+
+El tiempo límite es **por lenguaje**: cada lenguaje con `good` tiene el suyo, y el que no tiene `good` usa el `default`
+(el menor). Con `TLUNIFIED=y` el problema tiene **un solo tiempo límite**, el mismo en todos los lenguajes aceptados, como
+si todas las `good` fueran de un solo lenguaje. Es el modelo de la spec de Kattis, y el de la LATAM.
+
+- **La cuenta:** el TL único es el **mayor** tiempo límite entre los lenguajes, por el método del `conf`. Las dos
+  fórmulas crecen con el W, así que el mayor TL es el del peor tiempo entre todas las `good`. En MOJ:
+  `calibrafactor × máx W + 0,02 s`. En Kattis: `⌈a × máx W / r⌉ × r`. La calibración no mide nada más: la tabla de los
+  jueces sigue por lenguaje, y el único sale de ella.
+- **Ejemplo:** `good` en C++ con 0,21 s y en Python con 1,30 s. Por lenguaje, MOJ da C++ 0,30 s y Python 1,78 s. Con el
+  TL único, las dos (y todo otro lenguaje aceptado) quedan con 1,78 s. En Kattis, con 3 s.
+- **Cambiarlo recalibra.** La línea entra en el `tl_checksum`: las soluciones `pass`, `slow` y `wrong` tienen que
+  evaluarse de nuevo por el TL único. Una `slow` en C++ que superaba el TL del C++ puede pasar en el TL del Python, y la
+  calibración lo muestra como divergente.
+- **Lo que vale encima:** el `TLMOD[<lang>.sum|.mult]` y el `TLOVERRIDE[<lang>]` siguen valiendo, porque son elección
+  explícita del autor. Pero deshacen el "mismo TL en todos", y la validación avisa. El `TLOVERRIDE[default]` vale para
+  todos y no deshace nada.
+- **El estudiante ve** un solo chip, "todos los lenguajes", en el entrenamiento y en la competencia. La hoja de tiempos
+  límite sale con una columna y la nota "no dependen del lenguaje".
+- **Kattis:** el paquete nativo importado entra con `TLUNIFIED=y`, porque en la spec el problema tiene un solo tiempo
+  límite. La ida y vuelta MOJ → Kattis → MOJ conserva el valor.
+
 ### Soluciones: ¿cada una hace lo que pide su categoría?
 
 La calibración devuelve, por juez y por solución, el código de **cada prueba** (`AC`, `WA`, `TLE`, `MLE`,
@@ -979,7 +1050,7 @@ diferentes: *"¿el tiempo límite medido todavía vale?"* y *"¿el juez todavía
 | | `tl_checksum` (estrecho) | `pkg_version` (amplio) |
 |---|---|---|
 | Cómo se calcula | `tl-checksum.sh <pkg>` | `tl-checksum.sh --all-sols <pkg>` |
-| Cubre | `conf` (menos las líneas `SAMPLE`, `FUNCTION_LANGS` y `TLMETHOD`), `tests/input/*`, `tests/output/*` (no vacíos), `tests/score`, `sols/good/*`, `scripts/*` (contenido **y** bit de ejecución) **menos `scripts/validator.cpp`** | todo lo que cubre el estrecho **+ `sols/pass`, `sols/slow`, `sols/wrong`, `sols/upcoming` + `scripts/validator.cpp`** |
+| Cubre | `conf` (menos las líneas `SAMPLE`, `FUNCTION_LANGS` y `TLMETHOD`; el `TLCLOCK`, el `WALLTL` y el `TLUNIFIED` **entran**), `tests/input/*`, `tests/output/*` (no vacíos), `tests/score`, `sols/good/*`, `scripts/*` (contenido **y** bit de ejecución) **menos `scripts/validator.cpp`** | todo lo que cubre el estrecho **+ `sols/pass`, `sols/slow`, `sols/wrong`, `sols/upcoming` + `scripts/validator.cpp`** |
 | Para qué sirve | ata el **TL** al paquete: es el `checksum` de `run/tl/<id>.json`, el del índice de dueños y el que compara `/contest/problems` | es la **clave de la caché del juez** y la identidad de una calibración: `/judge/package-meta` lo devuelve como `checksum` y el agente vuelve a descargar cuando cambia |
 
 Ninguno de los dos cubre `docs/enunciado.*`, `tags`, `author` ni el `.moj-meta.json`

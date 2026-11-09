@@ -95,12 +95,16 @@ fastcgi_read_timeout 300s;
 # três exceções nunca olham o arquivo.
 #
 # QUEBRA-CIRCUITO do CONTEST (2026-08-28): o include por GLOB abaixo carrega
-# /etc/nginx/moj-breaker-contest.conf (`limit_conn moj_contest 56;`) quando ele EXISTE — ausente,
-# o glob casa nada e o contest fica sem limite (era o comportamento até hoje). 56 de 64: o
-# excedente leva 429 rápido em vez de estacionar 25 s na fila do socket até o colapso (medido
-# 27/08); os polls da web só tentam de novo no tick seguinte. Vale TAMBÉM para /submit, de
-# propósito: com 56 em voo a fila profunda é pior que o 429 (o aluno reenviaria contra um
-# servidor já afogado). DESLIGAR: rm do arquivo + reload (receita no moj-prod.conf.in).
+# /etc/nginx/moj-breaker-contest.conf (`limit_conn moj_contest 40;`) quando ele EXISTE — ausente,
+# o glob casa nada e o contest fica sem limite (era o comportamento até hoje). O excedente leva 429
+# rápido em vez de estacionar 25 s na fila do socket até o colapso (medido 27/08); os polls da web
+# tentam de novo sozinhos (o placar e a fila do juiz também, desde 05/11/2026). Vale TAMBÉM para
+# /submit, de propósito: a fila profunda é pior que o 429 (o aluno reenviaria contra um servidor já
+# afogado). O NÚMERO: nasceu 56 (28/08), caiu p/ 32 na crise da Maratona (29/08, router.sh a 25
+# núcleos nos polls de summary/history) e subiu p/ 40 em 05/11/2026 — summary no porteiro e mídia de
+# time servida do disco: o contest (40) + o site (16) = 56 do pool de 64, e sobram ~8 p/ as exceções
+# sem limite (heartbeat dos juízes, /ops, /problems) e CPU p/ o judged. Mexer: editar o arquivo +
+# reload (é config do host, decisão do operador). DESLIGAR: rm do arquivo + reload.
 # MICROCACHE POR-TOKEN (include por glob, mesmo padrão do breaker): entrada por Authorization,
 # GET+200, TTL 2s — F5 repetido vira hit sem forkar bash; webcast excluído por map (tempo exato).
 # As três exceções abaixo NÃO têm o include: judge/ops/problems nunca são cacheados.
@@ -142,6 +146,79 @@ location /api/v1/ops/ {
     fastcgi_split_path_info ^(/api/v1)(/.*)$;
 }
 location /api/v1/problems/ {
+    fastcgi_pass            unix:@WORKROOT@/run/fcgiwrap.sock;
+    fastcgi_split_path_info ^(/api/v1)(/.*)$;
+}
+
+# --- MÍDIA DE TIME (05/11/2026) ----------------------------------------------------------
+# Maps e zona no conf.d/moj.conf (bloco "MÍDIA DE TIME"). Mídia de time é PÚBLICA por desenho (vai ao telão externo,
+# que busca sem sessão — ver os handlers contest/{team-logo,team-photo,team-music,placeholder}.sh), então o nginx serve o
+# BRASÃO, a FOTO, a MÚSICA e o PADRÃO direto do disco: zero bash, fora de todo balde, ETag/Last-Modified de graça (304)
+# e Range (206) no áudio. O bash continua sendo a autoridade: argumento fora da lista de caracteres, host de OUTRO
+# contest, contest que não existe, a miniatura que ainda não existe (o bash a gera) e o brasão ausente caem nele
+# (@moj_media).
+# ⚠ A miniatura do disco é servida SEM o `-nt` do tp_thumb: quem garante que ela é da foto atual é quem grava
+# (tp_store a apaga e troca a foto sob o flock dela; tp_remove a apaga primeiro; photos-to-webp.sh idem).
+# ⚠ O padrão de fábrica sai do CHECKOUT (cdmoj/server/etc/team-placeholder.*), o bash o lê da IMAGEM: são o mesmo
+# arquivo enquanto a imagem e o checkout estiverem no mesmo commit (o deploy de sempre).
+# ⚠ A TRAVA DE SEDE (lib/site-lock.sh) NÃO se repete aqui: run/site-lock é 700 de propósito (o nginx não o enxerga), e
+# o que ela protege é o conteúdo de outro contest/treino durante a prova — mídia pública de time não é isso. Um IP
+# preso baixa a mídia de outro contest pelo site principal; todo o resto segue barrado pelo bash.
+# ⚠ add_header numa location ANULA o do pai (regra do nginx): o server não declara nenhum, nada se perde.
+# CORS (08/11/2026, revelação da LATAM: o Animeitor, em https://animeitor.naquadah.com.br, lê a mídia no NAVEGADOR — com
+# fetch/canvas/áudio `crossOrigin` o navegador exige o Access-Control-Allow-Origin, que a mídia nunca levou; a <img>/
+# <audio> comum não precisa, por isso funcionou o dia todo e quebrou na revelação). Mídia é pública por desenho: `*`, em
+# TODA resposta (`always`: 404/429/503 também, senão o erro vira "erro de CORS" e esconde o motivo) e nos 4 blocos —
+# incluindo o @moj_media, onde o nginx o põe na resposta do bash. Expose: o X-MOJ-Photo/X-MOJ-Music diz se é o padrão.
+location = /api/v1/contest/team-logo {
+    root          @WORKROOT@/contests;
+    default_type  image/png;
+    try_files     $moj_logo_file @moj_media;
+    add_header    Cache-Control $moj_logo_cc;
+    add_header    Access-Control-Allow-Origin "*" always;
+}
+location = /api/v1/contest/team-photo {
+    root          @WORKROOT@/contests;
+    try_files     $moj_photo_file $moj_photo_alt @moj_padrao;
+    add_header    Cache-Control $moj_photo_cc;
+    add_header    Access-Control-Allow-Origin "*" always;
+}
+location = /api/v1/contest/team-music {
+    root          @WORKROOT@/contests;
+    try_files     $moj_music_file @moj_padrao;
+    add_header    Cache-Control $moj_music_cc;
+    add_header    Access-Control-Allow-Origin "*" always;
+}
+# a rota do padrão entra direto no @moj_padrao (o try_files num arquivo que nunca existe é o "vá p/ lá": um error_page
+# aqui faria o 418 do @moj_padrao virar error_page recursivo, que o nginx não segue)
+location = /api/v1/contest/placeholder {
+    try_files     /.sem-midia @moj_padrao;
+}
+# O PADRÃO (time sem foto/música e a rota /contest/placeholder): o do contest, senão o de fábrica, como o
+# tp_placeholder/tm_placeholder. Sem user válido (team-*), contest inexistente, `kind` que só o bash entende ou a foto do
+# time no disco (é a miniatura que falta: o bash a gera) = o bash.
+location @moj_padrao {
+    root          @WORKROOT@;
+    error_page    418 = @moj_media;
+    if (!-f $moj_ph_conf) { return 418; }
+    if (-f $moj_ph_has_webp) { return 418; }
+    if (-f $moj_ph_has_png) { return 418; }
+    try_files     $moj_ph1 $moj_ph2 $moj_ph3 $moj_ph4 @moj_media;
+    add_header    Cache-Control "public, max-age=60";
+    add_header    X-MOJ-Photo $moj_ph_photo_hdr;
+    add_header    X-MOJ-Music $moj_ph_music_hdr;
+    add_header    Access-Control-Allow-Origin "*" always;
+    add_header    Access-Control-Expose-Headers "X-MOJ-Photo, X-MOJ-Music" always;
+}
+# O que cai no bash vai a uma zona PRÓPRIA de 16 em voo: com o site (16) e o contest (32, o breaker) fecha o pool de 64
+# do fcgiwrap — mídia não disputa o balde do /submit. Excedente = 429. Microcache e freio do treino como na /api/v1/
+# geral; o breaker do contest NÃO (é o balde que a mídia deixou).
+location @moj_media {
+    limit_conn              moj_media 16;
+    include                 /etc/nginx/moj-cache-api[.]conf;
+    if (-f $moj_shed_file) { return 503; }
+    add_header              Access-Control-Allow-Origin "*" always;
+    add_header              Access-Control-Expose-Headers "X-MOJ-Photo, X-MOJ-Music" always;
     fastcgi_pass            unix:@WORKROOT@/run/fcgiwrap.sock;
     fastcgi_split_path_info ^(/api/v1)(/.*)$;
 }

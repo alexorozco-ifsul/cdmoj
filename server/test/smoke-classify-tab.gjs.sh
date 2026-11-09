@@ -117,7 +117,8 @@ const val = (n) => (n._v != null ? n.value : (n.attrs.value || ''));   // el() g
   print('awards=' + (all.includes('Prêmios (informativo)') && all.includes('Alfa (#1)') && all.includes('Campeones Brasileños')));
   // 2c) motor manual: o placar com "Promover" na linha; o motivo (opcional) abre na própria linha
   const MAN = { id:'manual', name:{pt:'Manual'}, stage:'proxima-fase', form:'manual', reason_optional:true, defaults:{name:'Próxima fase'} };
-  const mstage = (rel) => ({ id:'seletiva', status:'draft', name:'Maratona SBC', chip:'SBC', config:{algorithm:'manual', slots:2},
+  const mstage = (rel) => ({ id:'seletiva', status:'draft', name:'Maratona SBC', chip:'SBC', config:{algorithm:'manual', slots:2,
+      labels:{'country-part':{pt:'Participação do país', short:{pt:'país'}}}},
     result:{ ranking:[{place:1, login:'alfa', team:'Alfa', univ:'UNB', total:3, penalty:6}, {place:2, login:'beta', team:'Beta', univ:'UNB', total:2, penalty:5},
       {place:3, login:'gama', team:'Gama', univ:'UNB', total:2, penalty:9}] }, relation:rel, overrides:[] });
   GET = { stages:[mstage([{login:'beta', team:'Beta', via:'manual', manual:true, override:'ov-1', reason:''}])], algorithms:[BR, MAN], vias:L, manual_vias:['manual','lista','reserva'] };
@@ -131,7 +132,25 @@ const val = (n) => (n._v != null ? n.value : (n.attrs.value || ''));   // el() g
   const why = alfaRow.find('input')[0]; why.value = 'campeã da seletiva';
   alfaRow.find('button', (b) => txt(b) === '✔')[0].ev.click(); for (let k = 0; k < 4; k++) await null;
   print('post_man=' + JSON.stringify(POSTS[0]));
+  // 09/11/2026: no motor manual a via do add inclui as do catálogo (sem comite) e as da config.labels do estágio
+  const viaSel = alfaRow.find('select')[0];
+  print('man_vias=' + (viaSel ? viaSel.find('option').map((o) => o.attrs.value).join(',') : 'SEM-SELECT'));
+  POSTS.length = 0; viaSel.value = 'country-part';
+  alfaRow.find('button', (b) => txt(b) === '✔')[0].ev.click(); for (let k = 0; k < 4; k++) await null;
+  print('post_man_via=' + JSON.stringify(POSTS[0]));
+  // a via de uma promoção troca no lugar, na linha dela na relação (relabel)
+  const betaRow = m.find('tr', (r) => txt(r).includes('Beta') && r.find('button', (x) => txt(x) === '↩').length)[0];
+  const rs = betaRow ? betaRow.find('select')[0] : null;
+  print('relabel_init=' + (rs ? rs.value : 'SEM-SELECT'));
+  POSTS.length = 0; if (rs) { rs.value = 'country-part'; rs.onchange(); for (let k = 0; k < 4; k++) await null; }
+  print('post_relabel=' + JSON.stringify(POSTS[0]));
   print('man_form=' + m.find('label').map(txt).some((t) => t.startsWith('Quantos times serão promovidos')) + ',' + m.find('label').map(txt).some((t) => t.startsWith('Próxima fase')));
+  // o formulário do motor manual só edita slots: labels/via_order da config seguem no ✔ Salvar (antes: montava do zero)
+  POSTS.length = 0;
+  const slotsIn = m.find('label', (l) => txt(l).startsWith('Quantos times serão promovidos'))[0].find('input')[0];
+  slotsIn.value = '3';
+  m.find('button', (b) => txt(b).startsWith('✔ Salvar'))[0].ev.click(); for (let k = 0; k < 6; k++) await null;
+  print('man_cfg_kept=' + JSON.stringify((POSTS.find((x) => x.action === 'apply') || {}).config));
   // cheio: 2 de 2 ⇒ sem botão de promover
   GET = { stages:[mstage([{login:'beta', via:'manual', manual:true, override:'ov-1'}, {login:'alfa', via:'manual', manual:true, override:'ov-2'}])], algorithms:[BR, MAN], vias:L, manual_vias:['manual'] };
   const tab5 = makeClassifyTab('sel'); await tab5.load();
@@ -171,6 +190,11 @@ check "$(kv awards)" true "detalhes: prêmios do Mundial (informativo)"
 check "$(kv man_count)" true "manual: promovidos k de N"
 check "$(kv beta_done)" 1 "manual: o promovido aparece marcado no placar"
 check "$(kv post_man)" '{"stage":"seletiva","action":"add","login":"alfa","reason":"campeã da seletiva"}' "manual: promover pela linha, com o motivo do campo"
+check "$(kv man_vias)" "manual,lista,reserva,regra1,regra2,country-part" "manual: via do add = manual_vias + catálogo (sem comite) + config.labels"
+check "$(kv relabel_init)" "manual" "relação: a promoção mostra a via atual num seletor"
+check "$(kv post_relabel)" '{"stage":"seletiva","action":"relabel","id":"ov-1","via":"country-part"}' "relação: trocar a via = relabel (sem desfazer)"
+check "$(kv man_cfg_kept)" '{"algorithm":"manual","slots":3,"labels":{"country-part":{"pt":"Participação do país","short":{"pt":"país"}}}}' "manual: salvar o formulário mantém as labels da config"
+check "$(kv post_man_via)" '{"stage":"seletiva","action":"add","login":"alfa","reason":"campeã da seletiva","via":"country-part"}' "manual: a via escolhida vai no add"
 check "$(kv man_form)" "true,true" "manual: formulário com o nº de vagas e a próxima fase"
 check "$(kv full_btns)" "0,true" "manual: vagas cheias = sem botão, com o aviso"
 check "$(kv empty_sel)" "__new empty_ta=2" "sem estágio: abre em nova etapa com o formulário BR"

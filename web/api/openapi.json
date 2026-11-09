@@ -431,7 +431,7 @@
         "tags": [
           "treino"
         ],
-        "summary": "Problema (enunciado b64, autor, time limits, tags, coleções, samples[{name,input,output}], statement_langs + statements{<lang>:{title,html_b64}} das traduções)",
+        "summary": "Problema (enunciado b64, autor, time limits, tags, coleções, samples[{name,input,output}], statement_langs + statements{<lang>:{title,html_b64}} das traduções) Relógio do TL (05/11/2026; PACOTE.md \"Relógio do TL\"): tl_clock (wall|cpu, o TLCLOCK do conf) e wall_tl (o WALLTL, número ou null) — no cpu os tempos e o TL são de CPU (user+sys) e a parede é um teto maior. TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "parameters": [
           {
             "name": "id",
@@ -2075,7 +2075,7 @@
           "contest"
         ],
         "summary": "Problemas da prova. Gate: admin/judge veem sempre; staff nunca; normal só após o início (antes -> {problems:[], locked:'not_started'})",
-        "description": "Resposta em CACHE por VARIANTE (author|noauthor). O payload é o mesmo para todo time; a única dimensão que o muda é o AUTOR do problema, que só aparece com a prova encerrada ou para admin/juiz-chefe/juiz — o cache por variante existe para que um GET do juiz nunca entregue o autor a um competidor. Invalida comparando com as entradas (conf, problem-langs.json, problem-judges.json, enunciados/, carimbo var/.problems-dirty tocado pelo admin e pela promocao de rodada) mais um teto de idade de 60s. O CORPO DO ENUNCIADO NAO VEM AQUI (2026-08-20): a lista traz apenas has_statement_html/has_statement_pdf e o conteudo sai por /contest/statement, quando a pessoa abre a sanfona ou clica em HTML/PDF. Vinha em base64, e num contest de PDF isso e 3,8 MB por time — 2000 times abrindo a prova ao mesmo tempo eram ~5 GB de uma vez.",
+        "description": "Resposta em CACHE por VARIANTE (author|noauthor). O payload é o mesmo para todo time; a única dimensão que o muda é o AUTOR do problema, que só aparece com a prova encerrada ou para admin/juiz-chefe/juiz — o cache por variante existe para que um GET do juiz nunca entregue o autor a um competidor. Invalida comparando com as entradas (conf, problem-langs.json, problem-judges.json, enunciados/, carimbo var/.problems-dirty tocado pelo admin e pela promocao de rodada) mais um teto de idade de 60s. O CORPO DO ENUNCIADO NAO VEM AQUI (2026-08-20): a lista traz apenas has_statement_html/has_statement_pdf e o conteudo sai por /contest/statement, quando a pessoa abre a sanfona ou clica em HTML/PDF. Vinha em base64, e num contest de PDF isso e 3,8 MB por time — 2000 times abrindo a prova ao mesmo tempo eram ~5 GB de uma vez. tl_clock/wall_tl (05/11/2026) = o relógio do TL (wall|cpu, o TLCLOCK do pacote) e o mínimo do teto de parede, do json servível; ausentes = parede. TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "security": [
           {
             "bearerAuth": []
@@ -2626,10 +2626,10 @@
         "tags": [
           "contest"
         ],
-        "summary": "Ações da integração nutellaboot: config (chave write-only)/collect/push-roster/push-bindings (admin) e command (admin ou c/staff na própria sede, fail-closed)",
+        "summary": "Ações da integração nutellaboot: config (chave write-only)/collect/push-roster/push-bindings (admin) e command/lock/unlock (admin ou c/staff na própria sede, fail-closed)",
         "responses": {
           "200": {
-            "description": "config {url?, key? (nb3s_ de serviço ou nb3a_ de administração), images? (ids das site-images do evento; obrigatório com chave de serviço), bind? (false desliga a publicação do vínculo máquina↔time no login)}:{saved,configured,key_kind} · collect:{started} (antes do início = inventário da última hora, data.prestart:true) · push-roster:{pushed,kept,failed,empty[]} (times = os da sede no store ∪ os do cache que são conta; sede sem time não recebe roster vazio) · push-bindings:{queued,bind} (replay do access.log: o último login de cada MAC volta p/ a fila e o drenador faz o PUT do binding no serviço) · webhooks-install {base_url?, remove?}:{installed (só com ok > 0),url,ok,failed,sedes:{<id>:{status,id?,error?}}} (webhook POR ENTRADA: POST cria/atualiza pela url, DELETE por id — chave de serviço com webhooks:write basta) · command-status {image, command_id}:{status:{command,machines,summary:{acked,pending,expired},targets[]}} · push-bindings:{queued,batch:{sent,bound,failed,noroster}|null,bind} (lote PUT …/bindings; null = serviço antigo ⇒ fila) · command {op, image, mac?}:{sent,op,image,mac,ok,failed,sedes:{<id>:{status,command_id,machines,detail?}},upstream} — image:\"all\" = uma ordem por sede DO CONTEST (nunca a frota do serviço); com mac, vai à rota da sede com target:[mac]"
+            "description": "config {url?, key? (nb3s_ de serviço ou nb3a_ de administração), images? (ids das site-images do evento; obrigatório com chave de serviço), bind? (false desliga a publicação do vínculo máquina↔time no login)}:{saved,configured,key_kind} · collect:{started} (antes do início = inventário da última hora, data.prestart:true) · push-roster:{pushed,kept,failed,empty[]} (times = os da sede no store ∪ os do cache que são conta; sede sem time não recebe roster vazio) · push-bindings:{queued,bind} (replay do access.log: o último login de cada MAC volta p/ a fila e o drenador faz o PUT do binding no serviço) · webhooks-install {base_url?, remove?}:{installed (só com ok > 0),url,ok,failed,sedes:{<id>:{status,id?,error?}}} (webhook POR ENTRADA: POST cria/atualiza pela url, DELETE por id — chave de serviço com webhooks:write basta) · command-status {image, command_id}:{status:{command,machines,summary:{acked,pending,expired},targets[]}} · push-bindings:{queued,batch:{sent,bound,failed,noroster}|null,bind} (lote PUT …/bindings; null = serviço antigo ⇒ fila) · command {op, image, mac?}:{sent,op,image,mac,ok,failed,sedes:{<id>:{status,command_id,machines,detail?}},upstream} — image:\"all\" = uma ordem por sede DO CONTEST (nunca a frota do serviço); com mac, vai à rota da sede com target:[mac] · lock|unlock {image, mac?}:{sent,action,image,mac,ok,failed,sedes:{<id>:{status,machines?,locked?,detail?,code?}}} — trava de tela NO SERVIDOR do nutellaboot (vale até a ordem contrária, inclusive depois de reiniciar); mesmos gates e alvos do command; mac com image all = 422 mac_needs_image; nenhuma sede aceitou = 502 upstream_error"
           },
           "403": {
             "description": "admin_required/site_forbidden/command_scope_required"
@@ -3620,7 +3620,7 @@
         "tags": [
           "ops"
         ],
-        "summary": "Time limits de um problema — admin com sessão do treino (pelo tl_method do conf; time_limits_by_method traz as duas metades; time_limits = o efetivo, com tl_override e tl_mods do conf)",
+        "summary": "Time limits de um problema — admin com sessão do treino (pelo tl_method do conf; time_limits_by_method traz as duas metades; time_limits = o efetivo, com tl_override e tl_mods do conf) Relógio do TL (05/11/2026; PACOTE.md \"Relógio do TL\"): tl_clock (wall|cpu, o TLCLOCK do conf) e wall_tl (o WALLTL, número ou null) — no cpu os tempos e o TL são de CPU (user+sys) e a parede é um teto maior. TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "security": [
           {
             "bearerAuth": []
@@ -4558,7 +4558,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{teams:{<login>:{univ_short?,univ_full?,flag?,region?,has_logo,has_photo}}} — o NOME vem do TXT do placar (fullname); precedência: isto > teams-meta > vazio"
+            "description": "{teams:{<login>:{univ_short?,univ_full?,flag?,region?,has_logo,has_photo,logo_v?}}} — o NOME vem do TXT do placar (fullname); precedência: isto > teams-meta > vazio. logo_v (só com brasão) = mtime do logo.png em ms: vai na URL do /contest/team-logo como &v= e torna a resposta imutável"
           }
         }
       }
@@ -4568,7 +4568,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Foto do time — PÚBLICA, inclusive em contest secreto (webp; png no acervo antigo; thumb=1 = miniatura de 320px). TIME SEM FOTO devolve a FOTO PADRÃO do contest (200 + header X-MOJ-Photo: placeholder), não 404 — quem precisa saber quem mandou foto usa has_photo das listagens ⚠ em contest SUPER SECRETO o <img>/<audio> cru não serve (tag de mídia não manda Authorization): o cliente tem de BUSCAR com Bearer — o front usa web/shared/media-auth.js, que converte em blob:",
+        "summary": "Foto do time — PÚBLICA, inclusive em contest secreto (webp; png no acervo antigo; thumb=1 = miniatura de 320px). TIME SEM FOTO devolve a FOTO PADRÃO do contest (200 + header X-MOJ-Photo: placeholder), não 404 — quem precisa saber quem mandou foto usa has_photo das listagens. O nginx serve a foto, a miniatura e a PADRÃO direto do disco (ETag/304); a miniatura que falta de quem tem foto (o handler a gera), contest sem conf, argumento fora da lista de caracteres e o subdomínio de outro contest caem no handler bash. Cache-Control: com v = public, max-age=31536000, immutable; sem v = miniatura 86400 s, foto 60 s; a padrão sempre 60 s",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4588,12 +4588,16 @@
             "schema": {
               "type": "string"
             },
-            "description": "1 = miniatura 320px (Cache-Control longo; o cliente manda &v=<mtime>)"
-          }
-        ],
-        "security": [
+            "description": "não vazio = miniatura 320px (thumb=1)"
+          },
           {
-            "bearerAuth": []
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "description": "cache-buster estável (o mtime da galeria do telão): com ele a resposta da foto real é imutável",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4608,7 +4612,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Música do time — PÚBLICA, inclusive em contest secreto (mp3 — a faixa que o telão toca quando ele resolve). TIME SEM MÚSICA devolve a MÚSICA PADRÃO do contest (200 + header X-MOJ-Music: placeholder), não 404 — quem precisa saber quem mandou a sua usa has_music das listagens. Sem suporte a Range (toca progressivo) ⚠ em contest SUPER SECRETO o <img>/<audio> cru não serve (tag de mídia não manda Authorization): o cliente tem de BUSCAR com Bearer — o front usa web/shared/media-auth.js, que converte em blob:",
+        "summary": "Música do time — PÚBLICA, inclusive em contest secreto (mp3 — a faixa que o telão toca quando ele resolve). TIME SEM MÚSICA devolve a MÚSICA PADRÃO do contest (200 + header X-MOJ-Music: placeholder), não 404 — quem precisa saber quem mandou a sua usa has_music das listagens. O nginx serve a música do time e a PADRÃO direto do disco (ETag/304, Range/206); contest sem conf, argumento fora da lista de caracteres e o subdomínio de outro contest caem no handler bash (sem Range). Cache-Control: com v = public, max-age=31536000, immutable; sem v e a padrão = 60 s",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4620,16 +4624,20 @@
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "security": [
+          },
           {
-            "bearerAuth": []
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "description": "cache-buster estável (o music_mtime da galeria do telão): com ele a resposta da música real é imutável",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "audio/mpeg (+ Content-Length); sem música do time vem a padrão (X-MOJ-Music: placeholder)"
+            "description": "audio/mpeg (+ Content-Length); 206 com Range (só o nginx); sem música do time vem a padrão (X-MOJ-Music: placeholder)"
           }
         }
       }
@@ -4639,7 +4647,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Brasão do time (PNG, máx 128; célula do time no placar — vence o logo do teams-meta; secreto exige sessão) ⚠ em contest SUPER SECRETO o <img>/<audio> cru não serve (tag de mídia não manda Authorization): o cliente tem de BUSCAR com Bearer — o front usa web/shared/media-auth.js, que converte em blob:",
+        "summary": "Brasão do time (PNG, máx 128; célula do time no placar — vence o logo do teams-meta). PÚBLICO, inclusive em contest SECRETO (a mídia de time vai ao telão externo, sem sessão). O nginx serve o arquivo direto do disco (ETag/Last-Modified, 304); o que não passa na lista de caracteres, vem de outro subdomínio de contest ou não tem brasão cai no handler bash (400/403/404 de sempre). Cache-Control: com v = public, max-age=31536000, immutable; sem v = public, max-age=600",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4651,11 +4659,15 @@
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "security": [
+          },
           {
-            "bearerAuth": []
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "description": "logo_v do /contest/teams (mtime do brasão em ms). Só muda a URL e o cache: a resposta é a mesma",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4848,7 +4860,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "PADRÃO do contest — o que a API responde no lugar do asset de quem não mandou o seu: kind=photo (default) = a foto padrão, kind=music = a música padrão. Escolhido pelo .animeitor; sem escolha, o de fábrica do repo ⚠ em contest SUPER SECRETO o <img>/<audio> cru não serve (tag de mídia não manda Authorization): o cliente tem de BUSCAR com Bearer — o front usa web/shared/media-auth.js, que converte em blob:",
+        "summary": "PADRÃO do contest — o que a API responde no lugar do asset de quem não mandou o seu: kind=photo (default) = a foto padrão, kind=music = a música padrão. Escolhido pelo .animeitor; sem escolha, o de fábrica do repo. PÚBLICO, inclusive em contest secreto. O nginx o serve direto do disco (o do contest › o de fábrica; X-MOJ-Photo/X-MOJ-Music: placeholder; Cache-Control: public, max-age=60; ETag/304); contest sem conf, kind codificado e argumento fora da lista de caracteres caem no handler bash",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -4871,11 +4883,6 @@
               "type": "string"
             },
             "description": "1 = miniatura 320px (só p/ kind=photo)"
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {
@@ -7038,9 +7045,9 @@
       "post": {
         "tags": ["contest-admin"],
         "summary": "Classificação p/ as próximas fases: estágios (final-br, pda, mundial…), cada um com o seu motor, e o OVERRIDE MANUAL. Placar congelado: publicar (ou mexer num publicado) = 409 freeze_locked antes do fim+1min; depois 409 board_frozen, force_frozen:true confirma. Motor manual: apply com slots abaixo dos promovidos = 409 slots_below_promoted; name/venue/when/chip ENVIADOS vazios apagam; sbc-fase1 com region fora do regions.json = 422 config_invalid (avisos sede_missing/supersede_missing); latam-pda devolve result.waitlist_tiers",
-        "description": "Motor por config.algorithm, pela allowlist CL_ENGINES (lib/classify.sh) + catálogo score/classify-catalog.json (fora = 422 algorithm_invalid). stage padrão: o do motor em preview/apply, final-br nas demais. preview roda o motor COM os overrides do estágio, sem gravar → {preview, stage, overrides, relation}. apply grava o estágio (config, result = saída pura do motor, chip, labels, via_order, teams composto); estágio de OUTRO motor = 409 stage_algorithm_mismatch (force:true troca). publish/unpublish/delete (delete só rascunho: 409 stage_published); estágio inexistente = 404 no_stage. Rc do motor: 2 = 422 config_invalid (errors[]), 3 = 422 engine_refused, outro = 422 engine_failed. OVERRIDES (motivo obrigatório, 422 reason_required; interno — só o painel o mostra; sobrevivem a um novo apply; um por time, 409 override_exists): exclude {login} tira do CÁLCULO e recalcula (o próximo herda a vaga); withdraw {login|ext} tira SEM recalcular (404 not_classified se não está); add {login | ext+team, via:manual|lista|reserva} promove à mão e conta como promovido p/ o motor (409 already_classified; 422 via_invalid/team_required); override_undo {id} desfaz (404 override_notfound); promote_next {reason}: o 1º da lista de espera do motor (recalculada contra o estágio atual) entra como add via lista (409 waitlist_unsupported/waitlist_empty); add via reserva além das vagas de reserva do motor = 409 reserve_full. Motor manual (seletiva: toda promoção à mão): o add aceita motivo vazio e no máximo config.slots promovidos (409 slots_full); result.ranking = o placar p/ o painel. Estágio antigo com times via comite: lidos como override add. Auditado classify / classify-override. Ver docs/CLASSIFICACAO.md",
+        "description": "Motor por config.algorithm, pela allowlist CL_ENGINES (lib/classify.sh) + catálogo score/classify-catalog.json (fora = 422 algorithm_invalid). stage padrão: o do motor em preview/apply, final-br nas demais. preview roda o motor COM os overrides do estágio, sem gravar → {preview, stage, overrides, relation}. apply grava o estágio (config, result = saída pura do motor, chip, labels, via_order, teams composto); estágio de OUTRO motor = 409 stage_algorithm_mismatch (force:true troca). publish/unpublish/delete (delete só rascunho: 409 stage_published); estágio inexistente = 404 no_stage. Rc do motor: 2 = 422 config_invalid (errors[]), 3 = 422 engine_refused, outro = 422 engine_failed. OVERRIDES (motivo obrigatório, 422 reason_required; interno — só o painel o mostra; sobrevivem a um novo apply; um por time, 409 override_exists): exclude {login} tira do CÁLCULO e recalcula (o próximo herda a vaga); withdraw {login|ext} tira SEM recalcular (404 not_classified se não está); add {login | ext+team, via:manual|lista|reserva} promove à mão e conta como promovido p/ o motor (409 already_classified; 422 via_invalid/team_required) — no motor manual a via pode ser também uma do catálogo (menos comite) ou uma da config.labels do estágio; override_undo {id} desfaz (404 override_notfound); relabel {id, via} troca só a via de um add, mantendo id, motivo e data (404 override_notfound, 409 override_not_add, 422 via_invalid, 409 reserve_full; audit via=antiga→nova); promote_next {reason}: o 1º da lista de espera do motor (recalculada contra o estágio atual) entra como add via lista (409 waitlist_unsupported/waitlist_empty); add via reserva além das vagas de reserva do motor = 409 reserve_full. Motor manual (seletiva: toda promoção à mão): config.labels {via: {pt,en,es,short}} cria vias com rótulo (id ^[a-z0-9-]{1,32}$, até 50; repetir via do catálogo ou reservada = 422 config_invalid), que entram no labels/via_order do estágio; config.via_order (opcional: vias aceitas pelo add, sem repetir, até 100) põe a ordem das seções, e o resto vem depois; o add aceita motivo vazio e no máximo config.slots promovidos (409 slots_full); result.ranking = o placar p/ o painel. Estágio antigo com times via comite: lidos como override add. Auditado classify / classify-override. Ver docs/CLASSIFICACAO.md",
         "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
-        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["action"], "properties": {"action": {"type": "string", "enum": ["preview","apply","publish","unpublish","delete","exclude","withdraw","add","override_undo","promote_next"]}, "stage": {"type": "string"}, "config": {"type": "object"}, "name": {"type": "string"}, "venue": {"type": "string"}, "when": {"type": "string"}, "chip": {"type": "string"}, "force": {"type": "boolean"}, "login": {"type": "string"}, "ext": {"type": "string"}, "team": {"type": "string"}, "univ": {"type": "string"}, "via": {"type": "string", "enum": ["manual","lista","reserva"]}, "reason": {"type": "string"}, "id": {"type": "string"}}}}}},
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["action"], "properties": {"action": {"type": "string", "enum": ["preview","apply","publish","unpublish","delete","exclude","withdraw","add","override_undo","relabel","promote_next"]}, "stage": {"type": "string"}, "config": {"type": "object"}, "name": {"type": "string"}, "venue": {"type": "string"}, "when": {"type": "string"}, "chip": {"type": "string"}, "force": {"type": "boolean"}, "login": {"type": "string"}, "ext": {"type": "string"}, "team": {"type": "string"}, "univ": {"type": "string"}, "via": {"type": "string", "pattern": "^[a-z0-9-]{1,32}$", "description": "add/relabel: manual, lista ou reserva; no motor manual também as vias do catálogo (menos comite) e as da config.labels do estágio"}, "reason": {"type": "string"}, "id": {"type": "string"}}}}}},
         "responses": {"200": {"description": "preview: {preview, stage, overrides, relation}; apply: {applied, stage, result}; overrides: {stage, override, overrides, total}; publish/unpublish: {status, stage}; delete: {deleted}"}, "404": {"description": "no_stage, not_classified, override_notfound, notfound"}, "409": {"description": "stage_algorithm_mismatch, stage_published, override_exists, already_classified, reserve_full, slots_full, waitlist_unsupported, waitlist_empty, busy"}, "422": {"description": "algorithm_invalid, config_invalid (errors[]), engine_refused, engine_failed, reason_required, reason_too_long, via_invalid, team_required"}},
         "security": [{"bearer": []}]
       },
@@ -7238,7 +7245,7 @@
           "problems"
         ],
         "summary": "Detalhe do problema (índice + validação)",
-        "description": "Devolve time_limits = o EFETIVO (TLOVERRIDE e TLMOD[<lang>.sum|.mult] do conf do pacote aplicados pela regra única tl_eff), mais time_limits_calibrated (cru dos juízes), tl_override (o declarado) e tl_mods ({sum:{lang:n},mult:{lang:n}}, {} sem ajuste). O TL vem do PACOTE, não do json servível: o json público só existe depois de publicar, e edit/upload não reindexam — antes disso o editor mostrava o calibrado cru em problema privado. Métodos de TL (26/10/2026; PACOTE.md §10): tl_method (moj|kattis, o TLMETHOD do conf) diz a metade da tabela que vale, kattis = {a,b,r} (os KATTIS_* do conf) e time_limits_by_method = {moj:{calibrated,effective}, kattis:{calibrated,effective}}.",
+        "description": "Devolve time_limits = o EFETIVO (TLOVERRIDE e TLMOD[<lang>.sum|.mult] do conf do pacote aplicados pela regra única tl_eff), mais time_limits_calibrated (cru dos juízes), tl_override (o declarado) e tl_mods ({sum:{lang:n},mult:{lang:n}}, {} sem ajuste). O TL vem do PACOTE, não do json servível: o json público só existe depois de publicar, e edit/upload não reindexam — antes disso o editor mostrava o calibrado cru em problema privado. Métodos de TL (26/10/2026; PACOTE.md §10): tl_method (moj|kattis, o TLMETHOD do conf) diz a metade da tabela que vale, kattis = {a,b,r} (os KATTIS_* do conf) e time_limits_by_method = {moj:{calibrated,effective}, kattis:{calibrated,effective}}. Relógio do TL (05/11/2026; PACOTE.md \"Relógio do TL\"): tl_clock (wall|cpu, o TLCLOCK do conf) e wall_tl (o WALLTL, número ou null) — no cpu os tempos e o TL são de CPU (user+sys) e a parede é um teto maior. TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "security": [
           {
             "bearerAuth": []
@@ -7293,7 +7300,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{checks:[{name,ok,detail}],html_built,render_warnings,ok} — checks incluem secao_entrada/secao_saida; render_warnings pode trazer 'exemplo-no-texto?'"
+            "description": "{checks:[{name,ok,detail}],html_built,render_warnings,ok} — checks incluem secao_entrada/secao_saida (## Entrada e ## Saída, ou uma seção ## Interação/Interaction/Interacción no interativo, que vale pelas duas: ok com o detalhe 'dispensada'); render_warnings pode trazer 'exemplo-no-texto?'"
           }
         }
       }
@@ -7304,7 +7311,7 @@
           "problems"
         ],
         "summary": "Painel de status dos problemas do login (dono + colaborador + membro da org): pacote, calibração, soluções, entradas, pronto judgeable/not_judgeable (30/09/2026): o problema cabe em algum juiz visto em 7 dias, pela regra do escalonador (CPUNEEDED, SAMENUMA e MEMLIMITMB como largura) e com alguma linguagem declarada disponível; senão pendência not_judgeable:<memory|cpus|numa|langs>,<pedido>,<teto> e counts.not_judgeable. judge_capacity (topo) = teto de memória da máquina e de um slot, CPUs da maior máquina e do maior nó (aviso da aba Limites).",
-        "description": "validated é o estado do PACOTE (conferência estática do validate-problem.sh — não roda solução). sols = as soluções × o que a categoria delas pede (sumário run/calib-summary.json, regra em lib/calib-expect.sh): state none|stale|bad|partial|note|ok. inputs = o validador de entrada: state unknown|none|ok|invalid|error. pending = o que falta p/ o problema estar PRONTO (package_failed, package_unchecked, uncalibrated, needs_recalibration, good_no_tl:<langs>, sols_divergent:<n>, sols_unchecked, inputs_invalid:<n>, inputs_error, issues_open:<n>); ready = pending vazio. open_issues = issues abertas (/problems/issues). review_reasons ganha sols_divergent:<n>, inputs_invalid:<n>, inputs_error e issues_open:<n>. ?id= estreita a um problema (vazio se o login não o opera). Agrega validação, calibração, time_limits e 'precisa recalibrar' dos problemas de que o login é dono OU colaborador. FRONTEIRA de acesso: problema privado de terceiro NÃO aparece (owners_visible). Sem hash de pacote por request — stale vem do checksum carimbado no índice (≤30 min de atraso); use /problems/tl p/ o valor exato ao vivo. time_limits é o EFETIVO (o TLOVERRIDE e o TLMOD sum/mult vêm carimbados no índice de donos, então o Painel não abre pacote); time_limits_calibrated, tl_override e tl_mods vêm ao lado. untitled = o problema não tem título em lugar nenhum (nem display_title no pacote, nem linha de título no enunciado) e o title devolvido é o identificador — o Painel marca 'sem título'. tl_method (26/10/2026) = o método de TL carimbado no sumário (moj|kattis); time_limits/time_limits_calibrated saem da metade dele (Kattis não calibrado = {}).",
+        "description": "validated é o estado do PACOTE (conferência estática do validate-problem.sh — não roda solução). sols = as soluções × o que a categoria delas pede (sumário run/calib-summary.json, regra em lib/calib-expect.sh): state none|stale|bad|partial|note|ok. inputs = o validador de entrada: state unknown|none|ok|invalid|error. pending = o que falta p/ o problema estar PRONTO (package_failed, package_unchecked, uncalibrated, needs_recalibration, good_no_tl:<langs>, sols_divergent:<n>, sols_unchecked, inputs_invalid:<n>, inputs_error, issues_open:<n>); ready = pending vazio. open_issues = issues abertas (/problems/issues). review_reasons ganha sols_divergent:<n>, inputs_invalid:<n>, inputs_error e issues_open:<n>. ?id= estreita a um problema (vazio se o login não o opera). Agrega validação, calibração, time_limits e 'precisa recalibrar' dos problemas de que o login é dono OU colaborador. FRONTEIRA de acesso: problema privado de terceiro NÃO aparece (owners_visible). Sem hash de pacote por request — stale vem do checksum carimbado no índice (≤30 min de atraso); use /problems/tl p/ o valor exato ao vivo. time_limits é o EFETIVO (o TLOVERRIDE e o TLMOD sum/mult vêm carimbados no índice de donos, então o Painel não abre pacote); time_limits_calibrated, tl_override e tl_mods vêm ao lado. untitled = o problema não tem título em lugar nenhum (nem display_title no pacote, nem linha de título no enunciado) e o title devolvido é o identificador — o Painel marca 'sem título'. tl_method (26/10/2026) = o método de TL carimbado no sumário (moj|kattis); time_limits/time_limits_calibrated saem da metade dele (Kattis não calibrado = {}). Cada problema traz tl_clock (wall|cpu, do índice de donos; 05/11/2026). TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "security": [
           {
             "bearerAuth": []
@@ -7337,7 +7344,7 @@
           "problems"
         ],
         "summary": "Time limits AO VIVO + staleness exata de 1 problema (com o PORQUÊ da recalibração)",
-        "description": "Recomputa o checksum do pacote agora (1 problema) e devolve o TL servível + stale/needs_recalibration exatos. time_limits = o EFETIVO, a conta do juiz: override[lang] // override[default] // ((calibrado[lang] // calibrado[default]) + TLMOD[lang.sum]) × TLMOD[lang.mult]; time_limits_calibrated = o cru dos juízes; tl_override = o declarado no conf ({} sem override); tl_mods = o TLMOD sum/mult declarado ({} sem ajuste). Quando needs_recalibration, explica o motivo: reason (checksum velho→novo), changes = commits desde a calibração que tocaram os caminhos cobertos pelo tl-checksum (conf, tests/input, sols/good, scripts; [{sha,at,author,subject}], ≤20) e changed_files (≤30). Acesso: dono/colaborador OU público (require_problem_view; 404 senão). Versão não-admin do /ops/problemtl. Métodos de TL (26/10/2026; PACOTE.md §10): tl_method (moj|kattis, o TLMETHOD do conf) diz a metade da tabela que vale, kattis = {a,b,r} (os KATTIS_* do conf) e time_limits_by_method = {moj:{calibrated,effective}, kattis:{calibrated,effective}}.",
+        "description": "Recomputa o checksum do pacote agora (1 problema) e devolve o TL servível + stale/needs_recalibration exatos. time_limits = o EFETIVO, a conta do juiz: override[lang] // override[default] // ((calibrado[lang] // calibrado[default]) + TLMOD[lang.sum]) × TLMOD[lang.mult]; time_limits_calibrated = o cru dos juízes; tl_override = o declarado no conf ({} sem override); tl_mods = o TLMOD sum/mult declarado ({} sem ajuste). Quando needs_recalibration, explica o motivo: reason (checksum velho→novo), changes = commits desde a calibração que tocaram os caminhos cobertos pelo tl-checksum (conf, tests/input, sols/good, scripts; [{sha,at,author,subject}], ≤20) e changed_files (≤30). Acesso: dono/colaborador OU público (require_problem_view; 404 senão). Versão não-admin do /ops/problemtl. Métodos de TL (26/10/2026; PACOTE.md §10): tl_method (moj|kattis, o TLMETHOD do conf) diz a metade da tabela que vale, kattis = {a,b,r} (os KATTIS_* do conf) e time_limits_by_method = {moj:{calibrated,effective}, kattis:{calibrated,effective}}. Relógio do TL (05/11/2026; PACOTE.md \"Relógio do TL\"): tl_clock (wall|cpu, o TLCLOCK do conf) e wall_tl (o WALLTL, número ou null) — no cpu os tempos e o TL são de CPU (user+sys) e a parede é um teto maior. TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "security": [
           {
             "bearerAuth": []
@@ -7438,7 +7445,7 @@
         "tags": [
           "problems"
         ],
-        "summary": "Resumo de calibração por juiz (TL, log, reports)",
+        "summary": "Resumo de calibração por juiz (TL, log, reports) Relógio do TL (05/11/2026; PACOTE.md \"Relógio do TL\"): tl_clock (wall|cpu, o TLCLOCK do conf) e wall_tl (o WALLTL, número ou null) — no cpu os tempos e o TL são de CPU (user+sys) e a parede é um teto maior. No relógio de CPU, o teste morto pelo teto de parede vem com wall:true em sols[].tests[] (TLE sem CPU acima do TL); tl_sim e o juízo do Kattis o tratam como TLE certo. TL único (05/11/2026; PACOTE.md \"TL único\"): tl_unified (bool, o TLUNIFIED=y do conf) — o time_limits é o mesmo em toda linguagem, o máx das linguagens pelo método.",
         "security": [
           {
             "bearerAuth": []
