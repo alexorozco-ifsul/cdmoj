@@ -280,6 +280,15 @@ printf '{"id":"col#p0","title":"P0","public":true,"stop_when":{"wa":true,"tle":f
 run
 check "segue após TLE => warn com a letra, os testes e o que falta" '[[ "$(lvl stop_first)" == warn && "$(det stop_first)" == *"A(214 testes, segue após TLE)"* ]]'
 check "e em inglês"                                     '[[ "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"stop_first\")|.detail_en)")" == *"A(214 tests, keeps going after TLE)"* ]]'
+check "regra worst: avisa que o resto ainda muda o veredicto" '[[ "$(det stop_first)" == *"mais grave"* ]]'
+printf 'VERDICT_RULE=first\n' >> "$C/conf"; run
+check "regra first: o resto é só espera"                '[[ "$(lvl stop_first)" == warn && "$(det stop_first)" == *"nada depois dele muda o resultado"* ]]'
+sed -i '/^VERDICT_RULE=/d' "$C/conf"
+printf 'nao é json' > "$FIX/treino/var/jsons/col#p0.json"
+printf '{"id":"col#p1","title":"P1","public":true,"stop_when":{"wa":true,"tle":false,"re":true},"tests":7}' > "$FIX/treino/var/jsons/col#p1.json"
+run
+check "json ILEGÍVEL no meio do lote: o seguinte ainda é lido (B avisa)" '[[ "$(lvl stop_first)" == warn && "$(det stop_first)" == *"B(7 testes, segue após TLE)"* && "$(det stop_first)" != *"A("* ]]'
+rm -f "$FIX/treino/var/jsons/col#p1.json"
 printf '{"id":"col#p0","title":"P0","public":true,"stop_when":{"wa":true,"tle":true,"re":true},"tests":214}' > "$FIX/treino/var/jsons/col#p0.json"
 run
 check "para no 1º erro => ok"                           '[[ "$(lvl stop_first)" == ok ]]'
@@ -287,6 +296,24 @@ sed -i 's/^CONTEST_TYPE=.*/CONTEST_TYPE=obi/' "$C/conf"; printf '{"id":"col#p0",
 run
 check "modo obi (pontua por teste) => checagem ausente" '[[ "$(lvl stop_first)" == "(ausente)" ]]'
 sed -i 's/^CONTEST_TYPE=.*/CONTEST_TYPE=icpc/' "$C/conf"; rm -f "$FIX/treino/var/jsons/col#p0.json"
+
+echo "== folga do TL (10/11/2026; a margem do sumário da calibração) =="
+run
+check "sem sumário de calibração => checagem ausente" '[[ "$(lvl tl_margin)" == "(ausente)" ]]'
+mkdir -p "$RUN/calib-sum"
+printf '{"stale":false,"margin":{"lang":"c","w":0.8,"tl":2.0,"min":2.5}}' > "$RUN/calib-sum/col#p0.json"
+run
+check "margem 2,5× => ok com a menor folga"           '[[ "$(lvl tl_margin)" == ok && "$(det tl_margin)" == *"2.5×"* ]]'
+printf '{"stale":false,"margin":{"lang":"py","w":1.0,"tl":1.35,"min":1.35}}' > "$RUN/calib-sum/col#p1.json"
+run
+check "margem 1,35× => warn com a letra, a margem e a linguagem" '[[ "$(lvl tl_margin)" == warn && "$(det tl_margin)" == *"B(1.35× py)"* && "$(det tl_margin)" != *"A("* ]]'
+check "e em espanhol"                                  '[[ "$(printf "%s" "$BODY" | jq -r "first(.checks[]|select(.id==\"tl_margin\")|.detail_es)")" == *"B(1.35× py)"* ]]'
+TL_MARGIN_MIN=1.3 run
+check "TL_MARGIN_MIN=1.3 no ambiente => ok"            '[[ "$(lvl tl_margin)" == ok ]]'
+printf '{"stale":true,"margin":{"lang":"py","w":1.0,"tl":1.35,"min":1.35}}' > "$RUN/calib-sum/col#p1.json"
+run
+check "sumário velho (stale) não conta"                '[[ "$(lvl tl_margin)" == ok ]]'
+rm -rf "$RUN/calib-sum"
 
 echo "== relógio do TL (TLCLOCK=cpu, 05/11/2026): informativo =="
 run
@@ -356,6 +383,13 @@ sed -i '/^LOGIN_START_TIME=/d' "$C/conf"; printf 'LOGIN_START_TIME=%s\n' "$((NOW
 check "abre DEPOIS do fim (o caso do warmup) => fail"           '[[ "$(lvl login_open)" == fail && "$(det login_open)" == *"NENHUM time entra"* ]]'
 printf 'LOGIN_ENABLED=n\n' >> "$C/conf"; run
 check "login desligado em Regras => warn (vence a abertura)"   '[[ "$(lvl login_open)" == warn && "$(det login_open)" == *"nenhum time entra"* ]]'
+sed -i '/^LOGIN_START_TIME=/d' "$C/conf"; run
+check "fechado à mão com a prova no ar => FAIL (LATAM 07/11)"  '[[ "$(lvl login_open)" == fail && "$(det login_open)" == *"NÃO reabre"* ]]'
+cp "$C/conf" "$FIX/conf.bk2"; sed -i "s/^CONTEST_START=.*/CONTEST_START=$((NOW+1800))/; s/^CONTEST_END=.*/CONTEST_END=$((NOW+9000))/" "$C/conf"; run
+check "fechado, abre em 30 min => FAIL"                        '[[ "$(lvl login_open)" == fail ]]'
+sed -i "s/^CONTEST_START=.*/CONTEST_START=$((NOW+7200))/" "$C/conf"; run
+check "fechado, abre em 2 h => warn (ainda dá tempo)"          '[[ "$(lvl login_open)" == warn && "$(det login_open)" == *"não reabre"* ]]'
+cp "$FIX/conf.bk2" "$C/conf"
 sed -i '/^LOGIN_START_TIME=/d; /^LOGIN_ENABLED=/d' "$C/conf"
 cp "$C/conf" "$FIX/conf.bak"; sed -i "s/^CONTEST_START=.*/CONTEST_START=$((NOW-7200))/; s/^CONTEST_END=.*/CONTEST_END=$((NOW-3600))/" "$C/conf"
 printf 'LOGIN_START_TIME=%s\n' "$((NOW+4200))" >> "$C/conf"; run

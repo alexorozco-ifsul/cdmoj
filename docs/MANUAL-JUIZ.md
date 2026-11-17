@@ -52,12 +52,33 @@ Abaixo dos contadores vem a lista das submissões seguradas para revisão. Para 
 - **Quem está avaliando** (se já houver alguém).
 - **Links de log e de fonte** (o log de execução e o código enviado).
 - A **ação** disponível (por exemplo, pegar para avaliar).
+- **🎈 segura balão — avalie primeiro**: esta submissão é a mais antiga, sem veredicto, de uma sede naquele
+  problema. Enquanto ela não for decidida, os balões do problema naquela sede esperam (o MOJ ainda não
+  sabe quem foi o primeiro da sede). Avalie essa primeiro. O juiz-chefe vê também o botão **liberar sem
+  faixa**: os balões saem na hora, sem a estrela de primeiro.
 
 ### Fluxo de avaliação, passo a passo
 
 1. **Pegar p/ avaliar** (*Claim to evaluate*, numa prova em inglês)**.** Clique para reservar a submissão. No máximo 2 pessoas podem estar na mesma submissão, e sua reserva tem um tempo limite de 5 minutos. Ao pegar, a tela troca para um painel estável, que não recarrega sozinho enquanto você trabalha (assim você não perde o que está fazendo).
 2. **Analisar.** No painel você tem tudo à mão: o **veredicto computado**, o **log** de execução, o **código** enviado e um seletor de veredicto. Dois botões ajudam: **+5 min** (pede mais tempo, caso os 5 minutos não bastem) e **Desistir** (larga a submissão para outra pessoa pegar).
 3. **Votar e liberar.** Escolha o veredicto no seletor e clique para votar. Atenção: o **voto é permanente** (não dá para desfazer) e ele **libera você na hora** para pegar a próxima tarefa.
+
+### A página da submissão
+
+Cada submissão tem uma página própria: `/contest/run/?c=<contest>&id=<id>`. Ela mostra numa tela só:
+
+- o problema, a linguagem, a hora e o minuto da prova, o veredicto, os pontos e o juiz que rodou;
+- a tabela dos testes, com o **primeiro teste que falhou** marcado (na ordem do nome do teste);
+- o **código com cor de sintaxe**, só leitura, com **📋 Copiar** e **⬇ Baixar**;
+- o **report** de execução, dentro da página (**↗ Abrir em nova aba** abre à parte).
+
+Como chegar nela:
+
+- Na fila e em **Todas as Submissões**, o **id curto** (os 8 primeiros caracteres) é um link para a página. Para mostrar uma submissão a outro juiz, copie o link (**🔗 Copiar link**) ou dite o id curto.
+- No campo **🔗 id da submissão**, digite o id ou os 8 primeiros caracteres e clique em **Abrir**.
+- Os links **📄 log** e **💻 código** funcionam com o clique do meio e com "abrir em nova aba": abrem a página da submissão. O clique simples em **💻 código** abre o código num **pop-up** com cor de sintaxe, sem sair da tela.
+
+O juiz julga às cegas: a página **não** mostra quem enviou. Só o juiz-chefe e o admin veem o time.
 
 ### Dois juízes têm de concordar
 
@@ -141,6 +162,7 @@ A faixa de aviso da Parte 1 também avisa o juiz-chefe de cada **conflito** novo
 
 - Ver **Todas as Submissões** com usuário e time (o juiz comum a vê anônima), com o veredicto cru.
 - Responder **clarifications**. Reserve a pergunta antes de responder. Você vê quem perguntou: o login e o nome (o juiz comum não vê). Ninguém reserva uma pergunta que outro juiz já reservou. Quebras de linha na pergunta e na resposta são preservadas.
+- Editar as **respostas prontas** (caixa **✎ Respostas prontas** na aba Clarification; o admin também). São os botões que todo juiz vê ao reservar uma pergunta: um clique responde só ao time que perguntou. O padrão são 4, no idioma da prova: "Sem comentários.", "Leia o enunciado.", "Sim." e "Não.". Escreva uma por linha (até 20); a lista vazia volta ao padrão.
 - Editar **respostas e notícias** da prova.
 
 ### Aquecimento: o que só o chefe confere

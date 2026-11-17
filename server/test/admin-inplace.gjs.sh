@@ -49,14 +49,16 @@ document.getElementById=(id)=>new FakeNode('div');
 const getToken=()=>''; const apiPost=async(...a)=>(globalThis.__apiPost ? globalThis.__apiPost(...a) : ({})); const mlinuxSections=()=>[el('div',{},'sec')]; const MLINUX_CSS='';
 const initContestShell=async()=>({});
 EOF
-strip "$W/shared/dom.js"; strip "$W/shared/admin-ui.js"; strip "$W/shared/regions-match.js"; }
+strip "$W/shared/dom.js"; strip "$W/shared/roles.js"; strip "$W/shared/admin-ui.js"; strip "$W/shared/regions-match.js"; }
 
 check(){ if [[ "$1" == "$2" ]]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FALHOU: $3 (got '$1', want '$2')" >&2; fi; }
 run(){ # <nome> <módulo> <corpo js> [módulos extras…] -> imprime as linhas "k=v" do corpo
   local nome="$1" mod="$2" body="$3"; shift 3
   { prelude
     # módulos irmãos que o painel importa (ex.: sessions-common.js): entram antes, sem o `const enc` duplicado
-    for x in "$@"; do strip "$W/contest/admin/$x" | sed '/^const enc = encodeURIComponent;$/d'; done
+    # (um caminho com / é relativo a web/: ex. contest/staff/test-box.js, a caixa 🧪 do painel de tarefas)
+    for x in "$@"; do xp="$W/contest/admin/$x"; [[ "$x" == */* ]] && xp="$W/$x"
+      strip "$xp" | sed '/^const enc = encodeURIComponent;$/d'; done
     local modpath="$W/contest/admin/$mod"; [[ "$mod" == */* ]] && modpath="$W/$mod"
     strip "$modpath"; printf '%s\n' "$body"; } > "$T/$nome.js"
   set -- "$nome"
@@ -130,7 +132,7 @@ async function apiGet(p){ if(p.includes("staff/queue")) return JSON.parse(JSON.s
   print("cfg_kept_dirty="+(cfg.children[0]===cfgInner0)); print("ta_value="+tas[0].value.replace(/\n/g,"|"));
   // limpa a sujeira => próximo tick refaz com o dado novo
   tas[0].value=tas[0].dataset.orig; await tab.load(); print("cfg_rebuilt_clean="+(cfg.children[0]!==cfgInner0));
-})().catch(e=>print("ERRO "+e+"\n"+e.stack));' > "$T/tasks.out"
+})().catch(e=>print("ERRO "+e+"\n"+e.stack));' contest/staff/test-box.js > "$T/tasks.out"
 check "$(kv tasks same_skeleton)" true "tasks: esqueleto idêntico no 2º load"
 check "$(kv tasks cfg_kept)" true "tasks: config não refeita sem mudança"
 check "$(kv tasks cfg_kept_dirty)" true "tasks: config NÃO refeita com textarea sujo (dado novo adiado)"

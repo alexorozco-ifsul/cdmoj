@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-STAFF.md blob:925b645d2465c91a33dbe510315a130be7abb5e0 -->
+<!-- i18n-source: MANUAL-STAFF.md blob:482b0613a28a6f5125dce185818d0a9610765466 -->
 # MOJ: Room staff manual (.staff and .cstaff)
 
 > **Translation note.** This manual is a translation of the Portuguese original. The command-line tools (`moj`, `moj-contest`, `moj-comp`) print their messages in Portuguese, and the command examples below are identical to the original.
@@ -57,6 +57,14 @@ The print screen is a table with **two kinds of items in the same queue**:
 >
 > **Print requests do not change**: the team can print at any time, with or without the freeze.
 
+> **Balloons waiting for the first at the site ⏳.** When a team solves a problem, MOJ must know if it
+> was the **first at its site** on that problem (the balloon then has the ★ "first to solve" star). If
+> another team of the site submitted earlier and that submission has no verdict yet (it is being judged
+> or reviewed by the judges), **all the balloons of that problem at the site wait** for it. The
+> **Printing** page shows a ⏳ notice with how many balloons wait and for which problems. They come out
+> on their own, with the right star, when the submission is judged. If the wait is long, tell the
+> `.admin`: the admin can release the balloons, and then they come out without the star.
+
 You see only the queue of **your site**. Requests and balloons of other sites do not show for you.
 
 ### How to handle a task
@@ -76,8 +84,10 @@ The screens in the [illustrated tutorial](/contest/ajuda/staff.html) show the En
 
 #### What comes out of the printer
 
-First the **cover sheet** (team, university, login, task number, number of pages and a
-line for a signature), then the document. Source code comes out in a **monospaced font, with the
+First the **cover sheet**, then the document. On the cover sheet, the **team login is the largest text**: you use
+it to find the team in the room. Below it come the team name, the university and the site, the number of pages and
+the line for a signature. The **task number** is small, in the top corner: you use it only to check against the
+system. The balloon sheet uses the same layout: login at the top, then the problem and the balloon color. Source code comes out in a **monospaced font, with the
 original indentation and numbered lines**. So you can point to a line and say "line 42".
 
 **Each page of code identifies itself**, at the top and at the bottom. At the top: the date and the
@@ -89,6 +99,25 @@ printouts in a stack, a sheet that comes loose from its cover still tells whose 
 There is a **checkbox** for automatic mode, and the system keeps your choice. When automatic mode is on and the tab is open, the system **claims, prints and marks** each new task. You do not click.
 
 To stop the browser print window from opening for each task, run the browser in **kiosk mode**. In Chrome/Chromium, use the option `--kiosk-printing`.
+
+#### Printer test
+
+Before the contest, measure the printers with test tasks. The **🧪 Printer test** box is below the queue.
+
+1. Keep the queue page open on each station of the site, with **automatic mode** on.
+2. Open the box and choose how many tasks (up to 200), the kind (print, balloon or mixed) and the pages per print.
+3. Click **🧪 Create**. The tasks go to the queue of **your site**, and the stations split the batch as in the contest.
+4. Read the summary: tasks printed per minute in total and per station, and the longest gap between two prints.
+5. Click **🧹 Delete tests** at the end.
+
+- The test sheet carries the band **TEST — DO NOT DELIVER** and its own numbering (T1, T2…). Do not deliver this sheet.
+- The contest numbering does not change, and the test is not in the contest report.
+- The time includes the sheet generation: it is the same path as a contest task. The server prepares the
+  sheet when the task is created, so the station finds it ready.
+- The admin can change the **sheet format** to HTML (experimental): the station builds and prints the sheet in
+  the browser, and the **Open PDF** button becomes **Open sheet**. A request that is not text (PDF, image) stays
+  in PDF. Create a test batch in each format and compare the tasks per minute.
+- **The test is not allowed during the contest.** When the contest starts, the system deletes the test tasks that are left.
 
 ### Warm-up: your rehearsal (and the contest can have two rounds)
 

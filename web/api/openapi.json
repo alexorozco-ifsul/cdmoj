@@ -312,7 +312,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Status da sessão",
+        "summary": "Status da sessão role = o sufixo de papel (vazio = time; registro server/etc/roles.tsv).",
         "security": [
           {
             "bearerAuth": []
@@ -1470,6 +1470,169 @@
         }
       }
     },
+    "/treino/virtual/clarifications": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Avisos e clarifications PÚBLICAS da prova no TEMPO RELATIVO da run (o servidor corta pelo relógio; o que saiu depois do fim só com a run terminada; privada nunca; aviso = o maior de time e answered_at, notícia = o maior de date e edited_at; instante ilegível = rel null, só no fim)",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{contest,elapsed,ended,items:[{kind:clar|notice|news,id,rel,after,problem,question,answer,title,text,file}]}"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "403": {
+            "description": "virtual_not_started — run não largada (ou desistida)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/treino/virtual/news-file": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Anexo de uma notícia do contest, pela regra de tempo do /treino/virtual/clarifications",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "arquivo (octet-stream); fora da janela = 404 notfound"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "403": {
+            "description": "virtual_not_started — run não largada (ou desistida)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/treino/virtual/docs": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "Arquivos da prova: documentos publicados com PDF desde a largada; o editorial só com a run terminada (antes, locked); links externos do resources.json também só no fim (antes, links_locked)",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{contest,ended,docs:[{type,langs,locked}],links:[{label,url}],links_locked}"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "403": {
+            "description": "virtual_not_started — run não largada (ou desistida)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/treino/virtual/doc": {
+      "get": {
+        "tags": [
+          "treino"
+        ],
+        "summary": "PDF de um documento publicado, pela regra do /treino/virtual/docs",
+        "parameters": [
+          {
+            "name": "contest",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "application/pdf; não publicado, sem PDF ou editorial antes da hora = 404 not_available"
+          },
+          "404": {
+            "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
+          },
+          "403": {
+            "description": "virtual_not_started — run não largada (ou desistida)"
+          },
+          "400": {
+            "description": "type_invalid | lang_invalid"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/treino/virtual/problems": {
       "get": {
         "tags": [
@@ -1488,7 +1651,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{contest,problems:[{letter,id,name,languages,statement_langs}]}"
+            "description": "{contest,problems:[{letter,id,name,languages,statement_langs,time_limits,tl_clock,wall_tl,tl_unified,function_langs}]} — time_limits = o TL que julga a submissão virtual (o do json público)"
           },
           "404": {
             "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
@@ -1537,7 +1700,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{version:2,contest,title,duration,penalty_minutes,problems,views:[{id,name,unranked}],teams:[[login,flag,univ_short,nome,univ_full,guest,cohort]],runs} — views/cohort só de coortes PÚBLICAS com time no placar público"
+            "description": "{version:2,contest,title,duration,penalty_minutes,freeze_rel,problems,views:[{id,name,unranked}],teams:[[login,flag,univ_short,nome,univ_full,guest,cohort]],runs} — views/cohort só de coortes PÚBLICAS com time no placar público"
           },
           "404": {
             "description": "virtual_unavailable — contest não elegível; corpo idêntico ao de contest inexistente"
@@ -1935,6 +2098,48 @@
         }
       }
     },
+    "/submission/info": {
+      "get": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "A página da submissão do juiz: uma submissão (id completo ou prefixo de 8+ hex); identidade só p/ admin/juiz-chefe",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8,32}$"
+            },
+            "description": "os 32 hex ou um prefixo de 8 a 31 hex"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{id, round, sub_epoch, minute, problem_id, letter, title, lang, verdict, verdict_canon, score, score_max, score_kind, correct, total_tests, tests[], host, duration_s, finalized_at, pending, has_source, has_log, review, anonymous} + {login, team, univ} só p/ admin/juiz-chefe"
+          },
+          "403": {
+            "description": "judge_required (time, .mon)"
+          },
+          "404": {
+            "description": "notfound"
+          },
+          "409": {
+            "description": "ambiguous — error.ids (até 10), error.matches"
+          }
+        }
+      }
+    },
     "/submission/summary": {
       "get": {
         "tags": [
@@ -2281,7 +2486,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Fila de tarefas do staff (impressão + balões; escopo por staff-filters; .cstaff SÓ LÊ — ações/PDF 403). Reconcilia balões pendentes (1ª-AC) ao carregar. Cada balão traz first_site: é o primeiro daquela cor NA SEDE do time (★ na fila e na folha) — só sai decidido; havendo run mais antiga da sede por julgar, a tarefa espera até BALLOON_FIRST_WAIT_S e depois sai sem estrela",
+        "summary": "Fila de tarefas do staff (impressão + balões; escopo por staff-filters; .cstaff SÓ LÊ — ações/PDF 403). Reconcilia balões pendentes (1ª-AC) ao carregar. Cada balão traz first_site: é o primeiro daquela cor NA SEDE do time (★ na fila e na folha) — só sai decidido; havendo run mais antiga da sede por julgar, TODOS os balões do par (sede × problema) esperam, sem teto por padrão (válvula: /contest/admin/balloon-release, sai sem estrela; BALLOON_FIRST_WAIT_S=N no conf põe teto). held = os que esperam, no escopo do staff (o admin recebe problem/pend/sub_epoch)",
         "description": "FREEZE: acerto com sub_epoch >= FREEZE_TIME NÃO vira tarefa de balão (o balão andando pela sala conta o que o placar congelado esconde) e a supressão é registrada em print-requests/.balloon-frozen — permanente, para que encerrar o evento (FREEZE_TIME=0) não a desfaça. Só o admin desfaz, ligando balloons_during_freeze no settings. Pedido de impressão NÃO é afetado pelo freeze. balloons_frozen (contagem dos suprimidos) só vai para o admin.",
         "security": [
           {
@@ -2295,7 +2500,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{requests:[{id,seq,kind,login,team,univ,short,color_hex,color_name,filename,status,…}], balloons_frozen}"
+            "description": "{requests:[{id,seq,kind,login,team,univ,short,color_hex,color_name,first_site,filename,status,…}], balloons_frozen, held:[{login,short,region,since,(admin) problem,pend,sub_epoch}]}"
           }
         }
       }
@@ -2326,6 +2531,57 @@
         }
       }
     },
+    "/contest/staff/test-tasks": {
+      "get": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "Tarefas de TESTE da impressão: a medida do lote que este staff vê (.staff/admin)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{blocked, scope, sites, summary:{total,pending,printed,delivered,pages,overall{done,span_s,per_min},max_gap_s,stations[{by,done,span_s,per_min}]}} — sites só p/ o admin (as sedes region: do staff-filters)"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "Cria (count 1..200, kind print|balloon|mixed, pages 1..20, site? só admin) ou apaga (action delete) tarefas de teste; proibido durante a prova",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["action"], "properties": {"action": {"type": "string", "enum": ["create","delete"]}, "count": {"type": "integer", "minimum": 1, "maximum": 200}, "kind": {"type": "string", "enum": ["print","balloon","mixed"]}, "pages": {"type": "integer", "minimum": 1, "maximum": 20}, "site": {"type": "string", "description": "só o admin: a sede (vazio = todas); o .staff cria para as próprias sedes"}}}}}},
+        "responses": {
+          "200": {
+            "description": "create → {created, range:\"T<a> T<b>\", scope}; delete → {deleted}"
+          },
+          "409": {
+            "description": "test_blocked (durante a prova) | print_disabled | balloons_disabled"
+          },
+          "422": {
+            "description": "count_invalid | pages_invalid | kind_invalid | site_invalid | action_invalid"
+          }
+        }
+      }
+    },
     "/contest/staff/print-pdf": {
       "get": {
         "tags": [
@@ -2340,11 +2596,55 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "id da tarefa da fila do staff"
           }
         ],
         "responses": {
           "200": {
             "description": "application/pdf"
+          }
+        }
+      }
+    },
+    "/contest/staff/print-html": {
+      "get": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "PROTÓTIPO (09/11/2026, PRINT_FORMAT=html): a folha em HTML de impressão (A4) que a estação imprime no navegador — pedido de texto ou balão; mesmo gate do print-pdf (.staff/admin; .cstaff 403). A página traz CSP default-src 'none' (sem script)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "id da tarefa da fila do staff"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/html"
+          },
+          "409": {
+            "description": "html_unsupported — a tarefa não sai em HTML (PDF/imagem/office ou texto grande): use o print-pdf"
           }
         }
       }
@@ -2371,6 +2671,81 @@
           },
           "403": {
             "description": "cstaff_required | staff_scope"
+          }
+        }
+      }
+    },
+    "/contest/admin/balloon-release": {
+      "get": {
+        "tags": [
+          "contest-admin"
+        ],
+        "summary": "Balões esperando a certeza do 1º da sede e os pares já liberados (admin ou juiz-chefe)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{held:[{login,problem,short,region,sub_epoch,since,pend}], released:[{region,problem,at,by}]}"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "contest-admin"
+        ],
+        "summary": "Libera um par sede × problema: os balões retidos saem SEM a faixa de primeiro no próximo reconcile (auditado balloon-release)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "region",
+                  "problem"
+                ],
+                "properties": {
+                  "region": {
+                    "type": "string"
+                  },
+                  "problem": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{success:true}"
+          },
+          "403": {
+            "description": "chief_required"
+          },
+          "404": {
+            "description": "not_held — o par não está esperando"
+          },
+          "422": {
+            "description": "pair_invalid"
           }
         }
       }
@@ -3010,7 +3385,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Placar (TXT, 1ª linha = modo); antes do início serve a VITRINE (times sem colunas de problema — o placar nunca revela a quantidade de problemas antes de a competição começar; is_judge vê o completo); privilegiado recebe o completo — view=public força o congelado (usado pela cerimônia de revelação); scope=mine (só .cstaff) recorta à sede — com SCORE_ANON=1, quem não é da organização (admin/chefe/juiz/.mon/.animeitor) recebe só o agregado JSON {anon, mode, n, guests, frozen, supported, problems, per_problem, dist, q} com X-MOJ-Anon: 1 (nem SCORE_FULL_USERS, coorte ou scope=mine furam)",
+        "summary": "Placar (TXT, 1ª linha = modo); antes do início serve a VITRINE (times sem colunas de problema — o placar nunca revela a quantidade de problemas antes de a competição começar; is_judge vê o completo); privilegiado recebe o completo — view=public força o congelado (usado pela cerimônia de revelação); scope=mine (só .cstaff) recorta à sede — com SCORE_ANON=1, quem não é da organização (admin/chefe/juiz/.mon/.animeitor) recebe só o agregado JSON {anon, mode, n, guests, frozen, supported, problems, per_problem, dist, q} com X-MOJ-Anon: 1 (nem SCORE_FULL_USERS, coorte ou scope=mine furam) .diretor (09/11/2026): SEM freeze, só o escopo, ★ recalculada no recorte (o porteiro declina).",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -3169,7 +3544,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Fila de revisão de veredicto manual (judge; votos detalhados e login do competidor só p/ admin/chief — anti-anchoring/anonimato)",
+        "summary": "Fila de revisão de veredicto manual (judge; votos detalhados e login do competidor só p/ admin/chief — anti-anchoring/anonimato). blocks_balloon = a run segura o 1º balão de uma sede (balloon_region só p/ admin/chief)",
         "security": [
           {
             "bearerAuth": []
@@ -3335,7 +3710,7 @@
         "tags": [
           "contest"
         ],
-        "summary": "Definir veredicto final (admin ou juiz-chefe)",
+        "summary": "Troca o veredicto de UMA submissão (admin ou juiz-chefe). id (o da submissão) obrigatório: sem ele 400 id_required; fora do history do username 404 submission_notfound; problem_id diferente 422 problem_mismatch; em julgamento 409 submission_pending (a retida na revisão manual pode). Resposta {action,id,status:queued} com o id da submissão.",
         "security": [
           {
             "bearerAuth": []
@@ -3347,6 +3722,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "id da submissão (o do history), obrigatório"
+                  },
                   "contest": {
                     "type": "string"
                   },
@@ -3359,7 +3738,8 @@
                   "username": {
                     "type": "string"
                   }
-                }
+                },
+                "required": ["id", "username", "verdict"]
               }
             }
           }
@@ -3735,7 +4115,7 @@
         "tags": [
           "contest-create"
         ],
-        "summary": "Cria e publica o contest (no ar na hora) SPEC UNIFICADO (2026-09-05): modules:{<id>: true | {on?, …seção…}} leva os DADOS de cada módulo — sedes{regions,teams_meta,time_overrides}, baloes{colors,during_freeze}, coortes{cohorts}, maquinas{ua_gate,site_lock{enabled,grace},nutella_url}, rodadas{active,rounds}, documentos{config}, inscricoes{enabled,window}, telao{views} (chaves NOVAS de webcast), classificacao{algorithm,config} ou {stages:[{id?,algorithm,config,name?,venue?,when?,chip?}]} (motor pela allowlist + config pelo --check do motor). Seção presente = módulo ligado (salvo on:false); tipo errado = 422 modules_spec_invalid; segredo nunca entra. colors/regions/teams_meta no topo continuam aceitos (compat). Letra de problema: sem letter = a 1ª LIVRE; repetida (sem diferenciar caixa) = 422 letter_dup (numa rodada do spec, 422 modules_spec_invalid). Módulo esqueletos: {langs:{<lang>:{mode:custom,code}|{mode:off}}} grava o esqueletos.json e exige show_editor (senão 422 editor_required; vale p/ criar, duplicar e template). Nomes (admin e users[]) com ':' são gravados com '∶'; senha/email de usuário com ':' = 422 user_colon, senha do admin = 422 colon. modules.inscricoes ligado sem users_from (contas próprias) = 422 requires_shared_users. virtual sem as condições: criado com o módulo desligado e modules_skipped:[{id,code,reason,message}]",
+        "summary": "Cria e publica o contest (no ar na hora) SPEC UNIFICADO (2026-09-05): modules:{<id>: true | {on?, …seção…}} leva os DADOS de cada módulo — sedes{regions,teams_meta,time_overrides}, baloes{colors,during_freeze}, coortes{cohorts}, maquinas{ua_gate,site_lock{enabled,grace},nutella_url}, rodadas{active,rounds}, documentos{config}, inscricoes{enabled,window}, telao{views} (chaves NOVAS de webcast), classificacao{algorithm,config} ou {stages:[{id?,algorithm,config,name?,venue?,when?,chip?}]} (motor pela allowlist + config pelo --check do motor). Seção presente = módulo ligado (salvo on:false); tipo errado = 422 modules_spec_invalid; segredo nunca entra. colors/regions/teams_meta no topo continuam aceitos (compat). Letra de problema: sem letter = a 1ª LIVRE; repetida (sem diferenciar caixa) = 422 letter_dup (numa rodada do spec, 422 modules_spec_invalid). Módulo esqueletos: {langs:{<lang>:{mode:custom,code}|{mode:off}}} grava o esqueletos.json e exige show_editor (senão 422 editor_required; vale p/ criar, duplicar e template). Nomes (admin e users[]) com ':' são gravados com '∶'; senha/email de usuário com ':' = 422 user_colon, senha do admin = 422 colon. modules.inscricoes ligado sem users_from (contas próprias) = 422 requires_shared_users. virtual sem as condições: criado com o módulo desligado e modules_skipped:[{id,code,reason,message}] Opções do settings também na criação: languages[], tz, verdict_rule, balloon_style (icon|fill; 422 balloon_style_invalid) e review_judges (1..5; 422 review_judges_invalid) — só o não-padrão grava; export/duplicate/template os levam.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3748,6 +4128,11 @@
                   },
                   "name": {
                     "type": "string"
+                  },
+                  "verdict_rule": {
+                    "type": "string",
+                    "enum": ["first", "worst"],
+                    "description": "Regra do veredicto. Ausente = first no modo icpc e worst nos outros; o export, o duplicate e os templates a levam sempre."
                   },
                   "mode": {
                     "type": "string",
@@ -5454,7 +5839,7 @@
     "/contest/admin/site-lock": {
       "get": {
         "tags": ["contest"],
-        "summary": "Trava de sede por IP (admin/chefe): IPs presos a este contest, bloqueios e reivindicações auditadas",
+        "summary": "Trava de sede por IP (admin/chefe): IPs presos a este contest, bloqueios e reivindicações auditadas .sistemas: GET recortado à sede e POST só release de IP da sede (403 site_forbidden).",
         "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
         "responses": {"200": {"description": "{enabled, grace, claims[], blocks[], claims_audit[]}"}, "403": {"description": "admin_required"}}
       },
@@ -5558,7 +5943,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Configurações do contest (inclui statement_langs/statement_langs_mode/default_statement_lang só leitura — muda-se em /contest/admin/statement-langs; mode read-only, tz = fuso IANA da prova (CONTEST_TZ; vazio = MOJ_TZ da instalação; nome antigo, ex. America/Buenos_Aires, é gravado com o atual; desconhecido = 422 tz_invalid), judges[] = pool de juízes do contest, e a penalidade ICPC: penalty_minutes, penalty_verdicts; show_log é o valor EFETIVO — em modo icpc, SHOWLOG ausente = false; freeze_release_at = quando pode descongelar; POST freeze:0 antes disso = 409 freeze_locked; guest_numbering = convidados numerados na sequência própria, flag g no TXT; priority = prioridade efetiva (ausente = lista-publica), priority_set = definida no conf, priority_locked = está em super)",
+        "summary": "Configurações do contest (inclui statement_langs/statement_langs_mode/default_statement_lang só leitura — muda-se em /contest/admin/statement-langs; mode read-only, tz = fuso IANA da prova (CONTEST_TZ; vazio = MOJ_TZ da instalação; nome antigo, ex. America/Buenos_Aires, é gravado com o atual; desconhecido = 422 tz_invalid), judges[] = pool de juízes do contest, e a penalidade ICPC: penalty_minutes, penalty_verdicts; show_log é o valor EFETIVO — em modo icpc, SHOWLOG ausente = false; freeze_release_at = quando pode descongelar; POST freeze:0 antes disso = 409 freeze_locked; guest_numbering = convidados numerados na sequência própria, flag g no TXT; priority = prioridade efetiva (ausente = lista-publica), priority_set = definida no conf, priority_locked = está em super). verdict_rule (first|worst, 09/11/2026): regra do veredicto — first = o do 1º teste que falhou (exemplos primeiro; padrão de contest NOVO do modo icpc — nos outros só verdict_rule:\"first\" explícito), worst = o mais grave (conf sem a linha). print_format (pdf|html, 09/11/2026, PROTÓTIPO): o formato da folha impressa (html = a estação usa /contest/staff/print-html)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -5879,6 +6264,56 @@
         "responses": {
           "200": {
             "description": "{broadcast,id} — body {problem?,question?,answer}: answer = texto do aviso (obrigatório, 422 answer_missing); question = assunto opcional (título)"
+          }
+        }
+      }
+    },
+    "/contest/clarification-canned": {
+      "get": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "Respostas prontas de clarification (admin/judge/mon): {answers, custom}; sem lista = as 4 do ICPC no LOCALE",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{answers:[texto], custom}"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "contest"
+        ],
+        "summary": "Grava a lista (admin ou juiz-chefe): {answers:[1..20 textos, até 200]} ou {reset:true}",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/contest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{answers, custom}"
+          },
+          "403": {
+            "description": "chief_required"
+          },
+          "422": {
+            "description": "answers_invalid | answers_count | answer_long"
           }
         }
       }
@@ -6560,7 +6995,7 @@
         "tags": [
           "contest-admin"
         ],
-        "summary": "Notícias do contest (admin/judge/mon)",
+        "summary": "Notícias do contest (admin/judge/mon). action:add|remove|edit; o edit (admin/juiz-chefe) mantém id/date/anexo e carimba edited_at (a participação virtual libera a notícia pelo maior de date e edited_at)",
         "parameters": [
           {
             "$ref": "#/components/parameters/contest"
@@ -6651,7 +7086,7 @@
         "tags": ["contest"],
         "summary": "Sair em massa + trava de login (admin): estado do login e sessões por classe",
         "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
-        "responses": {"200": {"description": "{login_enabled, sessions:{competitors,staff,privileged}}"}, "403": {"description": "admin_required"}}
+        "responses": {"200": {"description": "{login_enabled, login_start, start, login_open_now, sessions:{competitors,staff,privileged}} — start = CONTEST_START: com o login fechado à mão a abertura NÃO o reabre"}, "403": {"description": "admin_required"}}
       },
       "post": {
         "tags": ["contest"],
@@ -6901,13 +7336,30 @@
         }
       }
     },
+    "/contest/admin/absent-disqualify": {
+      "get": {
+        "tags": ["contest-admin"],
+        "summary": "Prévia: os times sem login na janela da prova E sem submissão (fora: classificados num estágio publicado, já desclassificados, papel). Nada gravado.",
+        "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "{preview:{window:{from,to}, live, counts, candidates:[{login,name,univ,region,last_login}], kept_classified:[{login,name,region,via,stage}], plan_id}, batches:[{id,at,by,count,window,undone_at,undone_by}]}"}},
+        "security": [{"bearer": []}]
+      },
+      "post": {
+        "tags": ["contest-admin"],
+        "summary": "Desclassifica em lote os candidatos da prévia (action apply + plan_id) ou desfaz um lote (action undo + batch)",
+        "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["action"], "properties": {"action": {"type": "string", "enum": ["apply", "undo"]}, "plan_id": {"type": "string"}, "batch": {"type": "string"}}}}}},
+        "responses": {"200": {"description": "apply: {batch, count, batches}; undo: {batch, restored, batches} (volta só quem ainda tem a marca do lote)"}, "409": {"description": "plan_changed (a lista mudou: peça a prévia de novo), nothing_to_do, busy, batch_undone, not_a_contest"}, "404": {"description": "batch_notfound"}},
+        "security": [{"bearer": []}]
+      }
+    },
     "/contest/admin/user-disqualify": {
       "post": {
         "tags": ["contest-admin"],
         "summary": "Desclassifica o time (some do placar e da estatística; undo reverte)",
         "parameters": [{"name": "contest", "in": "query", "required": true, "schema": {"type": "string"}}],
         "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["login"], "properties": {"login": {"type": "string"}, "undo": {"type": "boolean"}}}}}},
-        "responses": {"200": {"description": "{disqualified, login}. Seta .disqualified=true no account.json: fora do placar (sc_users) e da estatística (stats-gen) — mesma população nas duas telas. Não mexe em senha/sessões."}},
+        "responses": {"200": {"description": "{disqualified, login}. Seta .disqualified=true no account.json: fora do placar (sc_users) e da estatística (stats-gen) — mesma população nas duas telas. Não mexe em senha/sessões. Apaga a marca de lote (.dq_batch) do absent-disqualify nos dois sentidos: a decisão individual vence."}},
         "security": [{"bearer": []}]
       }
     },
@@ -7848,6 +8300,10 @@
                       "type": "string"
                     },
                     "description": "Calibração direcionada a juízes específicos (opcional)."
+                  },
+                  "reuse": {
+                    "type": "boolean",
+                    "description": "Calibração incremental (opt-in; padrão false = roda tudo): o juiz reaproveita o resultado das soluções cuja chave não mudou e só roda o resto. No dedup, um pedido sem reuse tira o reuse do pendente."
                   }
                 },
                 "required": [

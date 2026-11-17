@@ -13,6 +13,7 @@ import { downloadAuthed, fmtDate, norm, debounce } from '/shared/admin-ui.js';
 import { T, uiLocale } from '/shared/i18n.js';
 import { setMediaSrc, mediaLink, setAudioSrc, releaseMedia } from '/shared/media-auth.js';
 import { makeApiSection } from './api-section.js';
+import { roleCan } from '/shared/roles.js';           // registro dos papéis (GERADO de server/etc/roles.tsv)
 
 const qs = new URLSearchParams(location.search);
 const CONTEST = (window.__MOJ_CONTEST || qs.get('c') || '');
@@ -30,12 +31,19 @@ let REVEAL = null;   // {released, scoped, sites[], links[], verify} — os link
 //   NOWRITE (.staff)           — sem NENHUMA escrita: nada de enviar/trocar/remover, lote ou zip.
 let RO = false;
 let NOWRITE = false;
+// O QUE a conta escreve (09/11/2026: .foto e .musica — registro server/etc/roles.tsv, capacidades `foto`/`musica`):
+// a API corta (role_can + escopo); aqui só não se oferece o botão que daria 403
+let CAN_PHOTO = true;
+let CAN_MUSIC = true;
+let SITE_ORG = false;   // .cstaff/.staff: o cartão do Reveleitor da sede
 
 // ESTADO DA GALERIA (prova de verdade tem 1000+ times): filtro + página. Abre em PENDÊNCIAS —
 // quem falta foto OU música, que é a fila de trabalho inteira de quem opera o telão.
 // `mode` é exclusivo: ou vale o recorte de pendências (um OU entre as duas famílias, que os chips
 // por família não conseguem expressar), ou vale a combinação foto×música. Nunca os dois.
-const F = { mode: 'pending', photo: 'all', music: 'all', q: '', cohort: '', univ: '', region: '' };
+// q = o texto NORMALIZADO (o que o filtro compara); qRaw = o que a pessoa digitou (o que a caixa mostra: devolver o
+// normalizado cortava o espaço e tirava os acentos no meio da digitação)
+const F = { mode: 'pending', photo: 'all', music: 'all', q: '', qRaw: '', cohort: '', univ: '', region: '' };
 let PAGE_I = 0;
 const PAGE = 48;     // 48 cartões = a grade cheia; o DOM fica pequeno e só estas fotos baixam
 const MUSIC_MAX_MB = 15;   // o mesmo teto do handler (contest/animeitor/music.sh)
@@ -147,10 +155,10 @@ function musicRow(t, box) {
     el('span', { class: 'lg' }, t.has_music
       ? `${Math.round((t.music_bytes || 0) / 1024)} KB`
       : T('padrão', 'default', 'predeterminado')),
-    NOWRITE ? '' : el('button', { class: 'btn ghost', onclick: () => inp.click(),
+    !CAN_MUSIC ? '' : el('button', { class: 'btn ghost', onclick: () => inp.click(),
       title: t.has_music ? T('trocar a música', 'replace the music', 'reemplazar la música')
                          : T('enviar a música', 'upload the music', 'subir la música') }, '⬆'),
-    (t.has_music && !NOWRITE) ? el('button', { class: 'btn ghost danger',
+    (t.has_music && CAN_MUSIC) ? el('button', { class: 'btn ghost danger',
       title: T('remover a música', 'remove the music', 'quitar la música'), onclick: async () => {
       if (!confirm(T('Remover a música de ', 'Remove the music of ', 'Quitar la música de ') + (t.name || t.login) + '?')) return;
       try {
@@ -183,7 +191,7 @@ function photoCard(t, box) {
     el('div', { class: 'nm' }, t.name || t.login),
     el('div', { class: 'lg' }, (t.univ ? '[' + t.univ + '] ' : '') + t.login),
     el('div', { class: 'lg' }, t.has_photo ? `${t.format} · ${Math.round((t.bytes || 0) / 1024)} KB` : ''),
-    NOWRITE ? '' : el('div', { class: 'acts' }, inp,
+    !CAN_PHOTO ? '' : el('div', { class: 'acts' }, inp,
       el('button', { class: 'btn ghost', onclick: () => inp.click() },
         t.has_photo ? T('trocar', 'replace', 'reemplazar') : T('enviar', 'upload', 'subir')),
       t.has_photo ? el('button', { class: 'btn ghost danger', onclick: async () => {
@@ -254,9 +262,10 @@ function photosBar(box) {
 
   const q = el('input', { id: 'fQ', class: 'filter', type: 'search',
     placeholder: T('buscar time, login, universidade…', 'search team, login, university…', 'buscar equipo, usuario, universidad…') });
-  q.value = F.q;
-  // debounce: com 1000 times o re-render a cada tecla seria perceptível
-  q.addEventListener('input', debounce(() => { F.q = norm(q.value.trim()); PAGE_I = 0; renderPhotos(); }, 150));
+  q.value = F.qRaw;
+  // debounce: com 1000 times o re-render a cada tecla seria perceptível. O re-render recria esta caixa: o
+  // renderPhotos devolve o foco e o cursor a ela
+  q.addEventListener('input', debounce(() => { F.qRaw = q.value; F.q = norm(q.value.trim()); PAGE_I = 0; renderPhotos(); }, 150));
 
   return el('div', { class: 'fbar' },
     // a FILA DE TRABALHO inteira num clique: falta foto, falta música, ou faltam as duas
@@ -279,7 +288,7 @@ function photosBar(box) {
     // limpar é limpar: mostra TODOS (não volta a ligar o recorte de pendências)
     el('button', { id: 'fClear', class: 'btn ghost', onclick: () => {
       F.mode = 'family'; F.photo = 'all'; F.music = 'all';
-      F.q = ''; F.cohort = ''; F.univ = ''; F.region = '';
+      F.q = ''; F.qRaw = ''; F.cohort = ''; F.univ = ''; F.region = '';
       PAGE_I = 0; renderPhotos();
     } }, T('limpar', 'clear', 'limpiar')),
     el('span', { class: 'fcount', id: 'fCount' }, ''),
@@ -372,6 +381,10 @@ function placeholderCard(box) {
 function renderPhotos() {
   const host = document.getElementById('photosSec');
   if (!host) return;
+  // a busca está DENTRO da seção recriada: quem digitava perdia o foco a cada pausa. Guarda foco e cursor e os
+  // devolve à caixa nova no fim
+  const act = document.activeElement;
+  const typing = act && act.id === 'fQ' ? [act.selectionStart, act.selectionEnd] : null;
   const box = el('div', { class: 'small muted', id: 'phMsg' });
   const prev = document.getElementById('phMsg');
   if (prev) box.append(...prev.childNodes);           // preserva a mensagem do último upload
@@ -401,9 +414,9 @@ function renderPhotos() {
     // lote e pacote são ESCRITA/exportação: o .staff não tem nenhum dos dois
     NOWRITE ? '' : el('div', { class: 'row', style: 'gap:.5rem; margin-bottom:.4rem; flex-wrap:wrap' }, bulkInput(box),
       el('button', { class: 'btn', onclick: () => document.getElementById('phBulk').click() },
-        T('⬆ Enviar em lote — fotos e músicas (nome do arquivo = login)',
-          '⬆ Bulk upload — photos and music (file name = login)',
-          '⬆ Subir en lote — fotos y música (nombre del archivo = usuario)')),
+        T('⬆ Enviar em lote — fotos, músicas ou .zip (nome do arquivo = login)',
+          '⬆ Bulk upload — photos, music or .zip (file name = login)',
+          '⬆ Subir en lote — fotos, música o .zip (nombre del archivo = usuario)')),
       el('button', { class: 'btn ghost', onclick: () => downloadAuthed(CONTEST,
           '/contest/animeitor/photos-zip?contest=' + enc(CONTEST), 'fotos-' + CONTEST + '.zip') },
         T('⬇ Baixar pacote (.zip)', '⬇ Download package (.zip)', '⬇ Descargar paquete (.zip)'))),
@@ -412,6 +425,10 @@ function renderPhotos() {
                 : el('p', { class: 'muted' }, T('Nenhum time casa com o filtro.', 'No team matches the filter.', 'Ningún equipo coincide con el filtro.')),
     pager(pages),
   );
+  if (typing) {
+    const q = document.getElementById('fQ');
+    if (q) { q.focus(); try { q.setSelectionRange(typing[0], typing[1]); } catch (e) { /* tipo sem seleção */ } }
+  }
   syncPlay();                                        // o cartão que estava tocando continua ⏸
   const c = document.getElementById('fCount');
   if (c) c.textContent = (rows.length === teamsAll().length)
@@ -419,36 +436,113 @@ function renderPhotos() {
     : T(`Mostrando ${rows.length} de ${teamsAll().length} times`, `Showing ${rows.length} of ${teamsAll().length} teams`, `Mostrando ${rows.length} de ${teamsAll().length} equipos`);
 }
 
-// o lote aceita FOTO e MÚSICA no mesmo arrastar: cada arquivo vai para a rota certa pelo tipo
-// (o MP3 é reconhecido pelo mime ou pela extensão — o Firefox não sabe o mime de todo .mp3)
-const isMusicFile = (f) => /^audio\//.test(f.type || '') || /\.mp3$/i.test(f.name || '');
 
+const isPhotoName = (n) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(n || '');
+
+// O LOTE (09/11/2026, pedido do Emílio): fotos, músicas e PACOTES .zip no mesmo seletor. O zip é aberto AQUI
+// (shared/zip-read.js) e cada arquivo segue pela rota de sempre, um POST por arquivo — o servidor nunca descompacta.
+// Antes de enviar, uma CONFERÊNCIA (dry-run): cada arquivo, o time que ele achou pelo nome (login), se é novo ou
+// troca, e o que fica de fora (sem time, formato que não é foto/MP3, repetido). Nada sobe sem o "Enviar".
 function bulkInput(box) {
-  const bulk = el('input', { id: 'phBulk', type: 'file', accept: 'image/*,audio/mpeg,.mp3',
+  const bulk = el('input', { id: 'phBulk', type: 'file', accept: 'image/*,audio/mpeg,.mp3,.zip,application/zip',
     multiple: true, style: 'display:none' });
   bulk.addEventListener('change', async () => {
     const fs = [...(bulk.files || [])];
+    bulk.value = '';                                       // escolher o mesmo arquivo de novo dispara de novo
     if (!fs.length) return;
-    let okP = 0; let okM = 0; const bad = [];
-    for (let i = 0; i < fs.length; i++) {
-      msg(box, T('Enviando ', 'Uploading ', 'Subiendo ') + (i + 1) + '/' + fs.length + '…');
-      // o LOGIN vem do nome do arquivo (fulano.jpg / fulano.mp3 -> fulano), como no painel de Times
-      const mus = isMusicFile(fs[i]);
-      try {
-        await apiPost('/contest/animeitor/' + (mus ? 'music' : 'photo') + '?contest=' + enc(CONTEST),
-          { login: fs[i].name, file_b64: await fileToBase64(fs[i]) }, G);
-        if (mus) okM++; else okP++;
-      } catch { bad.push(fs[i].name); }
-    }
-    await loadPhotos(); renderPhotos();
-    const b = document.getElementById('phMsg');
-    if (b) msg(b, T(`${okP} foto(s) e ${okM} música(s) enviada(s).`, `${okP} photo(s) and ${okM} music file(s) uploaded.`, `${okP} foto(s) y ${okM} archivo(s) de música subido(s).`)
-      + (bad.length ? T(' Falharam (time inexistente ou formato recusado): ',
-                        ' Failed (no such team or format rejected): ',
-                        ' Fallaron (equipo inexistente o formato rechazado): ') + bad.join(', ') : ''),
-      bad.length ? 'error-box' : 'small');
+    const items = [];
+    try {
+      for (const f of fs) {
+        if (/\.zip$/i.test(f.name) || f.type === 'application/zip' || f.type === 'application/x-zip-compressed') {
+          msg(box, T('Abrindo ', 'Opening ', 'Abriendo ') + f.name + '…');
+          const { readZip } = await import('/shared/zip-read.js');
+          for (const e of await readZip(f)) items.push({ name: e.base, from: f.name + ' › ' + e.name, blob: e.blob, size: e.size });
+        } else items.push({ name: f.name, from: '', blob: async () => f, size: f.size });
+      }
+    } catch (e) { msg(box, T('Falha ao abrir o pacote: ', 'Failed to open the package: ', 'No se pudo abrir el paquete: ') + (e.message || e), 'error-box'); return; }
+    showBulkPlan(box, bulkPlan(items));
   });
   return bulk;
+}
+
+// bulkPlan(items) → [{item, kind:'photo'|'music'|null, team, status}]  status: new | replace | no_team | format | dup
+function bulkPlan(items) {
+  const byLogin = new Map(teamsAll().map((t) => [String(t.login || '').toLowerCase(), t]));
+  const seen = new Map();
+  const plan = items.map((it) => {
+    const kind = /\.mp3$/i.test(it.name) ? 'music' : (isPhotoName(it.name) ? 'photo' : null);
+    const login = it.name.replace(/\.[^.]+$/, '').toLowerCase();
+    const team = byLogin.get(login) || null;
+    let status = !kind ? 'format' : (!team ? 'no_team' : ((kind === 'music' ? !CAN_MUSIC : !CAN_PHOTO) ? 'denied'
+      : ((kind === 'music' ? team.has_music : team.has_photo) ? 'replace' : 'new')));
+    const r = { item: it, kind, team, login, status };
+    if (kind && team) {                                   // o MESMO time e tipo duas vezes: vale o último
+      const k = kind + '|' + login;
+      if (seen.has(k)) seen.get(k).status = 'dup';
+      seen.set(k, r);
+    }
+    return r;
+  });
+  return plan;
+}
+
+const BULK_ST = {
+  new: () => T('novo', 'new', 'nuevo'),
+  replace: () => T('troca o atual', 'replaces the current one', 'reemplaza el actual'),
+  no_team: () => T('nenhum time com esse login', 'no team with this login', 'ningún equipo con ese usuario'),
+  format: () => T('não é foto nem MP3', 'not a photo or MP3', 'no es foto ni MP3'),
+  dup: () => T('repetido (vale o último)', 'repeated (the last one counts)', 'repetido (vale el último)'),
+  denied: () => T('sua conta não envia este tipo', 'your account does not upload this type', 'tu cuenta no sube este tipo'),
+};
+
+function showBulkPlan(box, plan) {
+  const go = plan.filter((r) => r.status === 'new' || r.status === 'replace');
+  const cnt = (st) => plan.filter((r) => r.status === st).length;
+  const nP = go.filter((r) => r.kind === 'photo').length, nM = go.length - nP;
+  box.innerHTML = '';
+  const rows = plan.slice().sort((a, b) => (a.status === b.status ? a.item.name.localeCompare(b.item.name) : (['no_team', 'format', 'denied', 'dup', 'replace', 'new'].indexOf(a.status) - ['no_team', 'format', 'denied', 'dup', 'replace', 'new'].indexOf(b.status))));
+  const LIM = 300;
+  const tb = el('tbody', {}, ...rows.slice(0, LIM).map((r) => el('tr', {},
+    el('td', {}, r.item.name, r.item.from ? el('div', { class: 'small muted' }, r.item.from) : ''),
+    el('td', {}, r.kind === 'music' ? T('🎵 música', '🎵 music', '🎵 música') : r.kind === 'photo' ? T('📷 foto', '📷 photo', '📷 foto') : '—'),
+    el('td', {}, r.team ? (r.team.login + (r.team.team || r.team.name ? ' — ' + (r.team.team || r.team.name) : '')) : '—'),
+    el('td', { style: (r.status === 'new' || r.status === 'replace') ? '' : 'color:#B91C1C' }, BULK_ST[r.status]()))));
+  const sendBtn = el('button', { class: 'btn' }, T(`⬆ Enviar ${go.length} arquivo(s)`, `⬆ Upload ${go.length} file(s)`, `⬆ Subir ${go.length} archivo(s)`));
+  sendBtn.disabled = !go.length;
+  const cancel = el('button', { class: 'btn ghost', onclick: () => msg(box, '') }, T('Cancelar', 'Cancel', 'Cancelar'));
+  sendBtn.addEventListener('click', () => runBulk(box, go));
+  box.append(el('div', { class: 'section', style: 'margin:.4rem 0' },
+    el('h3', { style: 'margin:.1rem 0 .3rem' }, T('Conferência antes de enviar', 'Check before uploading', 'Revisión antes de subir')),
+    el('p', { class: 'small' },
+      T(`${nP} foto(s) e ${nM} música(s) vão subir (${cnt('replace')} troca(m) a atual). Fica de fora: ${cnt('no_team')} sem time, ${cnt('format')} em outro formato, ${cnt('dup')} repetido(s). O nome do arquivo (sem a extensão) é o login do time.`,
+        `${nP} photo(s) and ${nM} music file(s) will be uploaded (${cnt('replace')} replace the current one). Left out: ${cnt('no_team')} without a team, ${cnt('format')} in another format, ${cnt('dup')} repeated. The file name (without the extension) is the team login.`,
+        `Se subirán ${nP} foto(s) y ${nM} música(s) (${cnt('replace')} reemplaza(n) la actual). Quedan fuera: ${cnt('no_team')} sin equipo, ${cnt('format')} en otro formato, ${cnt('dup')} repetido(s). El nombre del archivo (sin la extensión) es el usuario del equipo.`)),
+    el('div', { class: 'row', style: 'gap:.5rem; margin:.3rem 0' }, sendBtn, cancel),
+    el('div', { class: 'chart-wrap' }, el('table', { class: 'moj' },
+      el('thead', {}, el('tr', {}, el('th', {}, T('Arquivo', 'File', 'Archivo')), el('th', {}, T('Tipo', 'Type', 'Tipo')),
+        el('th', {}, T('Time', 'Team', 'Equipo')), el('th', {}, T('Situação', 'Status', 'Estado')))), tb)),
+    plan.length > LIM ? el('p', { class: 'small muted' }, T(`… e mais ${plan.length - LIM}.`, `… and ${plan.length - LIM} more.`, `… y ${plan.length - LIM} más.`)) : ''));
+}
+
+async function runBulk(box, go) {
+  let okP = 0; let okM = 0; const bad = [];
+  for (let i = 0; i < go.length; i++) {
+    const r = go[i];
+    msg(box, T('Enviando ', 'Uploading ', 'Subiendo ') + (i + 1) + '/' + go.length + '…');
+    try {
+      const blob = await r.item.blob();
+      await apiPost('/contest/animeitor/' + (r.kind === 'music' ? 'music' : 'photo') + '?contest=' + enc(CONTEST),
+        { login: r.item.name, file_b64: await fileToBase64(blob) }, G);
+      if (r.kind === 'music') okM++; else okP++;
+    } catch { bad.push(r.item.name); }
+  }
+  await loadPhotos(); renderPhotos();
+  const b = document.getElementById('phMsg');
+  if (b) msg(b, T(`${okP} foto(s) e ${okM} música(s) enviada(s).`, `${okP} photo(s) and ${okM} music file(s) uploaded.`, `${okP} foto(s) y ${okM} archivo(s) de música subido(s).`)
+    + (bad.length ? T(' Falharam (formato recusado pelo servidor): ',
+                      ' Failed (format rejected by the server): ',
+                      ' Fallaron (formato rechazado por el servidor): ') + bad.join(', ') : ''),
+    bad.length ? 'error-box' : 'small');
 }
 
 // ---------- 🎥 streaming ------------------------------------------------------
@@ -566,7 +660,7 @@ function render() {
   // sem tocar nas chaves do streaming (que o chefe de sede nem vê)
   // o streaming por chave (zip do BOCA) é LEGADO: fica dobrado, abaixo da integração nova. O nó da
   // seção nova é o MESMO a cada render (o estado dela — tabela em edição, timer — não se perde).
-  app.append(RO ? revealCard() : '', RO || !API ? '' : API.node,
+  app.append((RO && SITE_ORG) ? revealCard() : '', RO || !API ? '' : API.node,
     RO ? '' : el('details', { class: 'section', open: (WC && (WC.keys || []).some((k) => !k.revoked_at)) ? true : null },
       el('summary', { style: 'cursor:pointer' }, T('🎥 Webcast BOCA (legado): o pacote .zip que o Animeitor antigo busca por chave', '🎥 BOCA webcast (legacy): the .zip package the old Animeitor polls by key', '🎥 Webcast BOCA (legado): el paquete .zip que el Animeitor antiguo consulta por clave')),
       streamSection()),
@@ -578,21 +672,29 @@ async function boot() {
   if (!CONTEST) { app.innerHTML = '<div class="error-box">' + T('Contest não informado.', 'No contest given.', 'No se indicó ninguna competencia.') + '</div>'; return; }
   const { st } = await initContestShell(CONTEST, { alerts: false });   // a mesa do telão: sem banner
   if (!st || !st.logged_in) { location.replace('/contest/?c=' + enc(CONTEST)); return; }
-  if (!(st.is_animeitor || st.is_admin || st.is_cstaff || st.is_staff)) {
+  const role = st.role || '';
+  if (!(st.is_animeitor || st.is_admin || st.is_cstaff || st.is_staff || role === 'foto' || role === 'musica')) {
     app.innerHTML = '<div class="error-box">' + T('Esta área é da conta de placar (.animeitor).',
       'This area belongs to the scoreboard account (.animeitor).',
       'Esta área es de la cuenta de marcador (.animeitor).') + '</div>';
     return;
   }
-  RO = !!(st.is_cstaff || st.is_staff) && !st.is_admin && !st.is_animeitor;
-  NOWRITE = RO && !st.is_cstaff;                      // .staff puro: só olha e ouve
+  RO = !!(st.is_cstaff || st.is_staff || role === 'foto' || role === 'musica') && !st.is_admin && !st.is_animeitor;
+  // o tutorial do papel: .foto e .musica têm o deles (a mesma página, menos poderes)
+  if (role === 'foto' || role === 'musica') {
+    const hl = document.querySelector('a[href="/contest/ajuda/animeitor.html"]'); if (hl) hl.href = '/contest/ajuda/foto.html';
+  }
+  CAN_PHOTO = !!st.is_admin || roleCan(st.login, 'foto');
+  CAN_MUSIC = !!st.is_admin || roleCan(st.login, 'musica');
+  NOWRITE = !CAN_PHOTO && !CAN_MUSIC;                 // .staff puro: só olha e ouve
+  SITE_ORG = !!(st.is_cstaff || st.is_staff);         // o cartão do Reveleitor é da organização da sede
   try {
     // o cstaff NÃO pede as chaves (403 na API): pedir aqui derrubaria a página inteira no catch
     // (o reveleitor da sede é opcional: rota ainda não deployada ou telão fora do ar não derruba a galeria)
     [WC, , REVEAL] = await Promise.all([
       RO ? Promise.resolve(null) : apiGet('/contest/animeitor/webcast?contest=' + enc(CONTEST), G),
       loadPhotos(),
-      RO ? apiGet('/contest/animeitor/reveal?contest=' + enc(CONTEST), G).catch(() => null) : Promise.resolve(null)]);
+      (RO && SITE_ORG) ? apiGet('/contest/animeitor/reveal?contest=' + enc(CONTEST), G).catch(() => null) : Promise.resolve(null)]);
   } catch (e) {
     app.innerHTML = '<div class="error-box">' + (e.message || e) + '</div>'; return;
   }

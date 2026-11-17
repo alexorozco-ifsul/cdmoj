@@ -12,7 +12,8 @@ import { el } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { fmtDate, fmtS, toCsv, downloadText, swapIf, sigOf, everyVisible } from '/shared/admin-ui.js';
 import { rgAssign, rgFlatten, rgKey } from '/shared/regions-match.js';
-import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
+import { serverNow } from '/shared/server-clock.js';
+import { makeTestBox } from '/contest/staff/test-box.js';   // 🧪 teste de impressora (o admin escolhe a sede)   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const enc = encodeURIComponent;
 const nowE = () => serverNow();
@@ -90,6 +91,8 @@ export function makeTasksTab(CONTEST, opts = {}) {
   fQ.addEventListener('input', render);
 
   const sumBox = el('div', {});
+  const heldBox = el('div', {});
+  let HELD = [];         // balões esperando a certeza do 1º da sede (queue.held; o admin recebe problem/pend)
   const listBox = el('div', {});
   const perfBox = el('div', {});
   const cfgBox = el('div', {});
@@ -135,7 +138,10 @@ export function makeTasksTab(CONTEST, opts = {}) {
     return el('tr', {},
       el('td', { class: 'small' }, '#' + (t.seq || '')),
       el('td', {}, tipo),
-      el('td', {}, (t.fullname || t.login || ''), el('div', { class: 'small muted' }, (t.login || '') + (t.univ ? ' · ' + t.univ : ''))),
+      t.test
+        ? el('td', {}, el('div', { style: 'color:#B91C1C;font-weight:700' }, T('🧪 Tarefa de teste', '🧪 Test task', '🧪 Tarea de prueba')),
+            el('div', { class: 'small muted' }, t.univ || ''))
+        : el('td', {}, (t.fullname || t.login || ''), el('div', { class: 'small muted' }, (t.login || '') + (t.univ ? ' · ' + t.univ : ''))),
       el('td', { class: 'small' }, item),
       el('td', {}, el('span', { class: t.status === 'pending' ? 'flag-warn' : '' }, st.t)),
       el('td', { class: 'small' }, age),
@@ -184,8 +190,63 @@ export function makeTasksTab(CONTEST, opts = {}) {
     return box;
   }
 
+  // BALÕES RETIDOS (lib/print.sh): o par sede×problema tem uma run mais antiga ainda sem veredicto (julgando ou na
+  // revisão) — ela pode ser o 1º da sede, então NENHUM balão do par sai até ela decidir. Sem teto: a válvula é
+  // o admin/juiz-chefe liberar o par, e aí os balões saem SEM a faixa de primeiro (nunca se inventa um primeiro).
+  const HELD_WARN_S = 600;
+  const relArm = {};     // 2 cliques p/ liberar (sem confirm(): diálogo trava o painel em quiosque)
+  function buildHeld() {
+    const box = el('div', {});
+    if (!HELD.length || !has('baloes')) return box;
+    const groups = new Map();
+    for (const h of HELD) {
+      const k = (h.region || '') + '|' + (h.problem || '');
+      if (!groups.has(k)) groups.set(k, { region: h.region || '', problem: h.problem || '', short: h.short || '?', since: h.since || nowE(), pend: h.pend || 0, n: 0, logins: [] });
+      const g = groups.get(k); g.n++; g.logins.push(h.login); g.since = Math.min(g.since, h.since || g.since);
+    }
+    const gs = [...groups.values()].sort((a, b) => a.since - b.since);
+    const old = gs.some((g) => nowE() - g.since > HELD_WARN_S);
+    box.append(el('h3', { style: 'margin:1rem 0 .3rem' }, T('⏳ Balões retidos esperando o 1º da sede', '⏳ Balloons held waiting for the first at the site', '⏳ Globos retenidos esperando al 1º de la sede')),
+      el('p', { class: 'muted small' }, T('Uma submissão mais antiga da sede ainda não tem veredicto (julgando ou em revisão) e pode ser a primeira: os balões do problema esperam por ela para sair com a estrela certa. Decida a submissão na fila do juiz; se ela não puder ser decidida agora, libere — os balões saem SEM a faixa de primeiro.',
+        'An older submission from the site has no verdict yet (being judged or under review) and may be the first: the problem\'s balloons wait for it so they come out with the right star. Decide that submission in the judge queue; if it cannot be decided now, release — the balloons come out WITHOUT the first-to-solve band.',
+        'Un envío más antiguo de la sede todavía no tiene veredicto (en juzgamiento o en revisión) y puede ser el primero: los globos del problema lo esperan para salir con la estrella correcta. Decide ese envío en la cola del juez; si no se puede decidir ahora, libera — los globos salen SIN la franja de primero.')));
+    if (old) box.append(el('div', { class: 'alert' }, T('⚠ Há balão retido há mais de 10 min — confira a submissão que está segurando.', '⚠ A balloon has been held for over 10 min — check the submission holding it.', '⚠ Hay un globo retenido hace más de 10 min — revisa el envío que lo retiene.')));
+    const tb = el('tbody', {});
+    for (const g of gs) {
+      const k = g.region + '|' + g.problem;
+      const msg = el('span', { class: 'small' });
+      const btn = el('button', { class: 'btn ghost', type: 'button' }, relArm[k] ? T('Confirmar: liberar sem faixa', 'Confirm: release without band', 'Confirmar: liberar sin franja') : T('Liberar sem faixa', 'Release without band', 'Liberar sin franja'));
+      btn.addEventListener('click', async () => {
+        if (!relArm[k] || Date.now() - relArm[k] > 8000) {
+          relArm[k] = Date.now(); btn.textContent = T('Confirmar: liberar sem faixa', 'Confirm: release without band', 'Confirmar: liberar sin franja');
+          // passada a janela, o botão VOLTA a dizer "Liberar" — senão dizia "Confirmar" e o clique só rearmava
+          const at = relArm[k];
+          setTimeout(() => { if (relArm[k] === at) { delete relArm[k]; if (btn.isConnected && !btn.disabled) btn.textContent = T('Liberar sem faixa', 'Release without band', 'Liberar sin franja'); } }, 8000);
+          return;
+        }
+        delete relArm[k]; btn.disabled = true;
+        try { await apiPost('/contest/admin/balloon-release?contest=' + enc(CONTEST), { region: g.region, problem: g.problem }, G); msg.textContent = T('✓ liberado', '✓ released', '✓ liberado'); await refresh(); }
+        catch (e) { btn.disabled = false; msg.textContent = e.message || T('falha', 'failed', 'fallido'); }
+      });
+      const waited = nowE() - g.since;
+      tb.append(el('tr', {},
+        el('td', {}, g.region || '—'),
+        el('td', {}, el('b', {}, g.short)),
+        el('td', {}, String(g.n), el('div', { class: 'small muted' }, g.logins.slice(0, 4).join(', ') + (g.logins.length > 4 ? '…' : ''))),
+        el('td', { style: waited > HELD_WARN_S ? 'color:#B91C1C;font-weight:600' : '' }, fmtS(waited)),
+        el('td', {}, g.pend ? fmtDate(g.pend) : '—'),
+        el('td', {}, btn, ' ', msg)));
+    }
+    box.append(el('div', { class: 'chart-wrap' }, el('table', { class: 'moj' },
+      el('thead', {}, el('tr', {}, el('th', {}, T('Sede', 'Site', 'Sede')), el('th', {}, T('Problema', 'Problem', 'Problema')),
+        el('th', {}, T('Balões', 'Balloons', 'Globos')), el('th', {}, T('Esperando', 'Waiting', 'Esperando')),
+        el('th', {}, T('Envio que segura', 'Submission holding', 'Envío que retiene')), el('th', {}, ''))), tb)));
+    return box;
+  }
+
   // a fila: a idade "Xs" das pendentes muda com o relógio — a assinatura leva o minuto
   function render() {
+    swapIf(heldBox, sigOf(HELD, Math.floor(nowE() / 30), has('baloes'), Object.keys(relArm)), buildHeld);
     swapIf(sumBox, sigOf(QUEUE.map((t) => [t.status, t.kind, t.time]), Math.floor(nowE() / 30), has('baloes')), buildSummary);
     swapIf(listBox, sigOf(QUEUE, fKind.value, fStatus.value, fQ.value, Math.floor(nowE() / 30)), buildList);
     swapIf(perfBox, sigOf(SF && SF.staff, SF && SF.filters, QUEUE.map((t) => [t.status, t.processed_by, t.delivered_by, t.delivered_at, t.time, t.login]), TEAMS), buildPerf);
@@ -201,17 +262,25 @@ export function makeTasksTab(CONTEST, opts = {}) {
   }
   function buildConfig() {
     const box = el('div', {});
-    box.append(el('h3', { style: 'margin:1.2rem 0 .3rem' }, T('⚙️ Escopo dos staffs/chefes de sede', '⚙️ Scope of staff/site chiefs', '⚙️ Alcance de staff/jefes de sede')));
+    box.append(el('h3', { style: 'margin:1.2rem 0 .3rem' }, T('⚙️ Escopo das contas de papel', '⚙️ Scope of the role accounts', '⚙️ Alcance de las cuentas de rol')));
     const staff = (SF && SF.staff) || [], regions = (SF && SF.regions) || [], filters = (SF && SF.filters) || {};
     blocks = {};
+    // os papéis COM escopo (registro server/etc/roles.tsv): o que cada um faz no recorte dele
+    const ROLE_HELP = [
+      ['.staff', T('fila de impressão e balões', 'print and balloon queue', 'cola de impresión y globos')],
+      ['.cstaff', T('chefe de sede: etiquetas com senha, fila em leitura, cerimônia da sede, fotos e músicas', 'site chief: badges with password, read-only queue, site ceremony, photos and music', 'jefe de sede: etiquetas con contraseña, cola de solo lectura, ceremonia de la sede, fotos y música')],
+      ['.foto', T('sobe e troca a foto dos times', 'uploads and replaces the team photos', 'sube y reemplaza la foto de los equipos')],
+      ['.musica', T('sobe e troca a música dos times', 'uploads and replaces the team music', 'sube y reemplaza la música de los equipos')],
+      ['.sistemas', T('máquinas da sede: painel, travar e destravar, soltar IP', 'site machines: panel, lock and unlock, release IP', 'máquinas de la sede: panel, bloquear y desbloquear, soltar IP')],
+      ['.diretor', T('placar SEM freeze só do recorte, com posição e ★ do recorte', 'scoreboard WITHOUT freeze of the subset only, with subset position and ★', 'marcador SIN congelamiento solo del recorte, con posición y ★ del recorte')]];
+    const roleList = el('ul', { class: 'small', style: 'margin:.2rem 0 .4rem' }, ...ROLE_HELP.map(([s, d]) => el('li', {}, el('b', {}, s), ' — ', d)));
     if (!staff.length) {
-      box.append(el('div', { class: 'muted' }, T('Nenhum usuário .staff/.cstaff neste contest. Crie um login terminando em ', 'No .staff/.cstaff user in this contest. Create a login ending in ', 'Ningún usuario .staff/.cstaff en esta competencia. Crea un login que termine en '),
-        el('b', {}, '.staff'), T(' (fila de impressão/balões) ou ', ' (print/balloon queue) or ', ' (cola de impresión/globos) o '), el('b', {}, '.cstaff'),
-        T(' (chefe de sede: etiquetas com senha, fila em leitura, cerimônia da sede) em Pessoas › Contas.', ' (site chief: badges with password, read-only queue, site ceremony) in People › Accounts.', ' (jefe de sede: etiquetas con contraseña, cola de solo lectura, ceremonia de la sede) en Personas › Cuentas.')));
+      box.append(el('div', { class: 'muted' }, T('Nenhuma conta de papel com escopo neste contest. Crie em Pessoas › Contas um login terminando em:', 'No role account with scope in this contest. In People › Accounts, create a login ending in:', 'Ninguna cuenta de rol con alcance en esta competencia. En Personas › Cuentas, crea un usuario que termine en:')), roleList);
       return box;
     }
+    box.append(roleList);
     box.append(el('p', { class: 'muted small' }, T('Cada login vê os alunos que casam com uma das entradas (uma por linha): ', 'Each login sees the students matching one of the entries (one per line): ', 'Cada login ve a los estudiantes que coinciden con una de las entradas (una por línea): '),
-      el('code', {}, T('region:<nome>', 'region:<name>', 'region:<name>')), T(' cobre os times daquele nó de Evento › Sedes (a sede e, num grupo/país, todas as sedes abaixo dele), qualquer outra é regex no login. Lista vazia = vê TODOS. ', ' covers the teams of that node of Event › Sites (the site and, for a group/country, all the sites below it), anything else is a regex on the login. Empty list = sees ALL. ', ' cubre los equipos de ese nodo de Evento › Sedes (la sede y, en un grupo/país, todas las sedes debajo de él), cualquier otra cosa es un regex sobre el login. Lista vacía = ve TODO. '),
+      el('code', {}, T('region:<nome>', 'region:<name>', 'region:<name>')), T(' cobre os times daquele nó de Evento › Sedes (a sede e, num grupo/país, todas as sedes abaixo dele), qualquer outra é regex no login. Lista vazia: o .staff e o .cstaff veem TODOS; o .foto, o .musica, o .sistemas e o .diretor NÃO veem ninguém. ', ' covers the teams of that node of Event › Sites (the site and, for a group/country, all the sites below it), anything else is a regex on the login. Empty list: .staff and .cstaff see ALL; .foto, .musica, .sistemas and .diretor see NOBODY. ', ' cubre los equipos de ese nodo de Evento › Sedes (la sede y, en un grupo/país, todas las sedes debajo de él), cualquier otra cosa es un regex sobre el login. Lista vacía: .staff y .cstaff ven TODO; .foto, .musica, .sistemas y .diretor NO ven a nadie. '),
       T('No .staff o escopo governa a fila/ações; no .cstaff governa a fila (leitura), as ETIQUETAS de credenciais e a CERIMÔNIA de revelação da sede — configure-o sempre. Os botões de sede semeiam ', 'For .staff the scope governs the queue/actions; for .cstaff it governs the queue (read-only), the credential BADGES and the site REVEAL ceremony — always configure it. The site buttons seed ', 'Para .staff el alcance gobierna la cola/acciones; para .cstaff gobierna la cola (solo lectura), las ETIQUETAS de credenciales y la ceremonia de REVELACIÓN de la sede — configúralo siempre. Los botones de sede siembran '),
       el('code', {}, T('region:<nome>', 'region:<name>', 'region:<name>')), '.'));
     staff.forEach((s) => {
@@ -279,11 +348,36 @@ export function makeTasksTab(CONTEST, opts = {}) {
     }
     errBox.innerHTML = '';
     QUEUE = (q && q.requests) || [];
+    HELD = (q && q.held) || [];
     if (sf) SF = sf;
     render(); renderConfig();
+    TESTBOX.refresh();   // só quando a caixa está aberta
   }
 
   let built = false;
+  const TESTBOX = makeTestBox(CONTEST, { admin: true, onChange: () => refresh() });
+  // FORMATO DA FOLHA (09/11/2026, PROTÓTIPO): PDF (o de sempre) × HTML impresso pelo navegador da estação. É p/
+  // MEDIR: gere um lote de teste em cada formato, nas mesmas estações, e compare as tarefas/min do resumo.
+  const fmtSel = el('select', {},
+    el('option', { value: 'pdf' }, T('PDF (padrão)', 'PDF (default)', 'PDF (por defecto)')),
+    el('option', { value: 'html' }, T('HTML no navegador (experimental)', 'HTML in the browser (experimental)', 'HTML en el navegador (experimental)')));
+  const fmtMsg = el('span', { class: 'small' });
+  fmtSel.addEventListener('change', async () => {
+    fmtSel.disabled = true; fmtMsg.textContent = T('Salvando…', 'Saving…', 'Guardando…');
+    try {
+      await apiPost('/contest/admin/settings?contest=' + enc(CONTEST), { print_format: fmtSel.value }, G);
+      fmtMsg.textContent = T('✓ salvo — as estações usam o formato novo na próxima tarefa (recarregar a página aplica na hora)',
+        '✓ saved — the stations use the new format from the next task (reloading the page applies it at once)',
+        '✓ guardado — las estaciones usan el formato nuevo desde la próxima tarea (recargar la página lo aplica enseguida)');
+    } catch (e) { fmtMsg.textContent = e.message || T('falha', 'failed', 'fallido'); }
+    fmtSel.disabled = false;
+  });
+  const fmtBox = el('div', { class: 'section' },
+    el('h3', { style: 'margin:.1rem 0 .3rem' }, T('🧾 Formato da folha impressa', '🧾 Printed sheet format', '🧾 Formato de la hoja impresa')),
+    el('p', { class: 'muted small' }, T('PDF: o servidor monta a folha (o de sempre). HTML: a estação monta e imprime a folha no navegador — mais leve para o servidor; o pedido que não é texto (PDF, imagem) continua em PDF. Experimental: meça com um lote de teste em cada formato antes de usar numa prova.',
+      'PDF: the server builds the sheet (as always). HTML: the station builds and prints the sheet in the browser — lighter for the server; a request that is not text (PDF, image) stays in PDF. Experimental: measure it with a test batch in each format before you use it in a contest.',
+      'PDF: el servidor arma la hoja (como siempre). HTML: la estación arma e imprime la hoja en el navegador — más liviano para el servidor; la solicitud que no es texto (PDF, imagen) sigue en PDF. Experimental: mídelo con un lote de prueba en cada formato antes de usarlo en una competencia.')),
+    el('div', { class: 'row', style: 'gap:.5rem;align-items:center' }, fmtSel, fmtMsg));
   function skeleton() {
     const dl = el('button', { class: 'btn ghost', title: T('Baixar a fila (CSV)', 'Download the queue (CSV)', 'Descargar la cola (CSV)'), onclick: () => {
       const rows = [[T('seq', 'seq', 'seq'), T('tipo', 'kind', 'tipo'), 'login', T('nome', 'name', 'nombre'), T('univ', 'univ', 'univ'), T('item', 'item', 'item'), 'status', T('criada_em', 'created_at', 'creada_en'), 'claimed_by', 'processed_by', 'delivered_by', 'delivered_at'],
@@ -297,16 +391,19 @@ export function makeTasksTab(CONTEST, opts = {}) {
     panel.append(el('div', { class: 'section' },
       el('h2', {}, T('🖨️ Staff — fila e escopo', '🖨️ Staff — queue and scope', '🖨️ Staff — cola y alcance')),
       el('p', { class: 'muted small' }, T('Impressões pedidas pelos alunos e balões (1ª solução aceita de cada time/problema). O admin acompanha e pode agir — abrir o PDF, marcar processada, marcar entregue.', 'Print requests from students and balloons (first accepted solution per team/problem). The admin follows and can act — open the PDF, mark processed, mark delivered.', 'Pedidos de impresión de los estudiantes y globos (primera solución aceptada por equipo/problema). El admin sigue y puede actuar — abrir el PDF, marcar procesada, marcar entregada.')),
-      errBox, sumBox,
+      errBox, sumBox, heldBox,
       el('div', { class: 'row', style: 'margin:.4rem 0' },
         el('span', { class: 'small muted' }, T('Filtrar:', 'Filter:', 'Filtrar:')), fKind, fStatus, fQ,
         el('button', { class: 'btn ghost', onclick: () => refresh() }, '↻'), dl),
-      listBox, perfBox, cfgBox));
+      listBox, perfBox, cfgBox), TESTBOX.el, fmtBox);
     built = true;
   }
 
   async function load() {
-    if (!built) skeleton();
+    if (!built) {
+      skeleton();
+      apiGet('/contest/basic?contest=' + enc(CONTEST), {}).then((b) => { fmtSel.value = (b && b.print_format === 'html') ? 'html' : 'pdf'; }).catch(() => {});
+    }
     optBalloon.hidden = !has('baloes');   // sem o módulo balões o filtro nem oferece o tipo
     await refresh();
     if (stopTimer) stopTimer();

@@ -25,10 +25,13 @@ dir="$(pr_dir "$contest")"
 meta="$dir/$id.json"
 [[ -f "$meta" ]] || fail 404 "Pedido não encontrado" "notfound"
 owner="$(jq -r '.login // ""' "$meta" 2>/dev/null)"
-staff_can_see "$contest" "$SESSION_LOGIN" "$owner" || fail 403 "Tarefa fora do seu escopo" "out_of_scope"
+pr_task_can_see "$contest" "$meta" || fail 403 "Tarefa fora do seu escopo" "out_of_scope"   # teste: pela sede de quem criou
 
 me="$SESSION_LOGIN"
 exec 9>"$dir/$id.lock"; flock -w 10 9 || fail 409 "Ocupado, tente de novo" "locked"
+# a tarefa pode ter sido APAGADA entre o -f e o lock (o pr_test_remove toma este lock antes de apagar): confere de novo
+# sob o lock — tarefa apagada não volta
+[[ -f "$meta" ]] || fail 404 "Pedido não encontrado" "notfound"
 
 cur="$(jq -r '.status // "pending"' "$meta")"
 seq="$(jq -r '.seq // 0' "$meta")"

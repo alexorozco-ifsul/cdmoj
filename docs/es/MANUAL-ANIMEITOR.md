@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ANIMEITOR.md blob:683e095b4d33ed3f92a48c9e5b0d4bac0812fa56 -->
+<!-- i18n-source: MANUAL-ANIMEITOR.md blob:49cd0f5e5f242eaade411140af7dfa496129fcf2 -->
 # MOJ: Manual de la pantalla (`.animeitor`)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -102,12 +102,20 @@ galería se abre en el filtro **⚠ Pendientes** — exactamente los equipos que
 
 - **⬆ Subir en lote** es el camino rápido: arrastra decenas de archivos; el **nombre del archivo es el
   usuario** del equipo (`time-alfa.jpg`, `time-alfa.mp3`). Las fotos y la música pueden ir juntas.
+- El lote acepta también **paquetes `.zip`** con las fotos y la música, en cualquier carpeta del zip.
+  El navegador abre el paquete, y nada se sube sin tu confirmación. Antes de subir, la pantalla muestra
+  una **revisión**: cada archivo, el equipo que encontró por el nombre, si es nuevo o reemplaza el
+  actual, y lo que queda fuera (nombre sin equipo, archivo que no es foto ni MP3, el mismo equipo
+  repetido — vale el último). Revisa y haz clic en **Subir**. El zip no puede tener contraseña, y cada
+  archivo puede tener hasta 20 MB.
 - La **foto** la convierte y la redimensiona el servidor (webp + miniatura). La **música** va tal como
   llegó y tiene que ser un **mp3 de verdad** (hasta 15 MB) — el servidor revisa el archivo, no la extensión.
 - **⬇ Descargar paquete (.zip)**: todo en un archivo (fotos, música y un CSV de los equipos) — es lo que se le entrega
   a quien opera el visualizador.
 - Los **jefes de sede** (`.cstaff`) suben las fotos **de su sede**. En una competencia con varias sedes,
   deja que ellos las recojan localmente y tú solo revisas la lista de pendientes.
+- La sede de cada jefe de sede es su filtro en **Operación › Staff**. Sin filtro definido, el jefe de
+  sede no cambia la foto ni la música de ningún equipo.
 
 ### La foto/música PREDETERMINADA
 
@@ -183,6 +191,11 @@ La lista de la víspera, en orden:
 | Ver/crear/revocar **claves de webcast** (legado) | **Sí** | No | No |
 | Marcador | Siempre descongelado | Congelado | Congelado |
 | Estadísticas | Sí | No | No |
+
+**`.foto` y `.musica`** (roles con alcance, 09/11/2026): entran en esta misma página y ven la galería **solo de su
+alcance** (Operación › Staff). El `.foto` solo sube, reemplaza o quita **fotos**; el `.musica`, solo **música** — el
+botón del otro tipo ni aparece, y el lote rechaza lo que la cuenta no sube. Sin alcance definido, no ven ningún
+equipo. No cambian el valor por defecto de la competencia, no publican en el Animeitor ni ven las claves del webcast.
 
 ## Referencias
 

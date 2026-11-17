@@ -87,6 +87,14 @@ envelhecer porque alguém salvou uma solução `wrong`. Serve o **máximo entre 
 recalibrar). Se o pacote muda de verdade, o `tl_checksum` novo **descarta** o TL antigo (todos
 recalibram).
 
+**Calibração incremental (10/11/2026, opt-in).** O update `calibrate` e o comando dirigido podem levar
+`reuse:true` (`/problems/request-calibration {reuse}`; `cal_request <repo> <id> <by> 1`, `cmd_request … '{"reuse":true}'`).
+O agente (`run_update`/`run_command`) o passa ao `ensure_cached` (6º arg) e o calibreitor roda com
+`MOJ_CALIB_MEMO_DIR=<cache>/<id>/calib-memo` SEMPRE (grava o retrato de cada solução) e `MOJ_CALIB_REUSE=1` só com o
+pedido (reaproveita a solução cuja chave não mudou; mojtools `calibreitor.sh`). A calibração rápida (1º envio) nunca
+reaproveita. No DEDUP, "rodar tudo" vence: pedido sem `reuse` sobre um pendente/não entregue com `reuse` o tira
+(`_req_drop_reuse`). O GC leva o `calib-memo/` junto com o `pkg/`. Teste: `smoke-calib-queue.sh`.
+
 **Raias da calibração (26/10/2026).** A calibração completa (update `calibrate` e o comando dirigido) leva
 `par_max`/`par_cap` = G grupos de CPU e `slots` = G × k_slots: G = min(`CALIB_PAR_MAX` (4; `1` desliga),
 livres ÷ k_slots, a maior fase — #good ou #pass+slow+wrong, contadas com `find`: a API roda sem glob), e 1 com job
@@ -123,6 +131,11 @@ rebaixa o pacote) — então o juiz não pode confiar no conf do cache: o **clai
 ao build-and-test (`MOJ_TL_METHOD`), ao teto do job (`_job_cap`) e ao `ensure_cached` (job `kattis` com tabela
 sem a metade Kattis recalibra antes de julgar). Fora do `.cmeta` de propósito: um 13º campo na ordem fixa que
 os três leitores leem igual é a armadilha já paga uma vez. Agente antigo ignora o campo e usa o conf do cache.
+A **regra do veredicto** do CONTEST (09/11/2026; `VERDICT_RULE=first` no conf do contest, Central › Regras) entra no job
+ao ENFILEIRAR, não no claim: o `intake_enqueue` (judged.sh, conf já sourced) e o gêmeo `spool-drain.py` põem
+**`verdict_rule:"first"`** (ausente = o mais grave, o job de sempre). O rejulgamento passa pelo mesmo intake, então segue
+a regra do momento. O agente a repassa ao build-and-test em `MOJ_VERDICT_RULE` (mojtools: `first` = o do 1º teste que
+falhou, exemplos primeiro); agente antigo ignora o campo.
 O `POST /judge/calib-report` leva, além do log texto e dos `reports` (report.html por solução),
 o campo **`sols`** = o `.calib-sols.json` do calibreitor (a calibração POR EXTENSO:
 `[{file,lang,category,verdict,method,etl,tests:[{name,code,time,tl,code_alt,tl_alt}]}]` — `code_alt`/`tl_alt` =

@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-STAFF.md blob:925b645d2465c91a33dbe510315a130be7abb5e0 -->
+<!-- i18n-source: MANUAL-STAFF.md blob:482b0613a28a6f5125dce185818d0a9610765466 -->
 # MOJ: Manual del personal de sala (.staff y .cstaff)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -57,6 +57,14 @@ La pantalla de impresión es una tabla con **dos cosas en la misma cola**:
 >
 > **Las solicitudes de impresión no cambian**: el equipo sigue imprimiendo en cualquier momento, con freeze o sin él.
 
+> **Globos esperando al 1º de la sede ⏳.** Cuando un equipo resuelve un problema, el MOJ tiene que saber
+> si fue el **primero de su sede** en ese problema (el globo sale con la estrella ★ "first to solve"). Si
+> otro equipo de la sede envió antes y ese envío todavía no tiene veredicto (lo están juzgando o lo revisan
+> los jueces), **todos los globos de ese problema en la sede esperan** por él. La página de **Impresión**
+> muestra un aviso ⏳ con cuántos globos esperan y de qué problemas. Salen solos, con la estrella
+> correcta, en cuanto el envío sea juzgado. Si la espera se alarga, avisa al `.admin`: puede liberar los
+> globos, y entonces salen sin la estrella.
+
 Solo ves la cola de **tu sede**. Las solicitudes y los globos de otras sedes no aparecen para ti.
 
 ### Cómo manejar una tarea
@@ -76,8 +84,10 @@ ves en las pantallas del [tutorial ilustrado](/contest/ajuda/staff.html).
 
 #### Qué sale de la impresora
 
-Primero la **portada** (equipo, universidad, usuario, número de la tarea, número de páginas y una
-línea para firmar), después el documento. El código fuente sale en **fuente monoespaciada, con la
+Primero la **portada**, después el documento. En la portada, el **usuario del equipo es el texto más grande**: con
+él encuentras al equipo en la sala. Debajo vienen el nombre del equipo, la universidad y la sede, el número de páginas
+y la línea para firmar. El **número de la tarea** va pequeño en la esquina de arriba: solo sirve para verificar con el
+sistema. La hoja del globo sigue el mismo molde: usuario arriba, después el problema y el color del globo. El código fuente sale en **fuente monoespaciada, con la
 indentación original y las líneas numeradas** — se puede señalar con el dedo y decir "línea 42".
 
 **Cada página de código se identifica sola**, arriba y abajo: arriba, la fecha y el nombre del
@@ -89,6 +99,25 @@ impresiones apiladas, una hoja que se suelta de la portada sigue diciendo de qui
 Hay una **casilla de verificación** de modo automático, y tu elección queda guardada. Con el modo automático activado y la pestaña abierta, cada nueva tarea se **reserva, imprime y marca** sola, sin que hagas clic.
 
 Para que la ventana de impresión del navegador no aparezca en cada tarea, ejecuta el navegador en **modo quiosco**. En Chrome/Chromium, usa la opción `--kiosk-printing`.
+
+#### Prueba de impresora
+
+Antes de la competencia, mide las impresoras con tareas de prueba. La caja **🧪 Prueba de impresora** está debajo de la cola.
+
+1. Deja cada estación de la sede con la página de la cola abierta y el **modo automático** activado.
+2. Abre la caja y elige la cantidad (hasta 200), el tipo (impresión, globo o mixto) y las páginas por impresión.
+3. Haz clic en **🧪 Generar**. Las tareas van a la cola de **tu sede**, y las estaciones dividen el lote como en la competencia.
+4. Lee el resumen: tareas impresas por minuto en total y por estación, y el mayor intervalo entre dos impresiones.
+5. Haz clic en **🧹 Borrar pruebas** al final.
+
+- La hoja de prueba sale con la franja **PRUEBA — NO ENTREGAR** y numeración propia (T1, T2…). No entregues esa hoja.
+- La numeración de la competencia no cambia, y la prueba no entra en el informe de la competencia.
+- El tiempo incluye la generación de la hoja: es el mismo camino de una tarea de la competencia. El servidor
+  prepara la hoja cuando la tarea nace, así que la estación ya la encuentra lista.
+- El admin puede cambiar el **formato de la hoja** a HTML (experimental): la estación arma e imprime la hoja en el
+  navegador, y el botón **Abrir PDF** pasa a **Abrir hoja**. Una solicitud que no es texto (PDF, imagen) sigue en
+  PDF. Genera un lote de prueba en cada formato y compara las tareas por minuto.
+- **Durante la competencia la prueba está prohibida.** Al iniciar la competencia, se borran las tareas de prueba que quedaron.
 
 ### Calentamiento: tu ensayo (y la competencia puede tener dos rondas)
 

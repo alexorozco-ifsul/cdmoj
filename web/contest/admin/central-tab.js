@@ -34,7 +34,7 @@ const TARGET = {
   users: ['pessoas', 'contas'], shared_users: ['pessoas', 'contas'],
   registration: ['pessoas', 'inscricoes'], reg_invites: ['pessoas', 'inscricoes'], reg_private_link: ['pessoas', 'inscricoes'], reg_source: ['pessoas', 'inscricoes'],
   // `print`: o que resolve "impressão sem staff" é criar a conta .staff (Contas); ligar/desligar a impressão é nas Regras
-  print: ['pessoas', 'contas'], staff_filters: ['operacao', 'staff'],
+  print: ['pessoas', 'contas'], staff_filters: ['operacao', 'staff'], print_tests: ['operacao', 'staff'],
   judges: ['operacao', 'situacao'], judges_cpus: ['operacao', 'situacao'], daemon: ['operacao', 'situacao'], manual: ['operacao', 'juizes'],
   // módulos de evento
   next_round: ['evento', 'rodadas'], reg_warmup: ['evento', 'rodadas'],
@@ -303,7 +303,7 @@ export function makeCentralTab(CONTEST, opts = {}) {
     renderLive(liveBox, dash);
     clearInterval(timer);
     timer = setInterval(async () => {
-      if (panel.hidden || !panel.isConnected) return;
+      if (panel.hidden || !panel.isConnected || document.hidden) return;   // aba de fundo não pola
       const d2 = await apiGet('/contest/admin/dashboard?contest=' + enc(CONTEST), G).catch(() => null);
       if (d2) renderLive(liveBox, d2);
     }, 15000);

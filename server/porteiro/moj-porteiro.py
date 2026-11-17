@@ -69,7 +69,32 @@ TTL_PROBLEMS = _env_int("PROBLEMS_CACHE_TTL", 900)
 HANDLERS = os.path.join(MOJ_HOME, "server/api/v1/handlers")
 
 VALID_ID = re.compile(r"^[A-Za-z0-9._@#+-]+$")
-ROLE_SUFFIX = re.compile(r"\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$")
+# PAPÉIS = o REGISTRO ÚNICO server/etc/roles.tsv (o mesmo do lib/roles.sh do bash e do web/shared/roles.js), lido na
+# largada. Papel novo entra lá, nunca numa lista aqui (smoke-roles-registry.sh confere).
+# A MESMA validação do lib/roles.sh: CRLF tolerado; linha malformada ou registro VAZIO derrubam a largada (falha
+# fechado).
+def _roles_load(path):
+    roles = []
+    with open(path, encoding="utf-8") as fh:
+        for n, ln in enumerate(fh, 1):
+            ln = ln.rstrip("\r\n")
+            if not ln.strip() or ln.startswith("#"):
+                continue
+            f = (ln.split("\t") + [""] * 5)[:5]
+            if not (re.fullmatch(r"[a-z]+", f[0]) and f[1] and f[2] in ("org", "sala") and f[3] in ("sim", "nao")
+                    and f[4].strip()):
+                raise SystemExit("moj-porteiro: roles.tsv linha %d malformada (%s)" % (n, path))
+            roles.append({"suffix": f[0], "nav": f[1], "cls": f[2], "scoped": f[3] == "sim", "can": f[4].split()})
+    if not roles:
+        raise SystemExit("moj-porteiro: registro dos papéis vazio (%s)" % path)
+    return roles
+
+
+# relativo a ESTE arquivo (server/porteiro → server/etc): vale no checkout, na imagem e nos testes, sem depender do MOJ_HOME
+ROLES = _roles_load(os.environ.get("MOJ_ROLES_TSV") or
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "etc", "roles.tsv"))
+ROLE_BY = {r["suffix"]: r for r in ROLES}
+ROLE_SUFFIX = re.compile(r"[.](" + "|".join(r["suffix"] for r in ROLES) + r")$")
 CH_ID_OK = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}$")
 
 
@@ -205,22 +230,29 @@ def load_session(params):
     return contest, login
 
 
+def role_suffix(login):
+    m = ROLE_SUFFIX.search(login or "")
+    return m.group(1) if m else ""
+
+
 def role_of(login):
-    """A cadeia do navbuttons.sh, NA MESMA ORDEM."""
-    for suf, role in ((".animeitor", "animeitor"), (".cstaff", "cstaff"), (".staff", "staff"),
-                      (".admin", "admin"), (".cjudge", "chief"), (".judge", "judge"),
-                      (".mon", "mon")):
-        if login.endswith(suf):
-            return role
-    return "time"
+    """O nome do papel na navegação (a coluna `nav` do registro; o navbuttons.sh usa a mesma) ou "time"."""
+    s = role_suffix(login)
+    return ROLE_BY[s]["nav"] if s else "time"
 
 
-def is_judge(login):    # .judge | .cjudge | .admin (lib/auth.sh)
-    return login.endswith((".judge", ".cjudge", ".admin"))
+def role_can(login, cap):
+    """lib/roles.sh role_can: a capacidade está na coluna `pode` do papel (admin = *)."""
+    s = role_suffix(login)
+    return bool(s) and ("*" in ROLE_BY[s]["can"] or cap in ROLE_BY[s]["can"])
 
 
-def is_priv_rounds(login):  # rounds.sh: admin|judge|chief|staff|cstaff|mon
-    return login.endswith((".admin", ".judge", ".cjudge", ".staff", ".cstaff", ".mon"))
+def is_judge(login):    # lib/auth.sh is_judge = role_can julgar (.judge | .cjudge | .admin)
+    return role_can(login, "julgar")
+
+
+def is_priv_rounds(login):  # rounds.sh: role_can rodadas_privadas
+    return role_can(login, "rodadas_privadas")
 
 
 # ---------------------------------------------------------------- gates de contest
@@ -384,6 +416,10 @@ def r_score(contest, q, params):
     sess = load_session(params)
     secret_gate(contest, sess)
     slogin = sess[1] if (sess and sess[0] == contest) else ""
+    # .diretor (placar_recorte): o placar SEM freeze recortado pela região dele — o corte e a ★ do recorte são do bash
+    # (score.sh / pr_filter_board_subset). Servir daqui daria o placar inteiro (memória score-recorte: o bloqueador).
+    if slogin and role_suffix(slogin) != "admin" and role_can(slogin, "placar_recorte"):
+        raise Decline("diretor: recorte do bash")
     var = os.path.join(CONTESTSDIR, contest, "var")
 
     start = conf_int(contest, "CONTEST_START")
@@ -546,7 +582,7 @@ def r_problems(contest, q, params):
     login = sess[1]
     # can_see_problems: staff/cstaff/animeitor e pré-início são respostas do BASH (locked)
     if not is_judge(login):
-        if login.endswith((".staff", ".cstaff", ".animeitor")):
+        if role_suffix(login) and not role_can(login, "como_time"):     # contest-gate.sh _role_off_contest
             raise Decline("papel sem enunciado (locked é do bash)")
         start = conf_int(contest, "CONTEST_START")
         if start > 0 and time.time() < start:
@@ -594,7 +630,7 @@ def r_updates(contest, q, params):
         # arquivo presente mas inválido: bash cai no zerado (jq -e falha) — igual aqui
 
     cdir = os.path.join(CONTESTSDIR, contest, "clarifications")
-    priv = login.endswith((".admin", ".judge", ".cjudge", ".mon"))
+    priv = is_judge(login) or role_can(login, "monitorar")      # updates.sh: is_admin || is_judge || is_mon
     vis = []
     try:
         names = sorted(f for f in os.listdir(cdir) if f.endswith(".json"))
@@ -630,7 +666,7 @@ def _pick_task(t):
     g = t.get
     kind = g("kind")
     return {
-        "id": g("id"), "seq": g("seq"), "login": g("login"), "fullname": g("fullname"),
+        "id": g("id"), "seq": g("seq"), "test": g("test") is True, "login": g("login"), "fullname": g("fullname"),
         "team": g("team"), "univ": g("univ"),
         "kind": kind if kind not in (None, False) else "print",
         "short": g("short"), "color_hex": g("color_hex"), "color_name": g("color_name"),
@@ -698,7 +734,7 @@ def r_staff_queue(contest, q, params):
     if not (sess and sess[0] == contest):
         raise Decline("queue exige sessão do contest")
     login = sess[1]
-    if not login.endswith((".staff", ".cstaff", ".admin")):
+    if not (role_can(login, "fila") or role_can(login, "fila_leitura")):   # queue.sh: staff, cstaff, admin
         raise Decline("papel sem fila (403 é do bash)")
     pdir = os.path.join(CONTESTSDIR, contest, "print-requests")
 
@@ -729,7 +765,13 @@ def r_staff_queue(contest, q, params):
                     vis = {ln for ln in fh.read().split("\n") if ln}
         # filters inválido/sem entrada => vê tudo (mesmo rc!=0 do bash)
 
-    rows = [r for r in _task_rows(pdir) if vis is None or (r["login"] or "") in vis]
+    allrows = _task_rows(pdir)
+    # TAREFA DE TESTE (id tst…, lib/print.sh pr_test_*): a visibilidade é pela SEDE de quem criou e, durante a
+    # prova, a fila do bash as apaga — regras que não vivem aqui. Só existem fora da prova (pouco tráfego): o bash
+    # responde.
+    if any((r.get("id") or "").startswith("tst") for r in allrows):
+        raise Decline("tarefa de teste na fila (bash)")
+    rows = [r for r in allrows if vis is None or (r["login"] or "") in vis]
 
     def _key(r):
         st = r["status"]
@@ -750,7 +792,34 @@ def r_staff_queue(contest, q, params):
                     bfz = sum(1 for ln in fh if '"id"' in ln)
             except OSError:
                 bfz = 0
-    body = json.dumps({"success": True, "requests": rows, "balloons_frozen": bfz},
+    # balões esperando a certeza do 1º da sede (espelho do queue.sh: mesmo escopo, mesmos campos, teto 300)
+    held = []
+    hf = os.path.join(pdir, ".balloon-hold")
+    if os.path.isfile(hf):
+        try:
+            with open(hf, errors="replace") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    h = json.loads(ln)
+                    if vis is not None and (h.get("login") or "") not in vis:
+                        continue
+                    held.append(h)
+        except (OSError, ValueError):
+            raise Decline("balloon-hold ilegível (bash)")
+        held.sort(key=lambda h: (h.get("since") if isinstance(h.get("since"), (int, float)) else 0))
+        held = held[:300]
+        out = []
+        for h in held:
+            o = {"login": h.get("login"), "short": h.get("short"), "region": h.get("region"), "since": h.get("since")}
+            if admin:
+                o["problem"] = h.get("problem")
+                o["pend"] = h.get("pend")
+                o["sub_epoch"] = h.get("sub_epoch")
+            out.append(o)
+        held = out
+    body = json.dumps({"success": True, "requests": rows, "balloons_frozen": bfz, "held": held},
                       separators=(",", ":")) + "\n"
     return cgi(body.encode())
 

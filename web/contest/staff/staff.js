@@ -9,6 +9,7 @@ import { el } from '/shared/ui.js';
 import { initContestShell } from '/shared/contest-shell.js';
 import { T, uiLocale } from '/shared/i18n.js';
 import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
+import { makeTestBox } from './test-box.js';
 
 const qs = new URLSearchParams(location.search);
 const CONTEST = (window.__MOJ_CONTEST || qs.get('c') || '');
@@ -28,6 +29,7 @@ const STATUS = () => ({
 let queue = [];            // último estado da fila
 const MLINUX_LINK = el('span', {});   // vira o link 🖥 quando o nutellaboot está configurado
 let autoMode = false;      // modo automático
+let TESTBOX = null;   // 🧪 teste de impressora (test-box.js)
 let busy = false;          // processando uma tarefa (evita diálogos sobrepostos)
 const seen = new Set();    // ids já auto-processados nesta sessão (não reimprimir)
 let pollT = null;
@@ -56,6 +58,44 @@ function syncFreezeNote() {
   freezeNote.style.display = txt ? '' : 'none';
 }
 
+// BALÕES ESPERANDO o 1º da sede (lib/print.sh: o balão do problema só sai quando se sabe quem foi o primeiro
+// naquela sede — uma run mais antiga ainda em julgamento/revisão segura TODOS os balões do par). Sem o aviso,
+// "o time acertou e o balão não veio" parecia defeito. Atualizado EM LUGAR a cada volta da fila.
+const heldNote = el('div', { class: 'notice', style: 'display:none;margin:.3rem 0' });
+function syncHeldNote(held) {
+  const h = Array.isArray(held) ? held : [];
+  let txt = '';
+  if (h.length) {
+    const by = {};
+    for (const x of h) { const k = x.short || '?'; by[k] = (by[k] || 0) + 1; }
+    const list = Object.keys(by).sort().map((k) => k + (by[k] > 1 ? ' ×' + by[k] : '')).join(', ');
+    const oldest = Math.max(0, Math.round((serverNow() - (+h[0].since || serverNow())) / 60));
+    txt = T('⏳ ' + h.length + ' balão(ões) aguardando o julgamento de uma submissão mais antiga, para saber quem foi o 1º da sede (' + list + '). Saem sozinhos, com a estrela certa' + (oldest ? '; o mais antigo espera há ' + oldest + ' min.' : '.'),
+            '⏳ ' + h.length + ' balloon(s) waiting for an older submission to be judged, to know who solved it first at this site (' + list + '). They come out on their own, with the right star' + (oldest ? '; the oldest has waited ' + oldest + ' min.' : '.'),
+            '⏳ ' + h.length + ' globo(s) esperando el juzgamiento de un envío más antiguo, para saber quién fue el 1º de la sede (' + list + '). Salen solos, con la estrella correcta' + (oldest ? '; el más antiguo espera hace ' + oldest + ' min.' : '.'));
+  }
+  if (heldNote.textContent !== txt) heldNote.textContent = txt;
+  heldNote.style.display = txt ? '' : 'none';
+}
+
+// FORMATO DA FOLHA (09/11/2026, PROTÓTIPO — PRINT_FORMAT=html do contest, a medir com as tarefas de teste): a folha
+// vem em HTML (/contest/staff/print-html) e a estação a imprime no navegador, sem PDF no servidor. 409 = a tarefa não
+// sai em HTML (pedido que não é texto): cai no PDF de sempre. A página tem a própria CSP (sem script) e o iframe é
+// `sandbox` sem allow-scripts — o blob: herda a origem desta página (a do token).
+const htmlMode = () => !!(BASIC && BASIC.print_format === 'html');
+async function htmlBlobUrl(id) {
+  const r = await fetch('/api/v1/contest/staff/print-html?contest=' + enc(CONTEST) + '&id=' + enc(id),
+    { headers: { 'Authorization': 'Bearer ' + (getToken(CONTEST) || '') } });
+  if (r.status === 409) return null;                  // não sai em HTML: o chamador usa o PDF
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return URL.createObjectURL(new Blob([await r.text()], { type: 'text/html' }));
+}
+// a folha da tarefa: {url, html} — HTML quando o contest pede e a tarefa sai em HTML; senão o PDF
+async function sheetBlobUrl(id) {
+  if (htmlMode()) { const u = await htmlBlobUrl(id); if (u) return { url: u, html: true }; }
+  return { url: await pdfBlobUrl(id), html: false };
+}
+
 // busca o PDF combinado (com Bearer) como blob -> URL temporária (sem token na URL)
 async function pdfBlobUrl(id) {
   const r = await fetch('/api/v1/contest/staff/print-pdf?contest=' + enc(CONTEST) + '&id=' + enc(id),
@@ -80,9 +120,10 @@ const IS_CHROMIUM = /Chrome\//.test(navigator.userAgent) && !/Firefox\//.test(na
 const PRINT_GAP_MS = 3000;       // Chromium: espera depois de o print() voltar
 const PRINT_FALLBACK_MS = 8000;  // demais navegadores: teto sem o onafterprint (o de sempre)
 const PRINT_KEEP_MS = 60000;     // vida do iframe e do blob depois de seguir
-function printBlobIframe(url) {
+function printBlobIframe(url, html) {
   return new Promise((res) => {
     const ifr = el('iframe', { style: 'position:fixed;left:-10000px;top:0;width:800px;height:1100px;border:0' });
+    if (html) ifr.setAttribute('sandbox', 'allow-same-origin allow-modals');   // a folha HTML não roda script
     let done = false;
     const fin = () => {
       if (done) return; done = true;
@@ -102,7 +143,7 @@ function openPdfWindow(id, doPrint) {
   const w = window.open('', '_blank');
   if (!w) { alert(T('Permita pop-ups para abrir/imprimir o PDF desta sede.', 'Allow pop-ups to open/print this site\'s PDF.', 'Permite las ventanas emergentes para abrir/imprimir el PDF de esta sede.')); return null; }
   try { w.document.write(T('<!doctype html><meta charset="utf-8"><title>Impressão</title><body style="margin:0;font:16px sans-serif;padding:1.2rem">Gerando o PDF…</body>', '<!doctype html><meta charset="utf-8"><title>Printing</title><body style="margin:0;font:16px sans-serif;padding:1.2rem">Generating the PDF…</body>', '<!doctype html><meta charset="utf-8"><title>Impresión</title><body style="margin:0;font:16px sans-serif;padding:1.2rem">Generando el PDF…</body>')); } catch (_) {}
-  pdfBlobUrl(id).then((url) => {
+  sheetBlobUrl(id).then(({ url }) => {
     w.location.href = url;
     if (doPrint) { const tryPrint = () => { try { w.focus(); w.print(); } catch (_) {} }; setTimeout(tryPrint, 1500); }
     setTimeout(() => URL.revokeObjectURL(url), 120000);
@@ -129,8 +170,8 @@ async function autoTick() {
   busy = true; seen.add(t.id);
   try {
     await action(t.id, 'claim');              // reserva (409 already_claimed => outra aba pegou)
-    const url = await pdfBlobUrl(t.id);
-    await printBlobIframe(url);               // o blob é revogado junto com o iframe (PRINT_KEEP_MS)
+    const sh = await sheetBlobUrl(t.id);
+    await printBlobIframe(sh.url, sh.html);   // o blob é revogado junto com o iframe (PRINT_KEEP_MS)
     await action(t.id, 'processed', { mode: 'auto' });
   } catch (e) {
     if (!(e && e.code === 'already_claimed')) seen.delete(t.id);  // erro real: permite retry
@@ -149,7 +190,7 @@ function rowActions(t) {
     b.addEventListener('click', async () => { b.disabled = true; try { await fn(); } catch (e) { alert(e.message || T('falha', 'failed', 'fallido')); } finally { b.disabled = false; await loadQueue(); } }); return b; };
   if (t.status === 'pending') r.append(mkBtn(T('Pegar', 'Claim', 'Reservar'), () => action(t.id, 'claim')));
   if (t.status !== 'delivered') r.append(mkBtn(T('🖨️ Imprimir', '🖨️ Print', '🖨️ Imprimir'), () => printTaskManual(t), ''));
-  r.append(mkBtn(T('Abrir PDF', 'Open PDF', 'Abrir PDF'), () => { openPdfWindow(t.id, false); }));
+  r.append(mkBtn(htmlMode() ? T('Abrir folha', 'Open sheet', 'Abrir hoja') : T('Abrir PDF', 'Open PDF', 'Abrir PDF'), () => { openPdfWindow(t.id, false); }));
   if (t.status === 'printed') r.append(mkBtn(T('✅ Entregue', '✅ Delivered', '✅ Entregado'), () => action(t.id, 'delivered'), ''));
   return r;
 }
@@ -174,7 +215,11 @@ function renderRows() {
       : el('td', {}, t.filename, el('div', { class: 'small muted' }, (t.mime || '') + (t.size ? ' · ' + Math.max(1, Math.round(t.size / 1024)) + ' KB' : '')));
     tbody.append(el('tr', {},
       el('td', {}, el('b', {}, '#' + t.seq)),
-      el('td', {}, el('div', {}, t.team || t.fullname || t.login), el('div', { class: 'small muted' }, t.login + (t.univ ? ' · ' + t.univ : ''))),
+      t.test
+        // TAREFA DE TESTE (test-box.js): sem time — diz o que é e a sede para onde foi
+        ? el('td', {}, el('div', { style: 'color:#B91C1C;font-weight:700' }, T('🧪 Tarefa de teste', '🧪 Test task', '🧪 Tarea de prueba')),
+            el('div', { class: 'small muted' }, t.univ || ''))
+        : el('td', {}, el('div', {}, t.team || t.fullname || t.login), el('div', { class: 'small muted' }, t.login + (t.univ ? ' · ' + t.univ : ''))),
       taskCell,
       el('td', {}, el('span', { class: 'pr-badge', style: st.c }, st.t),
         (t.claimed_by ? el('div', { class: 'small muted' }, T('por ', 'by ', 'por ') + t.claimed_by) : '')),
@@ -201,6 +246,8 @@ async function loadQueue() {
     (RO ? T(' · somente leitura', ' · read-only', ' · solo lectura') : (autoMode ? T(' · modo automático LIGADO', ' · auto mode ON', ' · modo automático ACTIVADO') : ''));
   renderRows();
   syncFreezeNote();
+  syncHeldNote(r.held);
+  if (TESTBOX) TESTBOX.refresh();   // o resumo do teste acompanha a fila (só quando a caixa está aberta)
   autoTick();   // dispara o automático se houver pendente
 }
 
@@ -236,12 +283,13 @@ function render() {
     el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, T('Time / login', 'Team / login', 'Equipo / login')), el('th', {}, T('Arquivo', 'File', 'Archivo')), el('th', {}, T('Status', 'Status', 'Estado')), el('th', {}, T('Págs / hora', 'Pages / time', 'Páginas / hora')), el('th', {}, T('Ações', 'Actions', 'Acciones')))),
     tbody);
   app.append(
-    el('div', { class: 'section' }, RO ? '' : autoBox, freezeNote,
+    el('div', { class: 'section' }, RO ? '' : autoBox, freezeNote, heldNote,
       el('div', { class: 'row', style: 'margin:.2rem 0' }, statusBar, el('div', { class: 'spacer' }),
         CAN_BADGES ? el('a', { class: 'btn ghost', href: '/contest/badges/?c=' + enc(CONTEST) }, T('🏷️ Etiquetas', '🏷️ Badges', '🏷️ Etiquetas')) : '',
         MLINUX_LINK, // preenchido quando a integração nutellaboot está configurada
         el('button', { class: 'btn ghost', onclick: loadQueue }, T('↻ atualizar', '↻ refresh', '↻ actualizar'))),
-      el('div', { class: 'chart-wrap' }, table)));
+      el('div', { class: 'chart-wrap' }, table)),
+    TESTBOX ? TESTBOX.el : '');
   loadQueue(); schedulePoll();
 }
 
@@ -264,6 +312,8 @@ async function boot() {
   RO = !!st.is_cstaff && !st.is_staff && !st.is_admin;
   CAN_BADGES = !!(st.is_cstaff || st.is_admin);
   autoMode = !RO && localStorage.getItem(AUTOKEY) === '1';
+  // 🧪 teste de impressora: o .staff (a própria sede) e o admin; o .cstaff só acompanha a fila
+  TESTBOX = (st.is_staff || st.is_admin) ? makeTestBox(CONTEST, { admin: !!st.is_admin, onChange: () => loadQueue() }) : null;
   render();
   // link p/ o panorama/comandos das máquinas mlinux — só quando a integração existe
   // (sonda barata; a página avulsa se linka daqui, doutrina do animeitor)

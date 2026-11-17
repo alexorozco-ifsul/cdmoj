@@ -4,6 +4,7 @@
 import { el } from './ui.js';
 import { getToken } from './api.js';
 import { T, uiLocale } from './i18n.js';
+import { ROLE_RE } from './roles.js';
 
 // --- formatação -------------------------------------------------------------
 export const pad2 = (n) => String(n).padStart(2, '0');
@@ -19,9 +20,8 @@ export const fmtS = (s) => {
 };
 export const fmtEpoch = (e) => (+e ? fmtDate(e) : '—');   // epoch 0/vazio = travessão (não 1970)
 export const fmtKB = (n) => (!n ? '—' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
-// sufixos de conta de PAPEL (a MESMA regex do servidor, is_reserved_role_login): uma cópia só —
-// estava repetida em users/sites/teams/cohorts/machines
-export const PRIV_RE = /\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$/;
+// sufixos de conta de PAPEL = o REGISTRO ÚNICO (server/etc/roles.tsv → shared/roles.js, GERADO): o mesmo do servidor
+export const PRIV_RE = ROLE_RE;
 
 // --- auto-refresh EM LUGAR (regra da casa, CLAUDE.md › Frontend) --------------------------
 // swap troca o conteúdo de UM contêiner; swapIf só quando a ASSINATURA do dado mudou (fica em
@@ -33,9 +33,15 @@ export function swapIf(box, sig, build) {
 }
 export const sigOf = (...parts) => JSON.stringify(parts);
 // tick só com o painel visível e no DOM (o padrão repetido em status/tasks/central/judges/sessions)
+// everyVisible(panel, ms, fn) — o poll de um painel do admin: só roda com o painel VISÍVEL e a ABA à frente. Aba de
+// fundo não pola (revisão das rotas da LATAM, 05/11/2026: dashboard/sessões/anomalias/staff pollavam em aba escondida —
+// carga no servidor que ninguém via); ao voltar p/ a aba, uma atualização na hora (o dado não fica velho na cara).
 export function everyVisible(panel, ms, fn) {
-  const t = setInterval(() => { if (!panel.hidden && panel.isConnected) fn(); }, ms);
-  return () => clearInterval(t);
+  const live = () => !panel.hidden && panel.isConnected && !(typeof document !== 'undefined' && document.hidden);
+  const t = setInterval(() => { if (live()) fn(); }, ms);
+  const onVis = () => { if (live()) fn(); };
+  if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', onVis);
+  return () => { clearInterval(t); if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVis); };
 }
 export const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
 export const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');

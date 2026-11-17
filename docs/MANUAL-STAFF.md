@@ -54,6 +54,14 @@ A tela de impressão é uma tabela com **duas coisas na mesma fila**:
 >
 > **Pedido de impressão não muda**: o time continua imprimindo a qualquer momento, freeze ou não.
 
+> **Balão esperando o 1º da sede ⏳.** Quando um time resolve um problema, o MOJ precisa saber se ele
+> foi o **primeiro da sua sede** naquele problema (o balão sai com a estrela ★ "first to solve"). Se outro
+> time da sede enviou antes e essa submissão ainda não tem veredicto (está sendo julgada ou revisada
+> pelos juízes), **todos os balões daquele problema na sede esperam** por ela. A página de **Impressão**
+> mostra uma faixa ⏳ com quantos balões esperam e de quais problemas. Eles saem sozinhos, com a estrela
+> certa, assim que a submissão for julgada. Se a espera demorar, avise o `.admin`: ele pode liberar os
+> balões, e aí eles saem sem a estrela.
+
 Você só vê a fila da **sua sede**. Pedidos e balões de outras sedes não aparecem para você.
 
 ### Como tratar uma tarefa
@@ -72,8 +80,10 @@ vê nas telas do [tutorial ilustrado](/contest/ajuda/staff.html).
 
 #### O que sai na impressora
 
-Primeiro a **folha de rosto** (time, universidade, login, número da tarefa, nº de páginas e uma
-linha para assinar), depois o documento. Código-fonte sai em **fonte monoespaçada, com a
+Primeiro a **folha de rosto**, depois o documento. Na folha de rosto, o **login do time é o maior texto**: é por ele
+que você acha o time na sala. Embaixo vêm o nome do time, a universidade e a sede, o nº de páginas e a linha para
+assinar. O **número da tarefa** fica pequeno no canto de cima: serve só para conferir com o sistema. A folha do
+balão segue o mesmo molde: login no topo, depois o problema e a cor do balão. Código-fonte sai em **fonte monoespaçada, com a
 indentação original e as linhas numeradas** — dá para apontar o dedo e dizer "linha 42".
 
 **Cada página de código se identifica sozinha**, em cima e embaixo: no alto, a data e o nome do
@@ -85,6 +95,25 @@ impressões empilhadas, uma folha que se solta da capa continua dizendo de quem 
 Há uma **caixa de seleção** de modo automático, e a sua escolha fica guardada. Com o modo automático ligado e a aba aberta, cada nova tarefa é **pega, impressa e marcada** sozinha, sem você clicar.
 
 Para que a janela de impressão do navegador não apareça a cada tarefa, rode o navegador em **modo quiosque**. No Chrome/Chromium, use a opção `--kiosk-printing`.
+
+#### Teste de impressora
+
+Antes da prova, meça as impressoras com tarefas de teste. A caixa **🧪 Teste de impressora** fica embaixo da fila.
+
+1. Deixe cada estação da sede com a página da fila aberta e o **modo automático** ligado.
+2. Abra a caixa e escolha a quantidade (até 200), o tipo (impressão, balão ou misto) e as páginas por impressão.
+3. Clique em **🧪 Gerar**. As tarefas vão para a fila da **sua sede**, e as estações dividem o lote como na prova.
+4. Leia o resumo: tarefas impressas por minuto no total e por estação, e o maior intervalo entre duas impressões.
+5. Clique em **🧹 Apagar testes** no fim.
+
+- A folha de teste sai com a faixa **TESTE — NÃO ENTREGAR** e a numeração própria (T1, T2…). Não entregue essa folha.
+- A numeração da prova não muda, e o teste não entra no relatório da prova.
+- O tempo inclui a geração da folha: é o mesmo caminho de uma tarefa da prova. A folha é preparada no servidor
+  quando a tarefa nasce, então a estação já a encontra pronta.
+- O admin pode trocar o **formato da folha** para HTML (experimental): a estação monta e imprime a folha no
+  navegador, e o botão **Abrir PDF** vira **Abrir folha**. Um pedido que não é texto (PDF, imagem) continua em PDF.
+  Gere um lote de teste em cada formato e compare as tarefas por minuto.
+- **Durante a prova o teste é proibido.** No início da prova, as tarefas de teste que sobraram são apagadas.
 
 ### Aquecimento: o seu ensaio (e a prova pode ter duas rodadas)
 

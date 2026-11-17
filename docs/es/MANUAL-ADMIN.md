@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ADMIN.md blob:b57d0da3579eca955bd2a183816e520ce3e11970 -->
+<!-- i18n-source: MANUAL-ADMIN.md blob:67a7d27ff583ec7afb2f276bb994c54fa158f626 -->
 # MOJ: Manual del organizador (el panel .admin de la competencia)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -41,7 +41,7 @@ panel de un módulo **desactivado** lleva a **Central › Módulos**, con un avi
 
 | Bloque | Qué hace |
 |---|---|
-| **🚦 Antes de empezar** | El checklist previo a la competencia (verde/amarillo/rojo), con un **botón que abre el panel exacto** de cada pendiente. El rojo es **crítico**: revísalo antes de empezar. El checklist es un aviso: el MOJ no impide el inicio de sesión ni los envíos por su causa; los ítems ya revisados quedan plegados. Revisa la ventana, el registro de evaluación, el congelamiento, los jueces, los lenguajes, el TL calibrado, el pool, las cuentas, el staff y el daemon, si algún problema de una competencia ICPC **sigue evaluando después del 1.er error** (*La evaluación se detiene en el 1.er error*: el TLE de un problema con cientos de pruebas tarda minutos — marca "detener en el primer" TLE/WA en la pestaña Límites del editor del problema), y si **cada juez ya calibró cada problema** (*Jueces calentados*): el tiempo límite se mide por máquina, y el juez que todavía no calibró un problema lo hace en el 1.er envío de ese problema, que espera minutos. Cuando hay un juez frío, el ítem trae el botón **🔥 Calentar jueces**, que manda calibrar solo a los jueces fríos. Hazlo **antes del inicio** (cada calibración ocupa un lugar del juez por algunos minutos) y vuelve a ejecutar el checklist (↻) para ver cómo "calentando" pasa a "calentados". El mismo botón está fijo en **Operación › Situación**, y, en una competencia con prioridad **Competencia** (o Super), el calentamiento también corre **solo**: al promover una ronda y unos 15 minutos antes del inicio de cada ronda (queda en el audit como `warm-judges`). Una lista de clase queda solo con el botón. Además, **solo con el módulo activado**: cohortes, gate de navegador, bloqueo de sede, ronda siguiente, documentos, globos y prórroga. La revisión **módulos** avisa cuando un módulo está desactivado pero tiene datos en la competencia. *Sin congelamiento* y *cuentas compartidas* solo son aviso en una competencia de prioridad **Competencia** (en una lista son lo normal). |
+| **🚦 Antes de empezar** | El checklist previo a la competencia (verde/amarillo/rojo), con un **botón que abre el panel exacto** de cada pendiente. El rojo es **crítico**: revísalo antes de empezar. El checklist es un aviso: el MOJ no impide el inicio de sesión ni los envíos por su causa; los ítems ya revisados quedan plegados. Revisa la ventana, el registro de evaluación, el congelamiento, los jueces, los lenguajes, el TL calibrado, el pool, las cuentas, el staff y el daemon, si algún problema de una competencia ICPC **sigue evaluando después del 1.er error** (*La evaluación se detiene en el 1.er error*: el TLE de un problema con cientos de pruebas tarda minutos — marca "detener en el primer" TLE/WA en la pestaña Límites del editor del problema), si el **TL tiene holgura** (*TL con holgura*: el TL efectivo de cada problema calibrado frente al peor tiempo de las soluciones correctas; por debajo de 1,6× una solución correcta puede recibir TLE cuando el juez está lleno de programas que usan mucha memoria — da holgura con `TLOVERRIDE` o un `TLMOD[calibrafactor]` mayor), y si **cada juez ya calibró cada problema** (*Jueces calentados*): el tiempo límite se mide por máquina, y el juez que todavía no calibró un problema lo hace en el 1.er envío de ese problema, que espera minutos. Cuando hay un juez frío, el ítem trae el botón **🔥 Calentar jueces**, que manda calibrar solo a los jueces fríos. Hazlo **antes del inicio** (cada calibración ocupa un lugar del juez por algunos minutos) y vuelve a ejecutar el checklist (↻) para ver cómo "calentando" pasa a "calentados". El mismo botón está fijo en **Operación › Situación**, y, en una competencia con prioridad **Competencia** (o Super), el calentamiento también corre **solo**: al promover una ronda y unos 15 minutos antes del inicio de cada ronda (queda en el audit como `warm-judges`). Una lista de clase queda solo con el botón. Además, **solo con el módulo activado**: cohortes, gate de navegador, bloqueo de sede, ronda siguiente, documentos, globos y prórroga. La revisión **módulos** avisa cuando un módulo está desactivado pero tiene datos en la competencia. *Sin congelamiento* y *cuentas compartidas* solo son aviso en una competencia de prioridad **Competencia** (en una lista son lo normal). |
 | **🧰 Generar** | Una tarjeta por artefacto, con el estado actual: etiquetas de credenciales, informe de la competencia y jplag siempre (el jplag también abre para el juez principal, que puede ejecutarlo, y para el juez, que solo lo ve); documentos (`documentos`), promover ronda (`rodadas`), ceremonia de revelación y pantalla (`telao`) con el módulo. |
 | **📡 En vivo** | Resumen corto (pendientes, envíos, jueces en línea, respuesta p95, corrección manual). Se actualiza solo; el panel completo es **Operación › Situación**. |
 | **⏱️ Reglas de la competencia** | Inicio, fin y congelamiento, editables ahí mismo; el modo y los lenguajes, en solo lectura; y los **módulos activados** (con un atajo para activarlos/desactivarlos). El resto está en **Central › Reglas**. |
@@ -110,7 +110,7 @@ portugués.
 | Panel | Qué hace |
 |---|---|
 | **Situación** | El tablero en vivo (se actualiza en su lugar cada ~12 s): sesiones iniciadas, jueces en línea/ocupados, cola, pendientes, latencia, línea de tiempo, evaluación manual, las **acciones sugeridas** cuando algo no está bien y el botón **🔥 Calentar jueces**. Globos pendientes/retenidos solo con el módulo `baloes`. |
-| **Staff** | Panorama y acciones sobre la cola de impresión (+ globos con el módulo), desempeño por miembro del staff y el **alcance** de cada staff/jefe de sede (regex o `region:<sede>`). `region:<nombre>` cubre todo lo que está **en ese nodo** de Evento › Sedes y escuelas: la sede y, si es un nodo padre, todas las sedes debajo de él (`region:Nordeste` ve las sedes del Nordeste), y también un recorte (`view`) por su nombre. Vale la sede grabada en el equipo o, sin ella, la regex. Una regex en el alcance se prueba en el usuario. |
+| **Staff** | Panorama y acciones sobre la cola de impresión (+ globos con el módulo), desempeño por miembro del staff y el **alcance** de cada staff/jefe de sede (regex o `region:<sede>`). `region:<nombre>` cubre todo lo que está **en ese nodo** de Evento › Sedes y escuelas: la sede y, si es un nodo padre, todas las sedes debajo de él (`region:Nordeste` ve las sedes del Nordeste), y también un recorte (`view`) por su nombre. Vale la sede grabada en el equipo o, sin ella, la regex. Una regex en el alcance se prueba en el usuario. Abajo, la **🧪 prueba de impresora** y el **🧾 formato de la hoja**: PDF (como siempre, armado en el servidor y listo cuando la tarea nace) o HTML en el navegador de la estación (experimental, mucho más liviano para el servidor; la solicitud que no es texto sigue en PDF). Mídelo con un lote de prueba en cada formato antes de usar HTML en una competencia. |
 | **Jueces** | La cola de la corrección manual: quién reservó cada envío, votos, antigüedad; decidir/resolver en el momento; y la configuración del veredicto manual (opciones de etiqueta + **🔎 Qué va a revisión**: una tabla problema × veredicto; lo marcado va a los jueces y el resto sale automático; sin nada marcado, todo sale automático; con excepciones por lenguaje y el botón para liberar los retenidos que la tabla nueva deja salir). |
 | **Auditoría** | Feed unificado de todo lo que pasó (acciones de admin, inicios de sesión, envíos, veredictos) con filtros y CSV, más los **respaldos** que subieron los usuarios (por usuario, con ZIP). |
 
@@ -143,6 +143,14 @@ portugués.
 > muestra qué política está vigente, y **Operación › Situación** muestra cuántos globos están
 > retenidos.
 
+> **Globos esperando al 1º de la sede.** El globo sale con la estrella de primero de la sede solo con
+> certeza: si otro equipo de la sede envió antes y ese envío todavía no tiene veredicto (en juzgamiento o
+> en revisión manual), **todos los globos del problema en esa sede esperan**, sin límite de tiempo.
+> **Operación › Staff** lista los pares retenidos (sede, problema, cuántos, desde cuándo y el envío que
+> los retiene), con alerta después de 10 minutos. Lo normal es decidir el envío en la cola del juez
+> (aparece marcado con 🎈). Si no se puede decidir ahora, haz clic en **Liberar sin franja** (dos veces,
+> para confirmar): los globos salen sin la estrella. El juez principal también puede liberarlos, en su cola.
+
 > **Cómo marca el marcador a quien resolvió.** Por defecto la celda de quien resolvió **siempre se ve igual**
 > (verde) y el color del globo va en un **puntito** al lado. Es a propósito: la paleta ICPC le da al
 > problema A el color **blanco**, y el blanco sobre el fondo blanco del marcador es el mismo píxel: quien resolvía
@@ -150,6 +158,20 @@ portugués.
 > prefieres el clásico (la celda entera pintada con el color del globo), márcalo en **Central ›
 > Reglas › Celda de "resuelto" en el marcador**; los colores claros reciben un contorno para no desaparecer. Vale
 > para el marcador, la ceremonia de revelación y el informe.
+
+> **Qué veredicto recibe el equipo.** Cuando un envío falla en más de un caso, la regla de la
+> competencia decide qué error vale. En **Central › Reglas › Qué veredicto recibe el equipo**:
+> - **El del 1.er caso que falló** (el valor por defecto de una competencia ICPC nueva, la regla del ICPC):
+>   los ejemplos se juzgan primero, después los demás casos por nombre, y vale el primer error. Quien
+>   falla el ejemplo recibe el error del ejemplo.
+> - **El del caso más grave** (la regla anterior del MOJ; las competencias creadas antes del
+>   09/11/2026 siguen con ella): vale el peor error entre todos los casos (TLE/MLE, después RE, después WA).
+>   También es el valor por defecto de una competencia nueva en los otros modos (OBI, entrenamiento,
+>   heurístico): allí lo que vale es la nota y, en un problema que se detiene en el primer error, el
+>   orden de los casos cambia la nota.
+>
+> El cambio vale para los juzgamientos y rejuzgamientos hechos después de guardar. Para aplicar la
+> regla nueva a envíos antiguos, rejuzga.
 
 Fuera del panel, pero enlazadas desde la Central: **etiquetas de credenciales**, **ceremonia de revelación**,
 **jplag**, **cola del staff** y **marcador**.
@@ -303,6 +325,15 @@ operaciones en masa (restablecer contraseña, deshabilitar) **se saltan** las cu
 | **Staff (personal de sala)** | `.staff` | Cola de **🖨️ impresión y globos** (reservar/imprimir/entregar, modo automático de quiosco). | Ver problemas o enviar (nunca); etiquetas; marcador sin congelamiento. |
 | **Jefe de sede** | `.cstaff` | Observar la cola del staff de su sede (solo lectura), **Etiquetas** de credenciales de los competidores y del **`.staff`** de su sede (con contraseña, excepto en una competencia que usa cuentas del entrenamiento, donde la contraseña es personal y no sale en la etiqueta; la credencial del propio jefe tampoco sale en etiqueta), la **🎥 pantalla** de la sede y la **🏆 revelación por sede** después del fin. | Actuar en la cola de impresión; ver problemas/enviar; no hereda `.staff`. |
 | **Monitor** | `.mon` | Enviar DURANTE la competencia (sin aparecer en el marcador), **responder aclaraciones**, Todos los envíos y Estadísticas. | Ver problemas antes del inicio; corrección manual. |
+| **Fotos** | `.foto` | En la página de la **🎥 pantalla**, subir y reemplazar la **foto** de los equipos de su alcance (un archivo, en lote o en un `.zip`). | Música; claves del webcast; ver problemas o enviar; marcador sin congelamiento. |
+| **Música** | `.musica` | Lo mismo, para la **música** de los equipos de su alcance. | Fotos; lo demás, como el `.foto`. |
+| **Sistemas** | `.sistemas` | **🖥 Máquinas** de las sedes de su alcance: el panorama, los comandos, bloquear y desbloquear pantallas, y **soltar** un IP fijado por el bloqueo de sede. | Máquinas de otra sede; activar o apagar el bloqueo; ver problemas o enviar. |
+| **Director** | `.diretor` | El **marcador SIN congelamiento**, durante toda la competencia, **solo de su recorte** (región, país o sede), con la posición y la ★ de primero recalculadas dentro del recorte. | Ver los otros equipos; ver problemas o enviar; etiquetas, cola, estadísticas. |
+
+Los cuatro roles de arriba tienen **alcance**: en **Operación › Staff › Alcance de las cuentas de rol**, indica qué
+sedes, países o regiones ve cada login (`region:<nombre>`, uno por línea). **Sin alcance, no ven a nadie** — al
+contrario del `.staff` y del `.cstaff`, que sin alcance ven a todos. El corte siempre lo hace el servidor.
+Los roles vienen de un registro único (`server/etc/roles.tsv`): sufijo, clase y lo que cada uno puede.
 
 Regla de oro: **ninguna cuenta con sufijo de rol entra en el marcador ni en las estadísticas**:
 crea todas las que necesites sin miedo de ensuciar el resultado.
@@ -589,6 +620,26 @@ MOJ se niega a publicar el informe cuando mostraría lo que todavía no es públ
 - **Con una cohorte PRIVADA y los resultados no liberados.** El informe muestra todos los equipos. Vale también
   para el informe de una ronda archivada. Libera los resultados en Evento › Cohortes.
 
+**Descalificar a quien no inició sesión** (Personas › Cuentas › tarjeta **🚫 Descalificar a quien no inició sesión**; en
+la CLI, `moj-contest -c <contest> users absent`). Quita del marcador y de la estadística, de una vez, a los equipos que
+no participaron:
+
+- **Quién sale:** el equipo sin ningún inicio de sesión desde 1 hora antes de la apertura del inicio de sesión hasta el
+  fin de la competencia (para todas las sedes) **y** sin ningún envío. Quien envió nunca sale, aunque no tenga inicio
+  de sesión registrado. El inicio de sesión del calentamiento no cuenta.
+- **Quién se queda:** quien está en una etapa **publicada** de la clasificación, quien ya estaba descalificado y las
+  cuentas de rol.
+- **Ver vista previa** muestra la ventana usada, los conteos y la lista, con el último inicio de sesión de cada equipo,
+  sin guardar nada. El botón **Descalificar N equipos** confirma. Si la lista cambió desde la vista previa, el panel
+  muestra la lista nueva y vuelve a pedir.
+- Funciona en cualquier momento. Con la competencia todavía en curso, la ventana llega hasta ahora, y quien inicie
+  sesión después ya estará descalificado.
+- Cada clic se convierte en un **lote**, listado en la tarjeta con fecha y autor. **Deshacer** devuelve el lote entero,
+  menos a quien descalificaste o devolviste a mano después. Todo va a la Auditoría.
+- Es la misma descalificación de cada cuenta: la cuenta, la contraseña y el historial se quedan. Si el informe ya fue
+  publicado, vuelve a publicarlo. El marcador congelado guardado por **Terminar evento** no cambia: es el registro de lo
+  que se mostró en la competencia.
+
 ## 6¾. Participación virtual (Evento › Virtual, módulo `virtual`)
 
 Con la competencia terminada, cualquier cuenta del Entrenamiento libre puede **rehacer la competencia una vez**, en su propio
@@ -623,6 +674,25 @@ entrenamiento. Una competencia que no puede verse desde fuera no debe activar el
   fila del marcador virtual (el registro queda guardado; **restaurar** lo deshace). La acción queda auditada.
   El botón **devolver intento** borra la fila y deja que esa cuenta vuelva a empezar en esta competencia. Úsalo
   para un probador, o para quien tuvo un problema durante la competencia. La acción también queda auditada.
+
+**Lo que el participante ve de la competencia.** La pantalla tiene la cara de la competencia (pestañas Competencia ·
+Marcador · Aclaraciones y avisos · Mis envíos · Ayuda), y el servidor libera cada cosa en el **tiempo relativo** de la
+participación:
+
+- los enunciados, con el **límite de tiempo por lenguaje**: el que juzga el envío virtual, es decir, el del
+  entrenamiento ahora (si el problema se recalibró después de la competencia, puede diferir de la hoja de límites de
+  tiempo);
+- los **documentos publicados** en Evento › Documentos (cuaderno, entorno de evaluación, límites de tiempo) desde el
+  inicio; el **editorial** y los **enlaces externos** de los Recursos, solo cuando termina la participación;
+- las **aclaraciones respondidas en público**, los **avisos oficiales** y las **noticias**, cada uno en el minuto de la
+  competencia en que salió (lo que salió después del fin, solo cuando termina la participación). Una pregunta privada
+  nunca aparece, y el participante no pregunta: nadie respondería. Un aviso o una noticia **editados** cuentan desde la
+  hora de la edición;
+- el **marcador se congela** en el mismo minuto del congelamiento de la competencia (**Terminar evento** guarda ese
+  minuto) y se descongela cuando termina la participación.
+
+Lo que publiques o edites después de la competencia también llega a quien haga el virtual después. No publiques ahí lo
+que no deba verse.
 
 **Regla del participante** (la lee antes de empezar): una participación por cuenta; puede desistir sin
 registrar en los primeros 15 minutos o mientras no tenga ningún aceptado, como máximo 2 veces; el 3.er inicio
@@ -788,7 +858,11 @@ panel avisa y muestra solo las sesiones y el registro de accesos.
   (el competidor recibe 403 `login_disabled`; la organización entra), **desconectar a los competidores**, al **staff y
   jefes de sede** o a los dos (nunca al admin, los jueces, el juez principal, el monitor ni la pantalla), promover la ronda en
   Evento › Rondas, y **reabrir el login** cuando los equipos puedan entrar. Cada sesión cerrada se convierte en
-  un evento en la línea de tiempo; la acción va a la auditoría (`logout-all`).
+  un evento en la línea de tiempo; la acción va a la auditoría (`logout-all`). Atención: el login cerrado
+  aquí vuelve solo cuando alguien hace clic en **Reabrir login**. La apertura programada (la del login o
+  el inicio de la ronda) **no** lo reabre. Con el login cerrado, la pantalla muestra la hora de la apertura
+  en un aviso, y el checklist previo a la competencia se pone rojo 1 h antes (LATAM 2026: 408 inicios de
+  sesión rechazados hasta que alguien lo reabrió).
 - **🔒 Bloqueo de sede**: los IP fijados a esta competencia (inicios de sesión, bloqueos, hasta cuándo), los bloqueos
   registrados (cuándo, IP, destino, ruta, sesión) y los botones **soltar** y **🔒 Fijar IPs ya vistos**.
   La tarjeta "bloqueos del bloqueo de sede" y los eventos 🔒 de la línea de tiempo vienen de la auditoría. La sección 7 lo explica.

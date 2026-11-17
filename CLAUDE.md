@@ -60,6 +60,9 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
 - Handler típico: `require_method POST`; `require_auth`; `body="$(read_body)"`; valida com
   `jq -e .`; lê com `jq -r`; responde com `emit_json 200 OK` + objeto `jq`, ou
   `fail <http> "<msg>" "<code>"`. Querystring: `param <nome>`. Helpers em `lib/common.sh`.
+  O `fail` DRENA o corpo que o handler não leu (`_drain_body`, até o `CONTENT_LENGTH`, só no processo principal —
+  09/11/2026): recusar antes do `read_body` e sair sem ler o stdin faz o fcgiwrap trocar o 401/403 por um 502 opaco
+  (o upload de foto do Chile na LATAM). Teste: `smoke-fail-drain.sh`.
 - **Envelope**: `{success:true,…}` / `{success:false,error:{message,code}}`, sempre com o
   status HTTP correto. EPOCH para tempo.
 - **`jq` + ARG_MAX** (ver `../CLAUDE.md`): JSON grande (mapas com milhares de chaves, ex.: o
@@ -208,7 +211,23 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   19/09/2026) — o "nova senha" das contas geridas levava 38 s e o admin desistia antes de ver a senha
   (relato do Ribas, conta `zan`). A LISTAGEM (`treino/admin/sessions`, 1ª aba do painel) e o deslogar por IP
   seguem o mesmo molde: grep + `source` no mesmo processo + UM jq (a aba levava 69 s). Teste: `smoke-session-remove.sh`.
-  Papéis por sufixo no login (`.admin/.judge/.cjudge/.staff/.cstaff/.mon`).
+  Papéis por sufixo no login, num **REGISTRO ÚNICO: `server/etc/roles.tsv`** (09/11/2026, decisão do Ribas: "checks de
+  permissão simples de manter e eficazes"). Colunas: sufixo · nome na nav · classe (`org`|`sala`) · escopo (`sim` = chave
+  do staff-filters) · capacidades (`role_can`: julgar, chefe, placar_full, placar_recorte, rodadas_privadas, fila,
+  fila_leitura, etiquetas, cerimonia, foto, musica, telao, maquinas, monitorar, como_time; `*` = admin). Leitores:
+  `lib/roles.sh` (bash, ZERO fork: `role_of`, `role_suffix_to`, `is_reserved_role_login`, `role_class`, `role_scoped`,
+  `role_can`, `role_is`, `role_glob_scoped`, `ROLE_RE` = `[.](admin|…)$` p/ grep/awk/jq — `[.]` e não `\.`: o
+  `awk -v` faria do `\.` um curinga —, `ROLE_JQ`/`ROLE_JQ_ORG`/`ROLE_JQ_SALA` = `endswith(...)` p/ jq em caminho quente);
+  o porteiro (lê o TSV relativo ao próprio arquivo); `web/shared/roles.js` (GERADO: `bash server/bin/roles-gen.sh`) e o
+  `ingest-drain.py`. Os `is_*` do auth.sh viraram embrulhos (os ~100 chamadores não mudaram). ⚠ **Lista de sufixos
+  escrita à mão é bug**: `smoke-roles-registry.sh` faz o inventário (3+ sufixos numa linha de código fora do registro =
+  FAIL) — foram 76 cópias com 7 divergências. Papel novo = 1 linha no TSV + o que ele pode nas rotas + nav. "Fora da
+  prova" (`contest-gate.sh _role_off_contest`) = papel sem `julgar` nem `como_time`: sem enunciado, sem submeter (também
+  offline), sem pedir impressão. **Os papéis com escopo de 09/11 falham FECHADO** (sem escopo, ninguém): `.foto`/`.musica`
+  (telão: foto OU música do escopo), `.sistemas` (nutella + `site-lock` recortado, POST só `release` de IP da sede — IP da sede = preso agora e com a reivindicação auditada MAIS RECENTE de um login do escopo),
+  `.diretor` (`score.sh` → `pr_filter_board_subset`: SEM freeze, só o escopo, ★ recalculada no recorte e retida quando o
+  placar inteiro a retém OU quando um time do escopo tem run não julgada enviada até o melhor AC do recorte — a
+  pendência vem do `metrics.json` das contas do escopo; o porteiro declina). Teste: `smoke-roles-new.sh`.
   **`.cjudge`** = juiz-chefe: `is_judge` vale p/ ele (herda juiz) + `is_chief`/`is_admin_or_chief`
   p/ os extras escopados (editar notícias/respostas já dadas, Situação, Todas Submissões, resolver
   conflitos, config de auto-veredicto) — **não** é admin pleno. **`.cstaff`** = chefe de staff de
@@ -233,6 +252,11 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   MIME — `file --mime-type` = `audio/mpeg` — e o corpo vai por `read_body_file`, 15 MB) e as
   CHAVES do **webcast**, o pacote de placar que alimenta o sistema Animeitor pela rota **sem
   sessão** `/contest/webcast?key=…` (formato do BOCA, separador `0x1C`). Ver `docs/WEBCAST.md`.
+  O **lote** aceita fotos, MP3 e **pacotes `.zip`** (09/11/2026, pedido do Emílio): o zip é aberto NO NAVEGADOR
+  (`web/shared/zip-read.js`: deflate pelo `DecompressionStream`, sem cifrado/ZIP64, tetos de 5000 arquivos e 20 MB
+  por arquivo, tamanho declarado conferido depois de descompactar) e cada arquivo segue pela rota de sempre, um POST
+  por arquivo — o servidor NUNCA descompacta (zip bomb, `../`). Antes de subir, uma conferência (dry-run) por
+  arquivo: time achado pelo nome, novo × troca, sem time / formato / repetido. Teste: `smoke-zip-read.sh`.
   O **admin entra na mesma página com os mesmos poderes** (as rotas gatam `is_animeitor ||
   is_admin`), mas **sem botão na nav**: página avulsa se LINKA do painel (doutrina do
   `admin.js`) — cartão na *Central › Gerar* e link no painel *Pessoas › Times*, que em contest
@@ -306,7 +330,13 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   (`resolve_submission` globa `<sid>.*`); e **título igual NÃO prova mesmo problema** — confira o
   enunciado (a agulha tem de sair da ESTÓRIA: "Entrada/Saída" é clichê e casa problema alheio).
   Handlers de usuário do admin (`user-add`/`user-disable`/`user-remove`/`users-set-password`)
-  escrevem no account.json; remover = `mv` p/ `.removed-users/`. **`.team` agora tem WRITERS
+  escrevem no account.json; remover = `mv` p/ `.removed-users/`. **Desclassificar quem não logou em LOTE**
+  (`/contest/admin/absent-disqualify`, `lib/absent-dq.sh`, cartão 🚫 de Pessoas › Contas, 12/11/2026): sem login na janela
+  (1 h antes da abertura do login até o fim, ou agora) E sem submissão; fica quem está num estágio publicado da
+  classificação. Prévia com `plan_id` → aplicar → lote em `var/absent-dq.json` com DESFAZER; a marca é a do
+  `user-disqualify` + `.dq_batch` (o `user-disqualify` individual a apaga: a decisão individual vence o lote). Levantamento
+  numa varredura (2.000 contas: 0,17 s). CLI `moj-contest users absent [--apply] [--undo LOTE]`. Teste: `smoke-absent-dq.sh`
+  (CLI: moj-cli `test/users-absent.sh`). **`.team` agora tem WRITERS
   na API** (antes só o store-migrate): `users-bulk`/`user-add`/`contest-create users[]` aceitam
   `univ_short/univ_full/country/region` (helper `team_fields_json` + `account_team_merge` em
   lib/users.sh — saneiam `:`/tab/newline) e `/contest/admin/teams` (painel **Pessoas › Times**) faz set
@@ -514,7 +544,8 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   F5, e o F5 em massa é a própria rajada. Hoje o `score.js` mantém o placar anterior, mostra o aviso `#scoreStale` e tenta
   de novo com espera crescente (10–20, 20–40, teto 30–60 s); o 1º sucesso volta ao ritmo normal; `pollGen` mata a cadeia
   velha (início da prova × troca de coorte rodavam duas); o disparo do INÍCIO sai com dispersão de até 1,5 s; e a peça do
-  boot que falhou (`teams`, `regions`, `balloons`…) é pedida de novo no próximo poll bem-sucedido (`BOOT_RETRY`). Contest
+  boot que falhou (`teams`, `regions`, `balloons`…) é pedida de novo no próximo poll bem-sucedido (`BOOT_RETRY`) — menos a
+  que voltou 401/403 (`bootRetryable`, 15/11/2026: abas da LATAM com a sessão derrubada pediam o `navbuttons` ~1.800×/dia cada). Contest
   secreto com 401/403 = convite ao login, sem reagendar. O `judge.js` (`review/list`) idem, parando só em 401/403. Poll
   NOVO segue a mesma regra: erro reagenda, nunca para. Testes: `smoke-score-poll.gjs.sh`, `smoke-judge-poll.gjs.sh`.
 - **PLACAR ANÔNIMO É CORTADO NA API** (`SCORE_ANON=1`, 03/10/2026, decisão do Ribas; era só a TELA — o TXT com nomes ia
@@ -554,10 +585,17 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   quadradinhos do `report.html` "voltarem para a página de submissão" (relato de juiz) — em
   QUATRO telas, porque a rotina foi copiada. O `report.html` do mojtools sempre esteve certo
   (`id=`/`href=` pelo mesmo `slugify`, sem `<base>`, sem JS). Fonte única:
-  **`openHtmlReport(html)`** em `web/shared/submission-links.js` (blob + `window.open` + revoke em
-  60 s); isolar não é motivo para srcdoc — o report traz `default-src 'none'` no próprio `<head>`.
+  **`openHtmlReport(html, w?)`** em `web/shared/submission-links.js` (blob numa janela aberta NO CLIQUE —
+  `openReportAuthed`/`openTextAuthed`; o erro da API aparece nela; o blob vive até a aba fechar, 09/11/2026); isolar
+  não é motivo para srcdoc — o report traz `default-src 'none'` no próprio `<head>`.
   Embed INLINE (a prévia do mojlog na fila do treino, o site da rodada arquivada) pode seguir com
   srcdoc, e é a allowlist do inventário executável em `smoke-handlers.sh`.
+- **PÁGINA DA SUBMISSÃO DO JUIZ (09/11/2026; Roberto e Paulo):** `/contest/run/?c=&id=` (`web/contest/run/`), dados de
+  `/submission/info` (só juiz; id completo ou PREFIXO de 8+ hex, 409 `ambiguous`; identidade SÓ p/ admin/chefe — a
+  regra do allsubmissions, aplicada no servidor; pendente pelo history; rodada arquivada). Os links de log e código
+  (`logLink`/`srcLink`) têm `href` REAL para ela: o clique do meio e "abrir em nova aba" funcionam; só o clique esquerdo
+  simples é interceptado (log → aba do report; código → o POP-UP `shared/code-viewer.js`, CodeMirror `readOnly`). No
+  TREINO o href segue `#` (lá não há página). `runLink` = o id curto como link. Teste: `smoke-submission-info.sh`.
 - **`el()` mora em `web/shared/dom.js`** (sem dependência de rede) e o `ui.js` re-exporta —
   é o que permite reusar renderizadores no relatório offline. Importar de `/shared/ui.js`
   segue valendo p/ os ~79 arquivos que já faziam isso.
@@ -716,6 +754,16 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   de sempre). Editor `cf_tlunified` (`CF_YN`, padrão n); Painel pílula "TL único". DENTRO do tl-checksum (ligar
   recalibra). Testes: `smoke-tl-unified.sh`, `smoke-tl-sim.sh`, `smoke-tl-mods.sh` (a cópia literal),
   `smoke-limits-tab.gjs.sh`, `smoke-statement-langs.sh`.
+- **CALIBRAÇÃO INCREMENTAL (10/11/2026; pedido do Ribas: "aproveitar resultados que já tinham calculado", OPT-IN,
+  desligado por padrão, sempre dá p/ rodar tudo)**: `/problems/request-calibration {reuse:true}` → o update/comando leva
+  `reuse` (`cal_request` 4º arg, `cmd_request` 5º = objeto extra; o extra nunca sobrescreve os campos próprios) → o
+  agente roda o calibreitor com `MOJ_CALIB_REUSE=1` e o memo por solução do juiz (`<cache>/<id>/calib-memo`, mojtools)
+  só roda o que mudou. Dedup: "rodar tudo" vence (`_req_drop_reuse`); no pedido DIRIGIDO a busca, a troca e a criação rodam sob a trava do host, a do `cmd_claim` (`cmd_calibrate_request`, sched-lib): fora dela o juiz podia levar a ♻ entre a busca e a troca. Web: ☐ ♻ em "Validação & calibração" (vale p/
+  os botões, o "Calibrar" e o recalibrar do Salvar; lembrado no localStorage), selo "♻ reaproveitado" na solução
+  (`sols[].reused_at`, que o `/judge/calib-report` agora passa — junto com o `tests[].wall`, que a projeção fechada
+  DESCARTAVA desde o TLCLOCK=cpu: a simulação só via a morte pela parede no teste, que grava o arquivo do host direto).
+  CLI `moj calibrate --reuse`. Testes: `smoke-calib-queue.sh`, `smoke-calib-expect.sh`, `smoke-save-recalib.gjs.sh`;
+  mojtools `test-calib-memo.sh`, judge `test/agent.sh`, moj-cli `test/calibrate-reuse.sh`.
 - **LOCKS do store de TL e da calibração (26/10/2026)**: todo ler-e-regravar de `run/tl/<id>.json` passa por
   `_tl_locked <id>` (`lib/tl-store.sh`: `run/tl/<id>.lock`, `flock -w 10`, rc 75 ⇒ o tl-report responde 500) — dois
   juízes reportando juntos perdiam a entrada de um (o último `mv` vencia); o sumário das soluções por `_calx_locked`
@@ -753,6 +801,13 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `TLMOD[<lang>.drift]` › `TLMOD[default.drift]`) — a MESMA conta do `mojtools/build-and-test.sh`; mexeu
   numa, mexa na outra. Na tabela de testes do editor (`testsTable`) e no `report.html`, teste aceito acima
   do TL = amarelo (relato do Daniel Saad, 24/09: saía vermelho, a cor do WA).
+  **FOLGA DO TL (10/11/2026; bancada de 06–07/11: vizinhos pesados em memória inflam o tempo em até ~1,6×)**: o
+  sumário leva `margin` = `calx_margin` (por linguagem, TL efetivo ÷ o pior tempo AC das good ACEITAS, máx entre os
+  juízes da versão atual; o PIOR caso `{min, lang, w, tl}` ou null). A Central (`preflight` item `tl_margin`) lê
+  `run/calib-sum/<id>.json` dos problemas da prova (sem abrir pacote; `stale` não conta) e avisa abaixo de
+  `TL_MARGIN_MIN` (1,6; env). A outra metade é o rerun do TLE perto do TL (mojtools `TLERERUN_BAND`). Sumário antigo
+  ganha a margem na próxima calibração ou com `bin/calib-summary-rebuild.sh --apply` (deploy). Testes:
+  `smoke-calib-expect.sh` (1c), `smoke-preflight.sh`.
   **Issues por problema** (`lib/problem-issues.sh` + `/problems/issues`, aba 🐞 do editor =
   `web/problemas/issues.js`, `moj issues`): loja FORA do pacote em `contests/treino/var/problem-issues/
   <org>/<prob>.json` (dentro do repo a issue mudaria o `pkg_rev` e daria 409 à toa, sumiria no upload e
@@ -817,6 +872,13 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   expõe input+diff de TODOS os testes, então o gate do log/summary usa o valor EFETIVO —
   `SHOWLOG` explícito no conf manda; **ausente = OCULTO em modo icpc** (anti-vazamento de prova)
   e visível nos demais modos. Religar em icpc = o settings POST grava `SHOWLOG=1` explícito.
+- **Regra do veredicto** (`VERDICT_RULE=first` no conf do contest, 09/11/2026; Central › Regras, campo `verdict_rule`
+  do `/contest/admin/settings`, `moj-contest settings set verdict_rule=`): `first` = o do 1º teste que falhou (exemplos
+  primeiro, depois o nome natural) · ausente/`worst` = o do teste mais grave (o de sempre; treino nunca muda). Contest
+  NOVO do modo icpc nasce `first` (`cc_settings_conf_lines`: só `verdict_rule:"worst"` explícito não grava; nos outros modos só `"first"` explícito grava — com STOPWHEN a ordem muda a nota); o export leva sempre a
+  regra (duplicate de antigo continua `worst`). Vai no JOB ao enfileirar (`intake_enqueue` e o gêmeo `spool-drain.py`;
+  rejulgamento passa pelo mesmo intake) → agente (`MOJ_VERDICT_RULE`) → mojtools `build-and-test.sh`. A info sheet diz a
+  regra (`{{VERDICT_RULE}}`), e o preflight `stop_first` muda o porquê. Teste: `smoke-verdict-rule.sh` (+ deprio, preflight).
 - **Veredicto manual** (`MANUAL_VERDICT`, opt-in): o **daemon** (`daemons/judged.sh`) SEGURA o
   veredicto computado (grava `contests/<c>/review/<id>.json`, history fica provisório) SÓ p/ o que
   `auto-verdicts.json` manda p/ revisão — regra **OPT-OUT** desde 25/09/2026 (`lib/review-rules.sh`, fonte
@@ -847,7 +909,10 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `review/conflicts` (o alerta do chefe, a cada 8–12 s por aba) 0,8 s; com o rv_scan, 0,06 s e 0,04 s (81) e
   0,11 s e 0,05 s (500), saída idêntica. Guarda no `smoke-contest-review.sh` (nº de jq por chamada).
   `set-verdict` legado só aceita label/classe
-  da lista. Teste: `smoke-contest-review.sh`. O **voto é permanente e libera o juiz**
+  da lista, e aponta UMA submissão pelo `id` (16/11/2026: a página Avaliar mandava só usuário+problema, o handler
+  inventava um id e respondia `queued`, e o daemon descartava o pedido — "submissão não achada" — desde o corte do
+  store de 04/07; hoje a rota confere a submissão antes de responder: 404/422/409 `submission_pending`; teste de ponta a
+  ponta, com o daemon, em `smoke-set-verdict.sh`). Teste: `smoke-contest-review.sh`. O **voto é permanente e libera o juiz**
   (pega outra na hora); o **alerta é global** (ver "Alerta da organização" abaixo); o painel **Operação › Situação** traz estatística por juiz
   (`review/stats`, derivada do `admin-audit.log`). **Watch do spool = `inotifywait -m`
   PERSISTENTE (coproc) + `read -t`** (03/09/2026): nunca volte ao `inotifywait` de um evento por
@@ -911,7 +976,9 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   A página (`web/contest/clarification/`) separa abertas × respondidas, atualiza EM LUGAR a cada
   30 s (cartão por id, adia se há resposta sendo digitada) e usa `white-space:pre-wrap` — o
   relatório (`report-gen.sh`) já preservava a quebra de linha. Sempre auditar (`audit_log_to`)
-  toda ação de juiz/chefe. Teste: `smoke-contest-clar.sh`.
+  toda ação de juiz/chefe. **Respostas prontas** (09/11/2026, Roberto): `/contest/clarification-canned` (lista em
+  `clarification-canned.json`; sem ela, as 4 do ICPC no `LOCALE`; edita admin/chefe) e botões no editor de resposta
+  que respondem em PRIVADO pelo `clarification-answer` de sempre. Teste: `smoke-contest-clar.sh`.
 - **FIRST-TO-SOLVE SÓ COM CERTEZA** (2026-08-25), no placar E no balão. O `*` do ICPC era o mínimo
   puro dos `first_ac_epoch` e ignorava run pendente: nascia no time errado e MIGRAVA quando o AC
   mais antigo era julgado. Hoje o `updatescore-icpc.sh` retira a estrela do problema enquanto
@@ -949,14 +1016,47 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   "first to solve" na fila e numa faixa da folha A4). A sede sai do `.team.region`; o mapa
   `(sede × problema)` é **uma varredura** (`pr_site_first_map`: `find|xargs jq` sobre account+metrics)
   e só roda quando há candidato. ⚠ A decisão é DIFERIDA: se existe run mais antiga da mesma sede,
-  no mesmo problema, ainda não julgada, a tarefa **espera** (`print-requests/.balloon-hold`, JSONL
-  no molde da lápide do freeze — a varredura do history é incremental, então sem o arquivo o
-  segurado sumiria) por até `BALLOON_FIRST_WAIT_S` (90s) e depois sai **sem** estrela. Nunca se
-  anuncia um primeiro lugar não apurado, e nunca se atrasa um balão por causa de uma run travada
-  de outro time. Por que não "promover depois": no **modo automático** o `autoTick` imprime a
+  no mesmo problema, ainda não julgada (julgando ou na REVISÃO manual), **TODOS os balões do par
+  (sede × problema) esperam** (`print-requests/.balloon-hold`, JSONL no molde da lápide do freeze — a
+  varredura do history é incremental, então sem o arquivo o segurado sumiria; o registro leva `short`,
+  `region` e `pend` = sub_epoch da run que segura). **Sem teto por padrão (09/11/2026, LATAM: 2 de 159
+  pares saíram sem a faixa porque a run antiga estava na revisão).** A VÁLVULA é humana:
+  `/contest/admin/balloon-release` (admin/juiz-chefe) grava o par em `.balloon-release` e os retidos saem
+  **sem** estrela no próximo reconcile (o AC antigo, se vier, ganha a dele — é verdade). `BALLOON_FIRST_WAIT_S=N`
+  no conf volta a pôr teto de N s (`0` = não espera). A espera aparece: `staff/queue` traz `held` (escopo do
+  staff; o admin recebe `problem`/`pend`) — aviso na página do staff, lista com "Liberar sem faixa" em
+  Operação › Staff (alerta > 10 min) — e o `review/list` marca `blocks_balloon` na run que segura (o
+  chefe libera dali). O porteiro espelha o `held`. Nunca se anuncia um primeiro lugar não apurado. Por que não "promover depois": no **modo automático** o `autoTick` imprime a
   folha segundos depois de a tarefa nascer e o `pr_build_balloon` **cacheia o PDF para sempre** —
   a estrela tardia mudaria a tela e nunca o papel. ⚠ Na folha a estrela é **desenhada** (polígono,
   como o balão), nunca o caractere `★`: fonte sem o glifo o imprime como NADA.
+  **PRÉ-GERAÇÃO DA FOLHA (09/11/2026, `pr_pregen_bg`):** a tarefa nasce e a folha (PDF combinado do pedido, folha do
+  balão) já é renderizada por um processo DESTACADO por lote (o molde do `pr_reconcile_balloons_bg`; `9>&-` porque o
+  reconcile chama segurando o `.balloon.lock`), no MESMO cache/flock por tarefa do clique — nunca renderiza duas vezes.
+  Pontos: `/contest/print` (pedido), o lote de balões novos do reconcile e o `pr_test_create`. `PRINT_PREGEN=n` no conf
+  desliga; `MOJ_JOBS_SYNC=1` não pré-gera (salvo `PR_PREGEN_SYNC=1`). ⚠ O render regrava o meta no fim: quem APAGA uma
+  tarefa (o `pr_test_remove`) toma o `<id>.lock` antes, e os builders re-conferem o meta depois do lock — sem isso a
+  tarefa apagada voltava. A claim/impressão (`print-action`) já serializa no mesmo lock. Teste: `smoke-print-pregen.sh`.
+  **FOLHA EM HTML (09/11/2026, PROTÓTIPO, `PRINT_FORMAT=html` no conf — Operação › Staff › 🧾 formato da folha,
+  campo `print_format` do settings e do `/contest/basic`):** `pr_html` monta a folha como HTML A4 (capa + código numerado,
+  ou a folha do balão; o MESMO layout e as MESMAS strings `_pr_t`; estrela em SVG) e `/contest/staff/print-html` a serve
+  com o gate do `print-pdf`; 409 `html_unsupported` (não é texto, ou > 2 MB) = a estação cai no PDF. Custo no servidor
+  ~0,05 s × 1,4–2 s do PDF; a vazão da estação quase não muda (o gap de 3 s do `print()` domina — 8 tarefas em 18 s ×
+  21 s, Chrome, 2 estações). ⚠ A página é aberta de um `blob:` na ORIGEM da página do staff (a do token): tudo do aluno
+  passa por `@html`, a página leva CSP `default-src 'none'` (meta + cabeçalho) e o iframe é `sandbox` sem allow-scripts.
+  No modo html a pré-geração só faz o PDF do pedido que não é texto. Testes: `smoke-print-html.sh`.
+  **TAREFAS DE TESTE (09/11/2026, pedido do Fernando; `lib/print.sh` `pr_test_*`, rota `/contest/staff/test-tasks`,
+  caixa `web/contest/staff/test-box.js` na página do staff e no painel Operação › Staff):** lote falso (impressão de N
+  páginas e/ou balão) pela MESMA cadeia das reais, para medir as impressoras. Id `tst…`, `test:true`, `seq` = `"T<n>"`
+  TEXTO (contador `.test-seq` — o seq real não pula; todo uso de `seq` é textual, menos o `sort_by(-.seq)` do
+  `contest/print.sh`, que só vê tarefa de time), `test_scope` = as sedes do criador (`staff_regions`; [] = todas). Uma
+  regra só de visibilidade, `pr_task_can_see`, na fila, no claim/processed/delivered, no PDF e no arquivo cru.
+  PROIBIDO durante a prova (`pr_test_blocked`: START definido e passado, fim de todas as sedes não; START=0 não
+  bloqueia): o create dá 409 `test_blocked` e a fila APAGA as sobras na 1ª consulta depois do início. O PORTEIRO não
+  serve fila com teste (Decline → bash; o campo `test` está no PICK dos dois). Faixa "TESTE — NÃO ENTREGAR" nas
+  duas folhas (`_pr_test_band`); fora do relatório (`report-gen` staff-tasks); a Central avisa (`print_tests`).
+  Decisões do Ribas: o .staff só a própria sede, o admin qualquer; bloqueado na prova; numeração T. Teste:
+  `smoke-staff-test-tasks.sh`.
   ⚠ **BALÃO × FREEZE (2026-08-20)**: AC com **`sub_epoch >= FREEZE_TIME`** NÃO vira tarefa — o balão
   atravessando a sala conta o que o placar congelado esconde (o vazamento é **físico**, não de rota:
   o competidor nunca recebe balão por API, então não adianta gate de handler). Três invariantes ao
@@ -1084,6 +1184,16 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `Cache-Control: no-cache, must-revalidate` — módulo ESM revalida por ETag a cada uso. Sem isso
   um deploy que muda o CONTRATO (TXT em segundos `icpc s`, 30/08) deixa JS velho no navegador do
   time lendo dado novo. Mudou o `.conf.in` ⇒ reinstalar/recarregar o nginx no deploy.
+- **BALDE DA AUTORIA no nginx** (10/11/2026; LATAM: uma ferramenta em laço sobre `/problems/{tl,calib,status,validation}`,
+  70/min a 1,47 s, ocupava ~3 workers do pool sem teto): `location /api/v1/problems/` segue FORA do `moj_site` (autor
+  terminando problema da prova não leva o 429 do treino), mas com `limit_conn moj_problems_key 6` (por sessão = o
+  `Authorization`; sem ele, o IP), `limit_conn moj_problems_ip 8` (por IP: a chave da sessão é o cabeçalho do cliente; o
+  teto por IP reparte o total entre as origens) e `limit_conn moj_problems 12` (total), com `client_body_timeout 15s`. Zonas no bloco "AUTORIA", IGUAL nos dois
+  `moj-prod*.conf.in`. O editor abre com ≤5 pedidos em paralelo; a CLI (`_api_retry_429`, moj-cli `lib/core.sh`) repete o
+  429 do NGINX (corpo não-JSON) em 1, 2, 4, 8 s — o 429 da API (JSON) nunca — e a WEB também, só na autoria
+  (`timedFetch` do `web/shared/api.js`: `/api/v1/problems/*`, 0,5/1/2/4 s; duas abas do editor abrindo juntas passam de 6;
+  fora da autoria o 429 é o quebra-circuito do contest e quem pola já espera sozinho; teste `smoke-api-retry.gjs.sh`). Teste: `smoke-problems-limit.sh` (nginx de
+  teste com upstream lento); os outros smokes de nginx incluem o bloco.
 - **`/robots.txt` POR HOST** (30/10/2026; robôs eram ~11% dos pedidos, 84% deles nos subdomínios de contest): o `web/`
   é o mesmo em todo host, então a `location = /robots.txt` do `moj-app.conf.in` entrega `web/robots-contest.txt`
   ("Disallow: /") quando `$moj_contest_host` não é vazio e `web/robots.txt` (só `/api/` fora) no site principal.
@@ -1109,6 +1219,14 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   faixa ou fórmula inline: era isso que dava "fácil" na busca e "difícil" na estatística
   (`acceptance_rate` por submissão fica só como número). Pós-deploy: `rm contests/treino/var/.metrics-stamp`
   força o recompute em massa dos metrics (ganha `tries_to_ac`; tocar o conf não basta desde 15/10/2026).
+- **VIRTUAL COM CARA DE CONTEST (10/11/2026; relato: "não achei os tempos-limite"; desenho aprovado)**: abas na
+  `/treino/virtual/` (Prova · Placar · Clarifications & avisos · Minhas submissões · Ajuda); TL por linguagem pelo
+  `web/shared/tl-chips.js` (FONTE ÚNICA dos chips do contest, treino e virtual — mexeu na regra, é lá); editor embutido.
+  Rotas novas, todas com `vr_gate` + `vr_clock` (o relógio da run, lib/virtual.sh): `clarifications` (públicas + avisos +
+  notícias no tempo RELATIVO, cortado no SERVIDOR; depois do fim só com a run terminada), `news-file`, `docs`/`doc` (o
+  publicado com PDF desde a largada; editorial só no fim). O feed leva `freeze_rel` (do `var/freeze-final.json`) e o
+  motor congela os outros até a run terminar. Rota nova do virtual ⇒ entra na matriz do `smoke-virtual-leak.sh`. Testes:
+  `smoke-virtual-contest.sh`, `smoke-virtual-board.gjs.sh`. Doc: `docs/VIRTUAL.md` §5½.
 - **Sorteio com PRIVADOS = opt-in (PR #35, 2026-09-29)**: `include_private=1` nas 5 rotas do banco
   (`/contest/admin/draw`, `/contest/admin/bank?meta=1`, `/treino/contest-create/{draw,tags,collections}`);
   **padrão = só públicos**, porque sortear por tag/coleção pode puxar a prova em elaboração de um colega
@@ -1725,6 +1843,16 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   campo do MEIO desloca −1 todos os seguintes no `GROUPS` de `settings-tab.js` (guarda:
   `smoke-settings-groups.gjs.sh` monta o editor e confere seção por seção). Teste:
   `smoke-submission-access.sh` (parte do conf LEGADO com `SHOWCODE=1`).
+  **O ASSISTENTE DE CRIAÇÃO LEVA TODO CAMPO DO PASSO 5** (16/11/2026; relato de um professor, lista `ta-fac-t4-202602`): o
+  passo Opções é o MESMO `settings-editor.js`, mas o `buildSpec` (`web/treino/criar/criar.js`) escolhe campo a campo o
+  que vai no pedido — linguagens, fuso, regra do veredicto, estilo do balão e juízes da revisão nunca iam (a lista
+  nascia aceitando qualquer linguagem); balões no congelamento vão na seção do módulo `baloes` (desligado = não vão).
+  O `applyExport`/`applyTemplate` trazem os mesmos campos de volta (inclusive `secret`), e a criação passou a aceitar
+  `balloon_style`/`review_judges` (o export/template os levam; o template também passou a guardar o `judges`). Campo
+  novo no editor ⇒ entra em CINCO lugares: `buildSpec` e `applyExport`/`applyTemplate` (web) e, em
+  `lib/contest-create.sh`, a validação do `cc_create`, o `cc_settings_conf_lines`, as variáveis + o jq do export
+  (`cc_export`) e o `pick` do `cc_tpl_relativize`. O `smoke-wizard-spec.gjs.sh` monta o editor de verdade e FALHA com
+  chave do `getValue()` sem caso; o lado do servidor está no `smoke-contest-create.sh`/`smoke-contest-templates.sh`.
 - **`ALLOWLATEUSER`/`allow_late` ("Permitir auto-cadastro de novos usuários (late users)") REMOVIDA em
   2026-09-28**, mesmo molde: era o `adduser` do bot do MOJ antigo (`mojinho.sh`, gitignorado — só o ramo
   morto dele ainda cita a var) e nada a lia desde o store por-usuário — a caixa não fazia nada. Settings POST e criação

@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-JUIZ.md blob:b8d6e4b9f0f66d79dfe606653a03c20461fdb725 -->
+<!-- i18n-source: MANUAL-JUIZ.md blob:80430ed3d50df7a15b6538109129c92dbe266ff4 -->
 # MOJ: Manual de los jueces (.judge y .cjudge)
 
 > **Nota de traducción.** Este manual es una traducción del original en portugués. Las herramientas de línea de comandos (`moj`, `moj-contest`, `moj-comp`) muestran sus mensajes en portugués, y los ejemplos de comandos son idénticos al original.
@@ -55,12 +55,33 @@ Debajo de los contadores está la lista de los envíos retenidos para revisión.
 - **Quién lo está evaluando** (si ya hay alguien).
 - Los **enlaces al registro y a la fuente** (el registro de ejecución y el código enviado).
 - La **acción** disponible (por ejemplo, tomarlo para evaluar).
+- **🎈 retiene un globo — evalúa primero**: este envío es el más antiguo, sin veredicto, de una sede en ese
+  problema. Mientras no se decida, los globos del problema en esa sede esperan (el MOJ todavía no sabe
+  quién fue el primero de la sede). Evalúalo primero. El juez principal ve también el botón **liberar sin
+  franja**: los globos salen enseguida, sin la estrella de primero.
 
 ### Flujo de evaluación, paso a paso
 
 1. **Reservar para evaluar** (*Claim to evaluate* en una competencia en inglés)**.** Haz clic para reservar el envío. Como máximo 2 personas pueden estar en el mismo envío, y tu reserva tiene un tiempo límite de 5 minutos. Al reservarlo, la pantalla cambia a un panel estable, que no se recarga solo mientras trabajas (así no pierdes lo que estás haciendo).
 2. **Analizar.** En el panel tienes todo a mano: el **veredicto calculado** (la referencia), el **registro** de ejecución, el **código** enviado y un selector de veredicto. Dos botones te ayudan: **+5 min** (pide más tiempo, si los 5 minutos no alcanzan) y **Desistir** (suelta el envío para que otra persona lo tome).
 3. **Votar y liberar.** Elige el veredicto en el selector y haz clic para votar. Atención: el **voto es permanente** (no se puede deshacer) y te **libera de inmediato** para tomar la siguiente tarea.
+
+### La página del envío
+
+Cada envío tiene su propia página: `/contest/run/?c=<contest>&id=<id>`. Muestra en una sola pantalla:
+
+- el problema, el lenguaje, la hora y el minuto de la competencia, el veredicto, los puntos y el juez que lo ejecutó;
+- la tabla de las pruebas, con la **primera prueba que falló** marcada (en el orden del nombre de la prueba);
+- el **código con resaltado de sintaxis**, solo lectura, con **📋 Copiar** y **⬇ Descargar**;
+- el **informe** de ejecución, dentro de la página (**↗ Abrir en una pestaña nueva** lo abre aparte).
+
+Cómo llegar:
+
+- En la cola y en **Todos los envíos**, el **id corto** (los 8 primeros caracteres) es un enlace a la página. Para mostrar un envío a otro juez, copia el enlace (**🔗 Copiar enlace**) o dicta el id corto.
+- En el campo **🔗 id del envío**, escribe el id o sus 8 primeros caracteres y haz clic en **Abrir**.
+- Los enlaces **📄 log** y **💻 código** funcionan con el clic central y con "abrir en una pestaña nueva": abren la página del envío. El clic normal en **💻 código** abre el código en una **ventana emergente** con resaltado de sintaxis, en la misma pantalla.
+
+El juez evalúa a ciegas: la página **no** muestra quién envió. Solo el juez jefe y el admin ven al equipo.
 
 ### Dos jueces tienen que coincidir
 
@@ -144,6 +165,7 @@ La franja de aviso de la Parte 1 también avisa al juez principal de cada **conf
 
 - Ver **Todos los envíos** con usuario y equipo (el juez común la ve anónima), con el veredicto crudo.
 - Responder **aclaraciones**. Reserva la pregunta antes de responder. Ves quién preguntó: el usuario y el nombre (el juez común no lo ve). Nadie reserva una pregunta que otro juez ya reservó. Los saltos de línea en la pregunta y en la respuesta se conservan.
+- Editar las **respuestas rápidas** (la caja **✎ Respuestas rápidas** en la pestaña Aclaraciones; el admin también). Son los botones que todo juez ve al reservar una pregunta: un clic responde solo al equipo que preguntó. Lo predeterminado son 4, en el idioma de la competencia: "Sin comentarios.", "Lee el enunciado.", "Sí." y "No.". Escribe una por línea (hasta 20); una lista vacía vuelve a lo predeterminado.
 - Editar las **respuestas y noticias** de la competencia.
 
 ### Calentamiento: lo que solo el juez principal comprueba

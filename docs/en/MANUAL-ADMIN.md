@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ADMIN.md blob:b57d0da3579eca955bd2a183816e520ce3e11970 -->
+<!-- i18n-source: MANUAL-ADMIN.md blob:67a7d27ff583ec7afb2f276bb994c54fa158f626 -->
 # MOJ: Organizer manual (the contest .admin panel)
 
 > **Translation note.** This manual is a translation of the Portuguese original. The command-line tools (`moj`, `moj-contest`, `moj-comp`) print their messages in Portuguese, and the command examples below are identical to the original.
@@ -42,7 +42,7 @@ turn on.
 
 | Block | What it does |
 |---|---|
-| **🚦 Before you start** | The pre-contest checklist (green/yellow/red), with a **button that opens the exact panel** of each open item. Red is **critical**: check it before the start. The checklist is only a warning. MOJ does not block login or submissions because of it. The items that are already correct stay collapsed. It checks the window, the judging log, the freeze, the judges, the languages, the calibrated TL, the pool, the accounts, the staff and the daemon. It checks if a problem of an ICPC contest **keeps judging after the 1st failure** (*Judging stops at the 1st failure*: the TLE of a problem with hundreds of tests takes minutes — tick "stop at first" TLE/WA in the Limits tab of the problem editor). It also checks if **each judge has already calibrated each problem** (*Judges warmed up*). The time limit is measured per machine. A judge that did not calibrate a problem yet does it on the 1st submission of that problem, and that submission waits for minutes. When a judge is cold, the item shows the **🔥 Warm up judges** button, which tells only the cold judges to calibrate. Do this **before the start** (each calibration uses one slot of the judge for some minutes). Then run the checklist again (↻) to see "warming up" change to "warmed up". The same button is also always in **Operation › Status**, and, in a contest with the **Contest** priority (or Super), the warm-up also runs **by itself**: when a round is promoted and about 15 minutes before the start of each round (it goes to the audit as `warm-judges`). A class list has only the button. **Only with the module on**, it also checks cohorts, browser gate, site lock, next round, documents, balloons and extensions. The **modules** check warns when a module is off but the contest has data for it. *No freeze* and *shared accounts* are a warning only in a contest with the **Contest** priority (in a list they are normal). |
+| **🚦 Before you start** | The pre-contest checklist (green/yellow/red), with a **button that opens the exact panel** of each open item. Red is **critical**: check it before the start. The checklist is only a warning. MOJ does not block login or submissions because of it. The items that are already correct stay collapsed. It checks the window, the judging log, the freeze, the judges, the languages, the calibrated TL, the pool, the accounts, the staff and the daemon. It checks if a problem of an ICPC contest **keeps judging after the 1st failure** (*Judging stops at the 1st failure*: the TLE of a problem with hundreds of tests takes minutes — tick "stop at first" TLE/WA in the Limits tab of the problem editor). It checks if the **TL has headroom** (*TL has headroom*: the effective TL of each calibrated problem against the worst time of the correct solutions; below 1.6× a correct solution can get a TLE when the judge is full of programs that use a lot of memory — add headroom with `TLOVERRIDE` or a larger `TLMOD[calibrafactor]`). It also checks if **each judge has already calibrated each problem** (*Judges warmed up*). The time limit is measured per machine. A judge that did not calibrate a problem yet does it on the 1st submission of that problem, and that submission waits for minutes. When a judge is cold, the item shows the **🔥 Warm up judges** button, which tells only the cold judges to calibrate. Do this **before the start** (each calibration uses one slot of the judge for some minutes). Then run the checklist again (↻) to see "warming up" change to "warmed up". The same button is also always in **Operation › Status**, and, in a contest with the **Contest** priority (or Super), the warm-up also runs **by itself**: when a round is promoted and about 15 minutes before the start of each round (it goes to the audit as `warm-judges`). A class list has only the button. **Only with the module on**, it also checks cohorts, browser gate, site lock, next round, documents, balloons and extensions. The **modules** check warns when a module is off but the contest has data for it. *No freeze* and *shared accounts* are a warning only in a contest with the **Contest** priority (in a list they are normal). |
 | **🧰 Generate** | One card per artifact, with the current state. Always: credential badges, contest report and jplag (jplag also opens for the chief judge, who can run it, and for the judge, who can only see it). With the module: documents (`documentos`), promote round (`rodadas`), reveal ceremony and big screen (`telao`). |
 | **📡 Live** | A short summary (pending, submissions, online judges, p95 response, manual review). It refreshes automatically. The full panel is **Operations › Status**. |
 | **⏱️ Contest rules** | Start, end and freeze, which you can edit there. The mode and the languages, read-only. The **modules that are on** (with a shortcut to turn them on/off). All other options are in **Home › Rules**. |
@@ -111,7 +111,7 @@ contest offers it). If the problem has no title in that language, MOJ uses the P
 | Panel | What it does |
 |---|---|
 | **Status** | The live dashboard (it refreshes in place every ~12 s): logged-in users, online/busy judges, queue, pending, latency, timeline, manual evaluation, the **suggested actions** when something is wrong and the **🔥 Warm up judges** button. Pending/held balloons only with the `baloes` module. |
-| **Staff** | Overview of the print queue, and actions on it (+ balloons with the module). Performance per staff member, and the **scope** of each staff member / site chief (regex or `region:<site>`). `region:<name>` covers everything that is **in that node** of Event › Sites & schools: the site and, if it is a parent node, all the sites below it (`region:Nordeste` sees the sites of Nordeste), and also a cut (`view`) by its name. The site stored on the team applies or, without it, the regex. A regex in the scope is tested on the login. |
+| **Staff** | Overview of the print queue, and actions on it (+ balloons with the module). Performance per staff member, and the **scope** of each staff member / site chief (regex or `region:<site>`). `region:<name>` covers everything that is **in that node** of Event › Sites & schools: the site and, if it is a parent node, all the sites below it (`region:Nordeste` sees the sites of Nordeste), and also a cut (`view`) by its name. The site stored on the team applies or, without it, the regex. A regex in the scope is tested on the login. Below, the **🧪 printer test** and the **🧾 sheet format**: PDF (as always, built on the server and ready when the task is created) or HTML in the station browser (experimental, much lighter for the server; a request that is not text stays in PDF). Measure it with a test batch in each format before you use HTML in a contest. |
 | **Judges** | The manual review queue: who claimed each submission, votes, age. Decide/resolve immediately. It also has the manual verdict configuration: the label options and **🔎 What goes to review**. This is a problem × verdict table: a checked cell goes to the judges, and the rest goes out automatically. With no cell checked, everything goes out automatically. The table has exceptions per language, and a button to release the held submissions that the new table no longer holds. |
 | **Audit** | A unified feed of all events (admin actions, logins, submissions, verdicts) with filters and CSV. It also has the **backups** that the users uploaded (per user, with ZIP). |
 
@@ -144,6 +144,15 @@ contest offers it). If the problem has no title in that language, MOJ uses the P
 > balloons that were already held**. The pre-contest checklist shows which policy applies, and
 > **Operations › Status** shows how many balloons are held.
 
+> **Balloons waiting for the first at the site.** A balloon has the first-at-the-site star only when
+> this is certain: if another team of the site submitted earlier and that submission has no verdict yet
+> (being judged or in manual review), **all the balloons of the problem at that site wait**, with no
+> time limit. **Operations › Staff** lists the held pairs (site, problem, how many, for how long and the
+> submission that holds them), with an alert after 10 minutes. Usually you decide the submission in the
+> judge queue (it has a 🎈 mark). If it cannot be decided now, click **Release without band** (twice, to
+> confirm): the balloons come out without the star. The chief judge can also release them, in the judge
+> queue.
+
 > **How the scoreboard marks who solved a problem.** By default, the cell of a team that solved a
 > problem is **always the same** (green), and the balloon color is in a **dot** next to it. This is
 > intentional. The ICPC palette gives problem A the color **white**, and white on the white
@@ -152,6 +161,19 @@ contest offers it). If the problem has no title in that language, MOJ uses the P
 > style (the full cell painted with the balloon color), set it in **Home › Rules › "Solved" cell
 > on the scoreboard**. Light colors get an outline so that they stay visible. This applies to the
 > scoreboard, the reveal ceremony and the report.
+
+> **Which verdict the team gets.** When a submission fails more than one test, the contest rule
+> decides which error counts. In **Home › Rules › Which verdict the team gets**:
+> - **The first failing test** (the default of a new ICPC contest, the ICPC rule): the samples are judged
+>   first, then the other tests by name, and the first error counts. A team that fails the sample
+>   gets the error of the sample.
+> - **The most severe test** (the old MOJ rule; the contests created before 2026-11-09 keep it): the
+>   worst error among all tests counts (TLE/MLE, then RE, then WA). It is also the default of a new
+>   contest in the other modes (OBI, training, heuristic): there the score is what counts and, in a
+>   problem that stops at the first error, the order of the tests changes the score.
+>
+> The change applies to the judgings and rejudgings done after you save. To apply the new rule to
+> old submissions, rejudge them.
 
 Outside the panel, but linked from Home: **credential badges**, **reveal ceremony**, **jplag**,
 **staff queue** and **scoreboard**.
@@ -308,6 +330,15 @@ privileged accounts on purpose.
 | **Staff (room staff)** | `.staff` | The **🖨️ print and balloons** queue (claim/print/deliver, automatic kiosk mode). | See problems or submit (never); badges; scoreboard without freeze. |
 | **Site chief** | `.cstaff` | Follow the staff queue of the site (read-only). **Badges** with the credentials of the competitors and of the **`.staff`** of the site (with password, except in a contest that uses the training accounts: there the password is personal and does not go on the badge; the credential of the site chief also never goes on a badge). The **🎥 big screen** of the site and the **🏆 reveal by site** after the end. | Act on the print queue; see problems/submit; does not inherit `.staff`. |
 | **Monitor** | `.mon` | Submit DURING the contest (without appearing on the scoreboard), **answer clarifications**, All Submissions and Statistics. | See the problems before the start; manual review. |
+| **Photos** | `.foto` | On the **🎥 big screen** page, upload and replace the **photo** of the teams in its scope (one file, in a batch or in a `.zip`). | Music; webcast keys; see the problems or submit; unfrozen scoreboard. |
+| **Music** | `.musica` | The same, for the **music** of the teams in its scope. | Photos; the rest, as `.foto`. |
+| **Systems** | `.sistemas` | **🖥 Machines** of the sites in its scope: the overview, the commands, lock and unlock screens, and **release** an IP pinned by the site lock. | Machines of another site; turn the lock on or off; see the problems or submit. |
+| **Director** | `.diretor` | The **scoreboard WITHOUT freeze**, during the whole contest, **of its subset only** (region, country or site), with the position and the first-to-solve ★ recomputed inside the subset. | See the other teams; see the problems or submit; badges, queue, statistics. |
+
+The four roles above have a **scope**: in **Operations › Staff › Scope of the role accounts**, tell which sites,
+countries or regions each login sees (`region:<name>`, one per line). **Without a scope, they see nobody** — unlike
+`.staff` and `.cstaff`, which see everybody without a scope. The server always makes the cut.
+The roles come from a single registry (`server/etc/roles.tsv`): suffix, class and what each one can do.
 
 Golden rule: **no account with a role suffix goes to the scoreboard or to the statistics**. Create
 as many as you need: they do not change the result.
@@ -613,6 +644,26 @@ MOJ refuses to publish the report when it would show what is not public yet:
 - **With a PRIVATE cohort and the results not released.** The report shows all the teams. This also applies to
   the report of an archived round. Release the results in Event › Cohorts.
 
+**Disqualify who did not log in** (People › Accounts › the **🚫 Disqualify who did not log in** card; in the CLI,
+`moj-contest -c <contest> users absent`). Removes from the scoreboard and the statistics, in one go, the teams that did
+not take part:
+
+- **Who goes:** a team with no login from 1 hour before the login opens until the end of the contest (for all sites)
+  **and** with no submission. A team that submitted never goes, even with no recorded login. A warm-up login does not
+  count.
+- **Who stays:** teams in a **published** classification stage, teams that were already disqualified, and role
+  accounts.
+- **Preview** shows the window used, the counts and the list, with the last login of each team, and changes nothing.
+  The **Disqualify N teams** button confirms. If the list changed since the preview, the panel shows the new list and
+  asks again.
+- It works at any time. With the contest still running, the window goes up to now, and a team that logs in later will
+  already be disqualified.
+- Each click becomes a **batch**, listed in the card with date and author. **Undo** brings the whole batch back, except
+  the teams that you disqualified or brought back by hand afterwards. Everything goes to the Audit.
+- It is the same disqualification as for one account: the account, the password and the history stay. If the report
+  was already published, publish it again. The frozen scoreboard kept by **Finish event** does not change: it is the
+  record of what was shown during the contest.
+
 ## 6¾. Virtual participation (Event › Virtual — module `virtual`)
 
 After the contest ends, any Free Training account can **do the contest again one time**, in its
@@ -652,6 +703,24 @@ accounts. A contest that must not be seen from outside must not turn on this mod
   The **give attempt back** button deletes the row and lets that account start again in this
   contest. Use it for a tester, or for a person who had a problem during the contest. This action
   is also audited.
+
+**What the participant sees of the contest.** The page looks like the contest (tabs Contest · Scoreboard ·
+Clarifications & notices · My submissions · Help), and the server releases each item at the **relative time** of the
+participation:
+
+- the statements, with the **time limit per language**: the one that judges the virtual submission, that is, the
+  training one now (if the problem was recalibrated after the contest, it can differ from the time limits sheet);
+- the **documents published** in Event › Documents (problem set, judging environment, time limits) from the start;
+  the **editorial** and the **external links** of the Resources, only when the participation ends;
+- the **clarifications answered in public**, the **official notices** and the **news**, each one at the contest minute
+  when it came out (what came out after the end, only when the participation ends). A private question never shows,
+  and the participant does not ask: nobody would answer. An **edited** notice or news item counts from the time of the
+  edit;
+- the **scoreboard freezes** at the same minute as the contest freeze (**Finish event** keeps that minute) and unfreezes
+  when the participation ends.
+
+What you publish or edit after the contest also reaches whoever does the virtual later. Do not publish there what must
+not be seen.
 
 **Participant rule** (the participant reads it before the start): one participation per account.
 The participant can give up without a record in the first 15 minutes, or while he or she has no
@@ -822,7 +891,11 @@ a warning and shows only the sessions and the access log.
   competitor gets 403 `login_disabled`; the organization gets in). **Log out competitors**, **staff
   and site chiefs** or both (never admin, judges, chief judge, monitor or big screen). Promote the
   round in Event › Rounds. Then **reopen login** when the teams can get in. Each ended session
-  becomes an event in the timeline; the action goes to the audit (`logout-all`).
+  becomes an event in the timeline; the action goes to the audit (`logout-all`). Warning: a login
+  closed here comes back only when someone clicks **Reopen login**. The scheduled opening (the login
+  opening or the start of the round) does **not** reopen it. While the login is closed, the screen
+  shows the opening time in a warning, and the pre-contest checklist turns red 1 h before it (LATAM
+  2026: 408 logins were refused until someone reopened it).
 - **🔒 Site lock**: the IPs pinned to this contest (logins, blocks, until when), the recorded
   blocks (when, IP, target, route, session) and the **release** and **🔒 Pin IPs already seen**
   buttons. The "lock blocks" card and the 🔒 events of the timeline come from the audit. Section 7

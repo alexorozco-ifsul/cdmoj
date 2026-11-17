@@ -695,15 +695,16 @@ q_reconcile() {
 # Modelo cache: o servidor mantém o store dos pacotes e indexa; o juiz baixa o pacote
 # por problema, CALIBRA e reporta o TL. "update problems" = pedir calibração dos
 # problemas novos/alterados. O pedido vira um marcador entregue a UM worker livre.
-upd_request() {  # $1=repo $2=requested_by [$3=note] [$4=kind] [$5=target] -> ecoa o reqid
+upd_request() {  # $1=repo $2=requested_by [$3=note] [$4=kind] [$5=target] [$6=objeto JSON extra] -> ecoa o reqid
   # kind ∈ {calibrate,index,update}; target = problem_id. calibrate = juiz roda o
   # calibreitor no cache e reporta o TL (kind=index/update são legados: o servidor indexa).
   mkdir -p "$UPDATESDIR/pending" 2>/dev/null
   local reqid; reqid="$(printf '%s%s%s' "$1" "$EPOCHSECONDS" "$RANDOM" | md5sum | cut -c1-16)"
   local tmp="$UPDATESDIR/pending/.$reqid.tmp"
+  local extra="${6:-}"; [[ -n "$extra" ]] || extra='{}'
   jq -cn --arg id "$reqid" --arg r "$1" --arg by "${2:-?}" --arg n "${3:-}" \
-     --arg kind "${4:-update}" --arg target "${5:-}" --argjson now "$EPOCHSECONDS" \
-     '{reqid:$id, repo:$r, requested_by:$by, note:$n, kind:$kind, target:$target, requested_at:$now}' > "$tmp" \
+     --arg kind "${4:-update}" --arg target "${5:-}" --argjson now "$EPOCHSECONDS" --argjson x "$extra" \
+     '$x + {reqid:$id, repo:$r, requested_by:$by, note:$n, kind:$kind, target:$target, requested_at:$now}' > "$tmp" \
      && mv -f "$tmp" "$UPDATESDIR/pending/$reqid.json"
   printf '%s' "$reqid"
 }
@@ -735,14 +736,27 @@ upd_find_calibrate() {
 # MESMO problema, devolve o reqid EXISTENTE em vez de criar outro job — re-disparar "Calibrar"
 # (ou publicar em massa) nunca multiplica jobs nem entope os slots dos juízes. Checagem+criação
 # sob o MESMO lock do upd_claim p/ não haver janela entre dois pedidos simultâneos.
+# [$4=1] = calibração INCREMENTAL (opt-in, 10/11/2026): o pedido leva `reuse:true` e o juiz só roda as soluções cuja
+# chave mudou (mojtools calibreitor, MOJ_CALIB_REUSE). No DEDUP, "rodar tudo" VENCE: pedido sem reuse sobre um pendente
+# com reuse tira o reuse dele (o autor pediu explicitamente para rodar tudo); com reuse sobre um sem, fica sem.
 cal_request() {
   mkdir -p "$UPDATESDIR/pending" 2>/dev/null
   (
     flock 9 || exit 1
     local ex; ex="$(upd_find_calibrate "$2" pending)"
-    if [[ -n "$ex" ]]; then printf '%s' "$ex"
+    if [[ -n "$ex" ]]; then
+      [[ "${4:-0}" == 1 ]] || _req_drop_reuse "$UPDATESDIR/pending/$ex.json"
+      printf '%s' "$ex"
+    elif [[ "${4:-0}" == 1 ]]; then upd_request "$1" "$3" "calibrate $2" calibrate "$2" '{"reuse":true}'
     else upd_request "$1" "$3" "calibrate $2" calibrate "$2"; fi
   ) 9>"$UPDATESDIR/.lock"
+}
+# _req_drop_reuse <arquivo de pedido> — tira o `reuse` (troca atômica; ausente/sem o campo = nada)
+_req_drop_reuse() {
+  local f="$1" t
+  [[ -f "$f" ]] && jq -e '.reuse == true' "$f" >/dev/null 2>&1 || return 0
+  t="$f.tmp.${BASHPID}"
+  jq -c 'del(.reuse)' "$f" > "$t" 2>/dev/null && [[ -s "$t" ]] && mv -f "$t" "$f" || rm -f "$t"
 }
 # idx_request <repo> <problem_id> <by> : pede VALIDAÇÃO+INDEX (publish).
 idx_request() { upd_request "$1" "$3" "index $2" index "$2"; }
@@ -913,14 +927,15 @@ upd_inprogress_kind_count() { local n
 # Diferente de update/job (que QUALQUER juiz pega): comando é entregue a UM host específico
 # no heartbeat dele. Uso: gerência de cache (limpar) pelo admin.
 : "${CMDDIR:=$RUNDIR/commands}"
-cmd_request() {  # <host> <action> [by] [problem-id] -> ecoa o cmdid
-  local host="$1" action="$2" by="${3:-?}" target="${4:-}" cmdid tmp
+cmd_request() {  # <host> <action> [by] [problem-id] [objeto JSON extra] -> ecoa o cmdid
+  local host="$1" action="$2" by="${3:-?}" target="${4:-}" extra="${5:-}" cmdid tmp
+  [[ -n "$extra" ]] || extra='{}'
   valid_hostname "$host" || return 1
   mkdir -p "$CMDDIR/$host" 2>/dev/null
   cmdid="$(printf '%s%s%s' "$host" "$EPOCHSECONDS" "$RANDOM" | md5sum | cut -c1-12)"
   tmp="$CMDDIR/$host/.$cmdid.tmp"
-  jq -cn --arg id "$cmdid" --arg a "$action" --arg by "$by" --arg t "$target" --argjson now "$EPOCHSECONDS" \
-     '{cmdid:$id, action:$a, by:$by, at:$now} + (if $t=="" then {} else {id:$t} end)' > "$tmp" && mv -f "$tmp" "$CMDDIR/$host/$cmdid.json"
+  jq -cn --arg id "$cmdid" --arg a "$action" --arg by "$by" --arg t "$target" --argjson now "$EPOCHSECONDS" --argjson x "$extra" \
+     '$x + {cmdid:$id, action:$a, by:$by, at:$now} + (if $t=="" then {} else {id:$t} end)' > "$tmp" && mv -f "$tmp" "$CMDDIR/$host/$cmdid.json"
   printf '%s' "$cmdid"
 }
 cmd_claim_urgent() {  # <host> : reivindica 1 comando URGENTE (kill|restart), deixando os demais.
@@ -937,6 +952,28 @@ cmd_claim_urgent() {  # <host> : reivindica 1 comando URGENTE (kill|restart), de
       [[ "$a" == kill || "$a" == restart ]] || continue
       cat "$f"; rm -f "$f"; exit 0
     done < <(find "$CMDDIR/$host" -maxdepth 1 -name '*.json' 2>/dev/null | sort)
+  ) 9>"$CMDDIR/$host/.lock"
+}
+# cmd_calibrate_request <host> <by> <id> <reuse 0|1> -> "<status>\t<cmdid>" (status queued|already_queued): o pedido de
+# calibração DIRIGIDO, com o dedup e o "rodar tudo vence" (_req_drop_reuse) SOB A TRAVA do host — a mesma do cmd_claim.
+# Fora dela (revisão de 10/11/2026) o juiz podia pegar o comando entre a busca e a troca: o "rodar tudo" respondia
+# already_queued e o juiz rodava só a ♻.
+cmd_calibrate_request() {
+  local host="$1" by="$2" id="$3" reuse="${4:-0}"
+  valid_hostname "$host" || return 1
+  _mkd "$CMDDIR/$host"
+  (
+    flock -w "${CMD_LOCK_WAIT:-10}" 9 || exit 1
+    local cid rx='{}'
+    cid="$(cmd_find_calibrate "$host" "$id")"
+    if [[ -n "$cid" ]]; then
+      [[ "$reuse" == 1 ]] || _req_drop_reuse "$CMDDIR/$host/$cid.json"
+      printf 'already_queued\t%s' "$cid"
+    else
+      [[ "$reuse" == 1 ]] && rx='{"reuse":true}'
+      cid="$(cmd_request "$host" calibrate "$by" "$id" "$rx")" || exit 1
+      printf 'queued\t%s' "$cid"
+    fi
   ) 9>"$CMDDIR/$host/.lock"
 }
 cmd_claim() {  # <host> : reivindica 1 comando pendente do host (ecoa + remove), atômico.

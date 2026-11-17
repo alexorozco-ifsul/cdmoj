@@ -3,7 +3,7 @@
 # promover, reabrir quando os times puderem entrar.
 #   GET  → {login_enabled, sessions:{competitors, staff, privileged}}
 #   POST {scope:"competitors"|"staff"|"all", close_login?:true, open_login?:true}
-#      scope competitors = toda conta que NÃO é de papel; staff = .staff + .cstaff; all = os dois.
+#      scope competitors = toda conta que NÃO é de papel; staff = a classe `sala` do registro (server/etc/roles.tsv: .staff .cstaff .foto .musica .sistemas); all = os dois.
 #      NUNCA derruba .admin/.judge/.cjudge/.mon/.animeitor (quem opera a prova). Cada sessão
 #      removida vira linha `logout` em var/session-events.log (com quem mandou); a ação vai ao
 #      audit (`logout-all scope= competitors= staff= login=`). close_login grava LOGIN_ENABLED=n
@@ -16,7 +16,8 @@ require_auth_contest "$contest"
 is_admin || fail 403 "Apenas o admin do contest" "admin_required"
 
 _cls(){ # <login> -> competitor | staff | privileged
-  case "$1" in *.admin|*.judge|*.cjudge|*.mon|*.animeitor) printf privileged;; *.staff|*.cstaff) printf staff;; *) printf competitor;; esac; }
+  # a CLASSE do registro (server/etc/roles.tsv): org = organização (nunca sai em massa), sala = a equipe da sala
+  case "$(role_class "$1")" in org) printf privileged;; sala) printf staff;; *) printf competitor;; esac; }
 _login_enabled(){ [[ "$(conf_value "$contest" LOGIN_ENABLED)" != n ]]; }
 
 if [[ "$REQUEST_METHOD" == GET ]]; then
@@ -48,8 +49,11 @@ if [[ "$REQUEST_METHOD" == GET ]]; then
   le=false; _login_enabled && le=true
   # a abertura do login (LOGIN_START_TIME) também fecha a porta p/ os times — a pílula dizia "ABERTO" antes dela
   ls_at="$(conf_value "$contest" LOGIN_START_TIME)"; ls_at="${ls_at//[^0-9]/}"; ls_at="${ls_at:-0}"
-  ok_json '{login_enabled:$le, login_start:$ls, login_open_now:($le and ($ls == 0 or $ls <= now)), sessions:{competitors:$c, staff:$s, privileged:$p}}' \
-    --argjson le "$le" --argjson c "$nc" --argjson s "$ns" --argjson p "$np" --argjson ls "$ls_at"
+  # `start` (o início da rodada ativa): com o login FECHADO à mão, a tela diz que a abertura (login_start ou start) NÃO
+  # o reabre — LATAM 07/11/2026, 408 logins recusados na abertura até alguém reabrir
+  st_at="$(conf_value "$contest" CONTEST_START)"; st_at="${st_at//[^0-9]/}"; st_at="${st_at:-0}"
+  ok_json '{login_enabled:$le, login_start:$ls, start:$st, login_open_now:($le and ($ls == 0 or $ls <= now)), sessions:{competitors:$c, staff:$s, privileged:$p}}' \
+    --argjson le "$le" --argjson c "$nc" --argjson s "$ns" --argjson p "$np" --argjson ls "$ls_at" --argjson st "$st_at"
   exit 0
 fi
 

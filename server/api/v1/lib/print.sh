@@ -13,6 +13,7 @@
 #                        (vazio/ausente = vê tudo; escopa fila, etiquetas e cerimônia)
 
 # --- localização / flags --------------------------------------------------
+declare -F role_suffix_to >/dev/null || source "${BASH_SOURCE[0]%/*}/roles.sh"   # o registro dos papéis (ROLE_RE)
 pr_dir() { printf '%s' "$CONTESTSDIR/$1/print-requests"; }
 
 # _pr_role_accounts <usersdir> <glob> — TSV "login\tfullname\tdisabled" das contas de papel
@@ -73,14 +74,14 @@ print_enabled() {
   [[ "$( . "$CONTESTSDIR/$1/conf" 2>/dev/null; printf '%s' "${PRINT:-}")" != 0 ]]
 }
 
-# logins .staff ∪ .cstaff (únicos), um por linha: "login\tfullname\tdisabled(true|false)".
-# É a lista de CHAVES válidas do staff-filters — o admin escopa os dois papéis por aqui.
+# logins dos papéis COM ESCOPO (registro server/etc/roles.tsv, coluna escopo=sim: .staff .cstaff .foto .musica .sistemas
+# .diretor), únicos, um por linha: "login\tfullname\tdisabled(true|false)". É a lista de CHAVES válidas do
+# staff-filters — o admin escopa todos eles no mesmo editor (Operação › Staff).
 # Só contas LOCAIS (28/09/2026): num contest compartilhado, conta de papel do treino não entra mais
 # (lib/auth.sh _shared_role_ok) — listá-las aqui mostraria chefes de sede fantasmas no escopo e nas etiquetas.
 pr_staff_logins() {
-  local c="$1"
-  { _pr_role_accounts "$CONTESTSDIR/$c/users" '*.staff'
-    _pr_role_accounts "$CONTESTSDIR/$c/users" '*.cstaff'
+  local c="$1" g
+  { while IFS= read -r g; do _pr_role_accounts "$CONTESTSDIR/$c/users" "$g"; done < <(role_glob_scoped)
   } | awk -F'\t' '!seen[$1]++'
 }
 
@@ -137,6 +138,19 @@ staff_can_see() {  # <c> <staff_login> <student_login>
           else (try ($wl|test($r;"i")) catch false) end)
       end
   ' "$f" >/dev/null 2>&1
+}
+
+# staff_can_act <c> <staff_login> <student_login> — pode MEXER neste time (gravar/apagar a foto, a música)? A
+# MESMA regra do staff_can_see, mas FALHA FECHADO: sem escopo configurado para <staff_login> (arquivo ausente,
+# entrada ausente ou lista vazia) a resposta é NÃO. A leitura segue no staff_can_see (sem escopo = vê tudo); a
+# ação que muda o time de alguém exige a sede definida. Admin pode sempre.
+staff_can_act() {
+  local f
+  is_admin && return 0
+  f="$(pr_dir "$1")/staff-filters.json"
+  [[ -s "$f" ]] || return 1
+  jq -e --arg s "$2" '(.[$s] // []) | type == "array" and length > 0' "$f" >/dev/null 2>&1 || return 1
+  staff_can_see "$@"
 }
 
 # staff_visible_logins <c> <login> — ecoa (1/linha) os logins de aluno que <login> enxerga,
@@ -215,6 +229,77 @@ pr_filter_board() {
             close(VF); next }
     { u=$ucol; if (ucol==0 || (u in V)) print }'
   rm -f "$vis"
+}
+
+# pr_filter_board_subset <c> <login> — o placar (stdin, TXT) do .DIRETOR (09/11/2026): SÓ as linhas do escopo dele,
+# FALHA FECHADO (sem escopo, ou escopo que não casa ninguém = só o modo e o cabeçalho, nunca o placar inteiro), com a
+# ★ de first-to-solve RECALCULADA dentro do recorte (menor tempo de AC entre as linhas que ficam; empate = as duas). A
+# posição sai certa sozinha: o TXT não tem coluna de posição, o front numera na ordem — e a ordem se mantém.
+# CERTEZA (docs/SCOREBOARD.md "A estrela só pinta com CERTEZA"): o TXT não diz qual run ainda está pendente; se o
+# placar completo RETEVE a ★ de um problema (há AC e nenhuma ★ na coluna — uma run mais antiga em julgamento), o
+# recorte também retém. Conservador: nunca pinta um primeiro lugar que o placar inteiro ainda não afirmou. E, dentro do
+# recorte, a regra do updatescore-icpc: run NÃO JULGADA de um time do escopo enviada até o melhor AC do recorte segura a ★
+# daquele problema (a pendência vem do metrics.json das contas do escopo; revisão de 10/11/2026).
+# Só o modo icpc tem ★ (célula `tent/tempo*`); outro modo só recorta.
+pr_filter_board_subset() {
+  local c="$1" who="$2" vis pend d="$CONTESTSDIR/$1"
+  vis="$(mktemp)" || return 1; pend="$vis.pend"
+  staff_visible_logins "$c" "$who" > "$vis" 2>/dev/null || : > "$vis"      # sem escopo = NINGUÉM (falha fechado)
+  # ★ COM CERTEZA DENTRO DO RECORTE (revisão de 10/11/2026): a regra do updatescore-icpc (sem estrela enquanto houver
+  # run NÃO JULGADA mais antiga que o melhor AC) aplicada aos times do recorte — a ★ global certa não diz nada sobre
+  # o 2º melhor, que é quem ganha a ★ do recorte. A pendência sai do metrics.json de cada conta do escopo (visão
+  # SEM freeze, a do .diretor): P <k> <id canônico> (a ordem do PROBS = a das colunas), S <início>, M <id> <epoch>
+  # (-1 = metrics velho sem o campo: desconhecido ⇒ segura, como lá).
+  ( PROBS=(); CONTEST_START=0; source "$d/conf" >/dev/null 2>&1
+    s="${CONTEST_START:-0}"; [[ "$s" =~ ^[0-9]+$ ]] || s=0
+    k=0; for ((i=0; i<${#PROBS[@]}; i+=5)); do cn="${PROBS[i+4]:-}"; [[ "$cn" == *"#"* ]] || cn="${PROBS[i+1]//\//#}"
+      printf 'P\t%s\t%s\n' "$k" "$cn"; k=$((k+1)); done
+    printf 'S\t%s\n' "$s"
+    while IFS= read -r l; do [[ -n "$l" && -f "$d/users/$l/metrics.json" ]] && printf '%s\0' "$d/users/$l/metrics.json"; done < "$vis" \
+      | xargs -0 -r jq -r '(.by_problem // {}) | to_entries[] | select(.value.pending == true)
+          | ["M", .key, (if (.value | has("pending_min_epoch")) then (.value.pending_min_epoch // 0) else -1 end)] | @tsv' 2>/dev/null
+  ) > "$pend"
+  awk -F: -v VF="$vis" '
+    NR == FNR { split($0, a, "\t")
+                if (a[1] == "P") K[a[3]] = a[2]
+                else if (a[1] == "S") st = a[2] + 0
+                else if (a[1] == "M" && (a[2] in K) && a[3] + 0 != 0) { e = a[3] + 0; if (e < 0) e = 1
+                  if (!((K[a[2]]) in pe) || e < pe[K[a[2]]]) pe[K[a[2]]] = e }
+                next }
+    FNR==1 { print; split($0, md, " "); icpc = (md[1] == "icpc"); secs = (md[2] == "s"); next }
+    FNR==2 { print
+            m=0; while (m<NF && (tolower($(m+1))=="desc" || tolower($(m+1))=="asc")) m++
+            ucol=0; tcol=0
+            # as colunas `desc`/`asc` do cabeçalho NÃO existem nas linhas (docs/SCOREBOARD.md): índice da linha = i - m
+            for (i=m+1; i<=NF; i++) { h=tolower($i); if (h=="username") ucol=i-m; if (h=="total") { tcol=i-m; break } }
+            # colunas de problema: entre o cabeçalho de identificação e o Total (as que não são campo conhecido),
+            # na ordem do PROBS: a k-ésima coluna de problema é o problema k
+            np=0
+            for (i=m+1; i<m+tcol; i++) { h=tolower($i)
+              if (h!="flag" && h!="username" && h!="univ short" && h!="team name" && h!="univ full") { P[i-m]=1; PK[i-m]=np++ } }
+            while ((getline l < VF) > 0) if (l != "") V[l]=1
+            close(VF); next }
+    ucol && ($ucol in V) {
+      n++; L[n]=$0
+      if (icpc) for (i in P) { cell=$i
+        if (cell ~ /\*$/) had[i]=1
+        sub(/\*$/, "", cell)
+        if (cell ~ /^[0-9]+\/[0-9]+$/) { t=substr(cell, index(cell, "/")+1)+0; if (!(i in best) || t < best[i]) best[i]=t }
+      }
+      next }
+    ucol && $0 != "" { for (i in P) if ($i ~ /\*$/) had[i]=1 }      # ★ fora do recorte também conta como "afirmada"
+    END {
+      # dúvida em aberto no recorte: pendente do escopo enviado ATÉ o melhor AC do recorte (mesma unidade do TXT)
+      for (i in best) if ((PK[i]) in pe) { r = pe[PK[i]] - st; if (!secs) r = int(r / 60); if (r <= best[i]) delete had[i] }
+      for (k=1; k<=n; k++) {
+        if (!icpc) { print L[k]; continue }
+        nf = split(L[k], f, ":"); out=""
+        for (i=1; i<=nf; i++) { cell=f[i]
+          if (i in P) { sub(/\*$/, "", cell)
+            if ((i in had) && cell ~ /^[0-9]+\/[0-9]+$/ && substr(cell, index(cell, "/")+1)+0 == best[i]) cell = cell "*" }
+          out = out (i>1 ? ":" : "") cell }
+        print out } }' "$pend" -
+  rm -f "$vis" "$pend"
 }
 
 # _pr_acct <c> <login> <jq-path> — campo do account.json (local, senão USERS_FROM).
@@ -478,8 +563,54 @@ _pr_t() {
     pt:firstsub)   printf 'primeiro time da sede a resolver este problema' ;;
     en:firstsub)   printf 'first team at this site to solve this problem' ;;
     es:firstsub)   printf 'primer equipo de la sede en resolver este problema' ;;
+    pt:taskshort)  printf 'tarefa nº %s' "${3:-}" ;;
+    en:taskshort)  printf 'task #%s' "${3:-}" ;;
+    es:taskshort)  printf 'tarea n.º %s' "${3:-}" ;;
+    pt:site)       printf 'sede: %s' "${3:-}" ;;
+    en:site)       printf 'site: %s' "${3:-}" ;;
+    es:site)       printf 'sede: %s' "${3:-}" ;;
+    pt:test_team)  printf 'TESTE DE IMPRESSÃO' ;;
+    en:test_team)  printf 'PRINT TEST' ;;
+    es:test_team)  printf 'PRUEBA DE IMPRESIÓN' ;;
+    pt:test_band)  printf 'TESTE — NÃO ENTREGAR' ;;
+    en:test_band)  printf 'TEST — DO NOT DELIVER' ;;
+    es:test_band)  printf 'PRUEBA — NO ENTREGAR' ;;
+    pt:test_sub)   printf 'tarefa de teste da impressora; descarte esta folha' ;;
+    en:test_sub)   printf 'printer test task; discard this sheet' ;;
+    es:test_sub)   printf 'tarea de prueba de la impresora; descarta esta hoja' ;;
+    pt:test_page)  printf 'TESTE DE IMPRESSÃO — NÃO ENTREGAR\ntarefa %s · página %s de %s\nsede: %s · criada por %s · %s' "$3" "$4" "$5" "$6" "$7" "$8" ;;
+    en:test_page)  printf 'PRINT TEST — DO NOT DELIVER\ntask %s · page %s of %s\nsite: %s · created by %s · %s' "$3" "$4" "$5" "$6" "$7" "$8" ;;
+    es:test_page)  printf 'PRUEBA DE IMPRESIÓN — NO ENTREGAR\ntarea %s · página %s de %s\nsede: %s · creada por %s · %s' "$3" "$4" "$5" "$6" "$7" "$8" ;;
+    pt:test_all)   printf 'todas as sedes' ;;
+    en:test_all)   printf 'all sites' ;;
+    es:test_all)   printf 'todas las sedes' ;;
     *)             _pr_t pt "$k" "${3:-}" ;;
   esac
+}
+
+# _pr_site <c> <login> — a SEDE do time para a folha (regra única de sedes, lib/regions.sh: gravada > regex); vazio
+# sem o módulo `sedes` ou sem sede. Só o nome do nó, como a fila e o painel mostram.
+_pr_site() {
+  # o mod_on precisa do conf_value_to (common.sh): sourceada sozinha (smokes, scripts), a lib lê a linha por grep
+  if declare -F conf_value_to >/dev/null; then
+    declare -F mod_on >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/modules.sh" 2>/dev/null
+    mod_on "$1" sedes || return 0
+  else
+    local m; m="$(sed -n 's/^CONTEST_MODULES=//p' "$CONTESTSDIR/$1/conf" 2>/dev/null | tail -1 | tr -d "\"'\\\\[:space:]")"
+    [[ ",$m," == *",sedes,"* ]] || return 0
+  fi
+  declare -F rg_site_of >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/regions.sh" 2>/dev/null
+  rg_site_of "$1" "$2" 2>/dev/null
+}
+
+# _pr_test_band <y> — a faixa "TESTE — NÃO ENTREGAR" da tarefa de teste, na folha de rosto e na de balão. Roda DENTRO
+# do _pr_render/_pr_render_balloon (usa o cov, o addcap, o L e as fontes deles). Borda vermelha grossa e texto
+# vermelho: o tile do addcap tem fundo branco, então a faixa é branca (molde da faixa PRIMEIRO DA SEDE).
+_pr_test_band() {
+  local y="$1"
+  cov+=( -fill white -stroke '#B91C1C' -strokewidth 6 -draw "roundrectangle 80,$y 1160,$(( y + 140 )) 14,14" -stroke none )
+  addcap 1040 70 100 $(( y + 14 )) '#B91C1C' "$FB" 800 center "$(_pr_t "$L" test_band)"
+  addcap 1040 36 100 $(( y + 92 )) '#B91C1C' "$FR" ''  center "$(_pr_t "$L" test_sub)"
 }
 
 # --- render interno: produz <id>.combined.pdf (chamado SOB flock) ---------
@@ -542,9 +673,14 @@ _pr_render() {  # <c> <id> <src> <meta> <cache>
   team="$(jq -r '.team // ""' "$meta" 2>/dev/null)"; [[ -n "$team" ]] || team="$(_pr_t "$L" noteam)"
   univ="$(jq -r '.univ // ""' "$meta" 2>/dev/null)"
   login="$(jq -r '.login // ""' "$meta" 2>/dev/null)"
+  # TAREFA DE TESTE (pr_test_create): sem time; o lugar do time diz TESTE DE IMPRESSÃO e a folha leva a faixa
+  local istest; istest="$(jq -r '.test == true' "$meta" 2>/dev/null)"
+  local site=""
+  if [[ "$istest" == true ]]; then login="$(_pr_t "$L" test_team)"; team=""
+  else site="$(_pr_site "$c" "$login")"; fi
   # caption faz expansão de %; neutraliza e evita leitura de @arquivo (dados do passwd)
   cap_esc(){ local s="${1//%/%%}"; [[ "$s" == @* ]] && s=" $s"; printf '%s' "$s"; }
-  team="$(cap_esc "$team")"; univ="$(cap_esc "$univ")"; login="$(cap_esc "$login")"
+  team="$(cap_esc "$team")"; univ="$(cap_esc "$univ")"; login="$(cap_esc "$login")"; site="$(cap_esc "$site")"
   if (( docok )); then pagesline="$(_pr_t "$L" pages "$pages")"
   else pagesline="$(_pr_t "$L" convfail)"; fi
   _pr_fonts_load; FB="${_PR_FB:-$_PR_F1}"; FR="${_PR_FR:-$FB}"
@@ -553,16 +689,23 @@ _pr_render() {  # <c> <id> <src> <meta> <cache>
   local -a cov=( _pr_magick -size 1240x1754 xc:white )
   local _pr_cw _pr_cf; _pr_cap_init
   addcap(){ _pr_addcap "$@"; }   # w h x y fill font weight gravity text
-  addcap 1080  46  80   78 '#555' "$FR" ''   center "$(_pr_t "$L" team)"
-  addcap 1080 210  80  130 black  "$FB" 700  center "$team"
-  [[ -n "$univ" ]] && addcap 1080 64 80 352 '#333' "$FR" '' center "$univ"
-  addcap 1080  44  80  430 '#555' "$FR" ''   center "$(_pr_t "$L" login)"
-  addcap 1080 100  80  478 black  "$FB" 700  center "$login"
-  cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,620 1160,620" -stroke none )
-  addcap 1080  56  80  664 '#555' "$FR" ''   center "$(_pr_t "$L" taskno)"
-  addcap 1080 220  80  724 black  "$FB" 800  center "$seq"
-  addcap 1080  74  80  966 black  "$FR" ''   center "$pagesline"
+  # LAYOUT de 09/11/2026 (relato da Camila, aprovado por ela): o LOGIN é o maior texto — é por ele que a sala acha o
+  # time; o nº da tarefa (só conferência com o sistema) vai pequeno para o canto: grande, ele era lido como o
+  # destino e houve entrega errada. A sede aparece (módulo sedes).
+  addcap  400  36 760   18 '#777' "$FR" ''   east   "$(_pr_t "$L" taskshort "$seq")"
+  [[ "$istest" == true ]] || addcap 1080 46 80 120 '#555' "$FR" '' center "$(_pr_t "$L" login)"
+  addcap 1080 230  80  172 black  "$FB" 800  center "$login"
+  cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,440 1160,440" -stroke none )
+  if [[ -n "$team" ]]; then
+    addcap 1080  44  80  476 '#555' "$FR" ''   center "$(_pr_t "$L" team)"
+    addcap 1080 150  80  526 black  "$FB" 700  center "$team"
+  fi
+  [[ -n "$univ" ]] && addcap 1080 60 80 690 '#333' "$FR" '' center "$univ"
+  [[ -n "$site" ]] && addcap 1080 56 80 766 '#333' "$FB" 700 center "$(_pr_t "$L" site "$site")"
+  cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,880 1160,880" -stroke none )
+  addcap 1080  74  80  920 black  "$FR" ''   center "$pagesline"
   cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,1080 1160,1080" -stroke none )
+  [[ "$istest" == true ]] && _pr_test_band 1150
   addcap  600  46  80 1500 black  "$FR" ''   west   "$(_pr_t "$L" sign)"
   cov+=( -fill none -stroke black -strokewidth 2 -draw "line 80,1600 700,1600" -stroke none )
   addcap  320  46 760 1500 black  "$FR" ''   west   "$(_pr_t "$L" when)"
@@ -590,6 +733,106 @@ _pr_render() {  # <c> <id> <src> <meta> <cache>
   [[ -s "$errf" ]] || rm -f "$errf"
 
   (( built ))
+}
+
+# ===== FOLHA EM HTML (09/11/2026, PROTÓTIPO — opção PRINT_FORMAT=html do contest, a medir com as tarefas de teste) =====
+# pr_html <c> <id> — ecoa a folha como HTML de impressão (A4) que a ESTAÇÃO imprime no navegador, sem PDF nem
+# LibreOffice no servidor: a capa do pedido + o código (texto), ou a folha do balão. O MESMO layout aprovado pela
+# Camila (login maior, nº pequeno no canto, sede, faixa de teste, faixa de primeiro com a estrela DESENHADA em SVG) e as
+# MESMAS strings (_pr_t, LOCALE do contest). rc 3 = não dá em HTML (pedido que não é texto: PDF, imagem, office, ou
+# texto acima de PR_HTML_MAX_BYTES) — a estação cai no PDF de sempre. rc 1 = tarefa inexistente.
+# ⚠ SEGURANÇA: a página é aberta de um blob: na ORIGEM da página do staff (o token está no localStorage dela). Todo
+# dado do aluno (nome do arquivo, código, time, universidade) passa pelo `@html` do jq; e a página leva a sua CSP
+# (`default-src 'none'`, sem script) — se um escape faltar um dia, nada roda.
+PR_HTML_MAX_BYTES="${PR_HTML_MAX_BYTES:-2000000}"
+pr_html() {
+  local c="$1" id="$2" dir meta src L kind istest login site enc txt="" fn
+  dir="$(pr_dir "$c")"; meta="$dir/$id.json"; src="$dir/$id.src"
+  [[ -f "$meta" ]] || return 1
+  L="$(pr_lang "$c")"
+  kind="$(jq -r '.kind // "print"' "$meta" 2>/dev/null)"
+  istest="$(jq -r '.test == true' "$meta" 2>/dev/null)"
+  login="$(jq -r '.login // ""' "$meta" 2>/dev/null)"
+  site=""; [[ "$istest" == true ]] || site="$(_pr_site "$c" "$login")"
+  if [[ "$kind" != balloon ]]; then
+    [[ -f "$src" ]] || return 1
+    (( $(stat -c%s "$src" 2>/dev/null || echo 0) <= PR_HTML_MAX_BYTES )) || return 3
+    enc="$(file -b --mime-encoding "$src" 2>/dev/null)"
+    [[ "$enc" == binary ]] && return 3
+    case "$(file -b --mime-type "$src" 2>/dev/null)" in application/pdf|image/*) return 3 ;; esac
+    txt="$(mktemp)"
+    case "$enc" in utf-8|us-ascii|'') cat "$src" ;; *) iconv -c -f "$enc" -t UTF-8 "$src" 2>/dev/null || cat "$src" ;; esac > "$txt"
+  fi
+  local colorname=""
+  if [[ "$kind" == balloon ]]; then
+    colorname="$(jq -r --arg l "$L" 'if (.color_lang // "pt") == $l then (.color_name // "") else "" end' "$meta")"
+    [[ -n "$colorname" ]] || colorname="$(pr_color_name "$(jq -r '.color_hex // "CCCCCC"' "$meta")" "$L")"
+  fi
+  local -a K=(); local k
+  for k in team noteam login taskshort pages balloon problem color first firstsub site test_team test_band test_sub sign when foot; do
+    K+=(--arg "t_$k" "$(_pr_t "$L" "$k" "")")
+  done
+  jq -rn --slurpfile m "$meta" --rawfile code "${txt:-/dev/null}" --arg kind "$kind" --arg site "$site" \
+     --arg cn "$colorname" --arg lang "$L" --arg taskn "$(_pr_t "$L" taskshort "$(jq -r '.seq // 0' "$meta")")" \
+     --arg sitel "$(_pr_t "$L" site "$site")" "${K[@]}" '
+    $m[0] as $t
+    | ($t.test == true) as $test
+    | (if $test then $t_test_team else ($t.login // "") end) as $login
+    | (if $test then "" else (($t.team // "") | if . == "" then $t_noteam else . end) end) as $team
+    | ($t.univ // "") as $univ
+    # o login é O texto da folha: corpo pelo tamanho (o caption do magick escolhe sozinho; aqui, por faixas)
+    | ($login | length) as $n
+    | (if $n <= 8 then 76 elif $n <= 12 then 60 elif $n <= 18 then 46 elif $n <= 26 then 34 else 24 end) as $lsz
+    | def band: if $test then "<div class=\"testband\"><b>\($t_test_band | @html)</b><span>\($t_test_sub | @html)</span></div>" else "" end;
+      def star: "<svg width=\"56\" height=\"56\" viewBox=\"-28 -28 56 56\"><polygon fill=\"#B8860B\" stroke=\"#7A5C00\" points=\"0,-26 6.2,-8.5 24.7,-8 10,3.2 15.3,21 0,10.5 -15.3,21 -10,3.2 -24.7,-8 -6.2,-8.5\"/></svg>";
+      def head: "<div class=\"task\">\($taskn | @html)</div>";
+      def ident($big):
+        (if $test then "" else "<div class=\"lbl\">\($t_login | @html)</div>" end)
+        + "<div class=\"login\" style=\"font-size:\($lsz * $big | floor)pt\">\($login | @html)</div>"
+        + (if $team != "" then "<div class=\"team\">\($team | @html)</div>" else "" end)
+        + (if $univ != "" then "<div class=\"univ\">\($univ | @html)</div>" else "" end)
+        + (if $site != "" then "<div class=\"site\">\($sitel | @html)</div>" else "" end);
+      def signs: "<div class=\"signs\"><div><span>\($t_sign | @html)</span><i></i></div><div><span>\($t_when | @html)</span><i></i></div></div>";
+    "<!doctype html><html lang=\"\($lang)\"><head><meta charset=\"utf-8\">"
+    + "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src '\''none'\''; style-src '\''unsafe-inline'\''; img-src data:\">"
+    + "<title>\($taskn | @html)</title><style>"
+    + "@page{size:A4;margin:12mm}html,body{margin:0;background:#fff;color:#000;font-family:\"DejaVu Sans\",\"Liberation Sans\",Arial,sans-serif}"
+    + ".sheet{position:relative;height:268mm;box-sizing:border-box;padding-top:8mm;text-align:center;break-after:page;page-break-after:always;overflow:hidden;display:flex;flex-direction:column}"
+    + ".task{position:absolute;top:0;right:0;font-size:13pt;color:#777}.lbl{font-size:15pt;color:#555;margin-top:6mm}"
+    + ".login{font-weight:800;line-height:1.05;overflow-wrap:anywhere;margin:2mm 0 4mm}.team{font-weight:700;font-size:26pt;margin:2mm 0}"
+    + ".univ{font-size:15pt;color:#333}.site{font-size:15pt;font-weight:700;color:#333;margin-top:2mm}"
+    + "hr{border:0;border-top:2px solid #999;margin:6mm 0}.pages{font-size:20pt}"
+    + ".testband{border:5px solid #B91C1C;border-radius:4mm;color:#B91C1C;padding:3mm;margin:6mm 0}.testband b{display:block;font-size:24pt}.testband span{font-size:12pt}"
+    + ".first{display:flex;align-items:center;gap:6mm;border:3px solid #B8860B;border-radius:4mm;padding:3mm 6mm;margin:6mm 0;color:#7A5C00;text-align:left}"
+    + ".first b{display:block;font-size:22pt}.first span{font-size:12pt}"
+    + ".signs{margin-top:auto;padding-bottom:6mm;display:flex;gap:10mm;text-align:left;font-size:13pt}.signs div{flex:1}.signs i{display:block;border-bottom:2px solid #000;height:12mm}"
+    + ".prob{display:flex;justify-content:space-around;align-items:flex-start}.prob .lbl{margin-top:0}.short{font-size:96pt;font-weight:800;line-height:1}"
+    + ".cname{font-size:22pt;font-weight:700}"
+    + ".code{font:9.5pt/1.3 \"DejaVu Sans Mono\",\"Liberation Mono\",monospace;white-space:pre-wrap;word-break:break-all;tab-size:4;margin:0 0 8mm}"
+    + ".code .n{color:#888;user-select:none}.foot{position:fixed;left:0;right:0;bottom:0;font-size:8pt;color:#555;text-align:center}"
+    + "</style></head><body>"
+    + (if $kind == "balloon" then
+        "<section class=\"sheet\">" + head + "<div class=\"lbl\">\($t_balloon | @html)</div>" + ident(1) + "<hr>"
+        + "<div class=\"prob\"><div><div class=\"lbl\">\($t_problem | @html)</div><div class=\"short\">\(($t.short // "?") | @html)</div></div>"
+        + "<div><div class=\"lbl\">\($t_color | @html)</div>"
+        + "<svg width=\"150\" height=\"205\" viewBox=\"-110 -130 220 300\"><ellipse rx=\"100\" ry=\"126\" fill=\"#\(($t.color_hex // "CCCCCC") | gsub("[^0-9A-Fa-f]"; "") | .[0:6])\" stroke=\"#333\" stroke-width=\"2\"/><polygon points=\"-15,124 15,124 0,156\" fill=\"#\(($t.color_hex // "CCCCCC") | gsub("[^0-9A-Fa-f]"; "") | .[0:6])\" stroke=\"#333\" stroke-width=\"2\"/></svg>"
+        + "<div class=\"cname\">\($cn | @html)</div></div></div><hr>"
+        + band
+        + (if $t.first_site == true then "<div class=\"first\">" + star + "<div><b>\($t_first | @html)</b><span>\($t_firstsub | @html)</span></div></div>" else "" end)
+        + signs + "</section>"
+      else
+        ($code | split("\n") | if (.[-1] == "") then .[:-1] else . end) as $lines
+        | "<section class=\"sheet\">" + head + ident(1) + "<hr>"
+          + "<div class=\"pages\">\(($t.filename // "") | @html)</div><hr>" + band + signs + "</section>"
+          + "<div class=\"foot\">\((($t.login // "?") + "  -  " + ($t.filename // "") + "  -  " + $t_foot + " #" + ($t.seq | tostring)) | @html)</div>"
+          + "<pre class=\"code\">"
+          + ([$lines | to_entries[] | "<span class=\"n\">\((.key + 1) | tostring | (" " * ([3 - length, 0] | max)) + .) | </span>\(.value | @html)"] | join("\n"))
+          + "</pre>"
+      end)
+    + "</body></html>"'
+  local rc=$?
+  [[ -n "$txt" ]] && rm -f "$txt"
+  return "$rc"
 }
 
 # pr_build_pdf <c> <id>  -> ecoa o caminho do combined.pdf (cache); rc!=0 em falha total.
@@ -646,6 +889,7 @@ pr_build_pdf() {
   [[ -f "$src" && -f "$meta" ]] || return 1
   if _pr_cache_ok "$cache" "$src" "$meta" "$L"; then printf '%s' "$cache"; return 0; fi
   ( flock -w 30 9 || exit 1
+    [[ -f "$meta" && -f "$src" ]] || exit 1                  # apagada enquanto esperava o lock (pré-geração × remoção)
     _pr_cache_ok "$cache" "$src" "$meta" "$L" && exit 0     # double-check após o lock
     _pr_render_slot _pr_render "$c" "$id" "$src" "$meta" "$cache" || exit 1
   ) 9>"$dir/$id.lock"
@@ -765,6 +1009,10 @@ _pr_render_balloon() {
   team="$(jq -r '.team // ""' "$meta")"; [[ -n "$team" ]] || team="$(_pr_t "$L" noteam)"
   univ="$(jq -r '.univ // ""' "$meta")"
   login="$(jq -r '.login // ""' "$meta")"
+  local istest; istest="$(jq -r '.test == true' "$meta" 2>/dev/null)"
+  local site=""
+  if [[ "$istest" == true ]]; then login="$(_pr_t "$L" test_team)"; team=""
+  else site="$(_pr_site "$c" "$login")"; fi
   short="$(jq -r '.short // "?"' "$meta")"
   colorhex="$(jq -r '.color_hex // "CCCCCC"' "$meta")"
   # o nome foi gravado na criação, no idioma do contest daquele momento (`color_lang`; ausente =
@@ -772,29 +1020,29 @@ _pr_render_balloon() {
   colorname="$(jq -r --arg l "$L" 'if (.color_lang // "pt") == $l then (.color_name // "") else "" end' "$meta")"
   [[ -n "$colorname" ]] || colorname="$(pr_color_name "$colorhex" "$L")"
   cap_esc(){ local s="${1//%/%%}"; [[ "$s" == @* ]] && s=" $s"; printf '%s' "$s"; }
-  team="$(cap_esc "$team")"; univ="$(cap_esc "$univ")"; login="$(cap_esc "$login")"; colorname="$(cap_esc "$colorname")"; short="$(cap_esc "$short")"
+  team="$(cap_esc "$team")"; univ="$(cap_esc "$univ")"; login="$(cap_esc "$login")"; colorname="$(cap_esc "$colorname")"; short="$(cap_esc "$short")"; site="$(cap_esc "$site")"
   _pr_fonts_load; FB="${_PR_FB:-$_PR_F1}"; FR="${_PR_FR:-$FB}"
 
   local -a cov=( _pr_magick -size 1240x1754 xc:white )
   local _pr_cw _pr_cf; _pr_cap_init
   addcap(){ _pr_addcap "$@"; }   # letreiros cacheados (ver _pr_cap_tile)
-  addcap 1080  46  80   66 '#555' "$FR" ''   center "$(_pr_t "$L" balloon)"
-  addcap 1080 150  80  120 black  "$FB" 700  center "$team"
-  [[ -n "$univ" ]] && addcap 1080 54 80 280 '#333' "$FR" '' center "$univ"
-  addcap 1080  40  80  346 '#555' "$FR" ''   center "$(_pr_t "$L" login)"
-  addcap 1080  78  80  388 black  "$FB" 700  center "$login"
-  cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,500 1160,500" -stroke none )
-  addcap 540  52  80  528 '#555' "$FR" ''   center "$(_pr_t "$L" problem)"
-  addcap 540 200  80  590 black  "$FB" 800  center "$short"
-  addcap 540  52 620  528 '#555' "$FR" ''   center "$(_pr_t "$L" color)"
+  # LAYOUT de 09/11/2026 (Camila): o LOGIN no topo e maior; o nº pequeno no canto; a letra e o balão maiores no
+  # espaço que o nº grande ocupava. A sede aparece (módulo sedes).
+  addcap  400  36 760   18 '#777' "$FR" ''   east   "$(_pr_t "$L" taskshort "$seq")"
+  addcap 1080  46  80   62 '#555' "$FR" ''   center "$(_pr_t "$L" balloon)"
+  addcap 1080 200  80  112 black  "$FB" 800  center "$login"
+  [[ -n "$team" ]] && addcap 1080 100 80 322 black "$FB" 700 center "$team"
+  [[ -n "$univ" ]] && addcap 1080 46 80 430 '#333' "$FR" '' center "$univ"
+  [[ -n "$site" ]] && addcap 1080 44 80 484 '#333' "$FB" 700 center "$(_pr_t "$L" site "$site")"
+  cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,560 1160,560" -stroke none )
+  addcap 540  52  80  600 '#555' "$FR" ''   center "$(_pr_t "$L" problem)"
+  addcap 540 260  80  662 black  "$FB" 800  center "$short"
+  addcap 540  52 620  600 '#555' "$FR" ''   center "$(_pr_t "$L" color)"
   cov+=( -fill "#$colorhex" -stroke '#333' -strokewidth 2 )
-  cov+=( -draw "translate 890,690 ellipse 0,0 78,98 0,360" )
-  cov+=( -draw "translate 890,690 polygon -12,96 12,96 0,122" )
+  cov+=( -draw "translate 890,780 ellipse 0,0 100,126 0,360" )
+  cov+=( -draw "translate 890,780 polygon -15,124 15,124 0,156" )
   cov+=( -fill none -stroke none )
-  addcap 540  72 620  812 black  "$FB" 700  center "$colorname"
-  cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,910 1160,910" -stroke none )
-  addcap 1080  54  80  956 '#555' "$FR" ''   center "$(_pr_t "$L" taskno)"
-  addcap 1080 200  80 1016 black  "$FB" 800  center "$seq"
+  addcap 540  72 620  952 black  "$FB" 700  center "$colorname"
   cov+=( -fill none -stroke '#999' -strokewidth 2 -draw "line 80,1300 1160,1300" -stroke none )
   # PRIMEIRO DA SEDE: faixa entre a linha e a assinatura (o espaço livre da folha). Só aparece
   # quando o campo foi DECIDIDO como true — ver pr_reconcile_balloons; a tarefa espera até haver
@@ -804,6 +1052,7 @@ _pr_render_balloon() {
   # logo acima, e não depende de glifo nenhum.
   # ⚠ O `addcap` compõe um tile de fundo BRANCO, então a faixa é branca com borda forte: fundo
   # colorido seria coberto pelo tile do texto.
+  [[ "$istest" == true ]] && _pr_test_band 1330
   if [[ "$(jq -r '.first_site == true' "$meta" 2>/dev/null)" == true ]]; then
     cov+=( -fill white -stroke '#B8860B' -strokewidth 4 -draw "roundrectangle 80,1330 1160,1452 14,14" )
     cov+=( -fill '#B8860B' -stroke '#7A5C00' -strokewidth 1
@@ -824,9 +1073,11 @@ _pr_render_balloon() {
 }
 
 # pr_build_balloon <c> <id> : ecoa o combined.pdf da folha do balão (build-once; conteúdo imutável —
-# salvo o IDIOMA: trocou o LOCALE do contest, a folha se refaz no idioma novo).
+# salvo o IDIOMA: trocou o LOCALE do contest, a folha se refaz no idioma novo — e o LAYOUT: o cache mais velho
+# que este arquivo (um deploy) se refaz, como a folha de rosto do _pr_cache_ok. A meta do balão não serve de
+# referência: ela é regravada a cada mudança de estado — pego, impresso, entregue).
 _pr_balloon_cache_ok() {  # <cache> <meta> <lang>
-  [[ -f "$1" ]] || return 1
+  [[ -f "$1" && "$1" -nt "${BASH_SOURCE[0]}" ]] || return 1
   jq -e --arg l "$3" '(.sheet_lang // "pt") == $l' "$2" >/dev/null 2>&1
 }
 pr_build_balloon() {
@@ -836,6 +1087,7 @@ pr_build_balloon() {
   [[ -f "$meta" ]] || return 1
   _pr_balloon_cache_ok "$cache" "$meta" "$L" && { printf '%s' "$cache"; return 0; }
   ( flock -w 30 9 || exit 1
+    [[ -f "$meta" ]] || exit 1                                # apagada enquanto esperava o lock
     _pr_balloon_cache_ok "$cache" "$meta" "$L" && exit 0
     _pr_render_slot _pr_render_balloon "$c" "$id" "$meta" "$cache" || exit 1
   ) 9>"$dir/$id.lock"
@@ -888,7 +1140,7 @@ pr_site_first_map() {   # <c> [<arquivo com logins>]
                    then (.value.pending_min_epoch // 0) else -1 end)}' 2>/dev/null
     true
   } | jq -rs '
-      def isrole: test("\\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$");
+      def isrole: test("'"$ROLE_RE"'");
       (map(select(.k == "d") | {(.login): true}) | add // {}) as $DQ
       | (map(select(.k == "r")) | map(select((.login|isrole)|not) | select(.region != ""))) as $R
       | ($R | map({(.login): .region}) | add // {}) as $REG
@@ -1004,11 +1256,19 @@ pr_reconcile_balloons() {
     # anuncia. E no MODO AUTOMÁTICO a folha é impressa segundos depois de a tarefa nascer, com o
     # PDF cacheado para sempre: "promover depois" mudaria a tela e nunca o papel.
     # Por isso: quando não dá para decidir, a tarefa ESPERA (no `.balloon-hold`) e é reavaliada no
-    # próximo reconcile — no máximo BALLOON_FIRST_WAIT_S; passado o prazo ela sai SEM estrela, que
-    # é a falha segura (o time recebe o balão; ninguém anuncia um primeiro lugar falso).
+    # próximo reconcile. ESPERA A CERTEZA, SEM TETO, e TODO balão do par (sede × problema) espera junto (09/11/2026,
+    # decisão do Ribas depois da LATAM: o teto de 90 s soltava o primeiro balão sem a faixa enquanto a run mais antiga
+    # estava na revisão manual — 2 casos no sábado — e o primeiro do par tem de chegar à sala antes dos outros).
+    # Válvula: o admin/juiz-chefe libera o par sem a faixa (`.balloon-release`, rota admin/balloon-release); a espera
+    # aparece na fila (`held`). BALLOON_FIRST_WAIT_S no conf: N > 0 = teto de N s (opt-in); 0 = não espera.
     local hold="$dir/.balloon-hold" wait_s _SV=not
     wait_s="$(sed -n 's/^[[:space:]]*BALLOON_FIRST_WAIT_S=//p' "$CONTESTSDIR/$c/conf" 2>/dev/null \
-              | tail -1 | tr -cd '0-9')"; wait_s="${wait_s:-90}"
+              | tail -1 | tr -cd '0-9')"; wait_s="${wait_s:--1}"   # ausente = SEM teto; 0 = não espera; N = teto de N s
+    declare -A SM_REL=()
+    if [[ -s "$dir/.balloon-release" ]]; then
+      while IFS=$'\t' read -r _rk _rat; do [[ -n "$_rk" ]] && SM_REL[$_rk]="$_rat"; done \
+        < <(jq -r '[(.region // "") + "|" + (.problem // ""), (.at // 0)] | @tsv' "$dir/.balloon-release" 2>/dev/null)
+    fi
     declare -A SM_AC=() SM_ACL=() SM_PEND=() SM_REG=()
     declare -a HOLD_KEEP=()
 
@@ -1035,7 +1295,7 @@ pr_reconcile_balloons() {
       # conter "Accepted" ("Not Accepted") — o awk abaixo já cortou o `¦…`
       case "$verdict" in Accepted*) ;; *) continue;; esac
       case "$verdict" in *" (Ignored)") continue;; esac   # ignorada não conta no placar nem ganha balão
-      case "$login" in *.admin|*.judge|*.cjudge|*.staff|*.cstaff|*.mon|*.animeitor) continue;; esac
+      is_reserved_role_login "$login" && continue
       KL+=("$login"); KP+=("$cid"); KE+=("$sub_epoch"); KS+=("")
     done < <(emit_history_stream_since "$c" "$prev" \
                | awk -F: 'NF>=7{ v=$5; for(i=6;i<=NF-2;i++) v=v ":" $i; sub(/¦.*$/, "", v);
@@ -1043,11 +1303,21 @@ pr_reconcile_balloons() {
                | sort -n -k1,1)
     (( ${#KL[@]} )) || { rm -f "$hold"; exit 0; }
     # DESCLASSIFICADO não ganha balão (o placar já o tirava; a fila do staff seguia entregando — auditoria do
-    # painel, 03/10/2026): um grep só sobre o account.json dos candidatos NOVOS.
+    # painel, 03/10/2026): um grep só sobre o account.json dos candidatos, os RETIDOS inclusive.
     local -A _DQ=(); local _dqf
     while IFS= read -r _dqf; do _dqf="${_dqf%/account.json}"; _DQ["${_dqf##*/}"]=1
-    done < <(for (( i = nh; i < ${#KL[@]}; i++ )); do printf '%s/%s/account.json\0' "$CONTESTSDIR/$c/users" "${KL[i]}"; done \
-               | xargs -0 -r grep -lE '"disqualified": *true' 2>/dev/null)
+    done < <(for (( i = 0; i < ${#KL[@]}; i++ )); do printf '%s/%s/account.json\0' "$CONTESTSDIR/$c/users" "${KL[i]}"; done \
+               | sort -zu | xargs -0 -r grep -lE '"disqualified": *true' 2>/dev/null)
+    # O RETIDO É REVALIDADO a cada reconcile: segue valendo só quem ainda tem a linha Accepted com o MESMO sub_epoch
+    # (rejulgamento e revisão do chefe mudam o veredicto). Uma passada só no history dos logins retidos.
+    local -A _HOK=(); local _hl _hp _hse
+    if (( nh > 0 )); then
+      while IFS=$'\t' read -r _hl _hp _hse; do [[ -n "$_hl" ]] && _HOK["$_hl|$_hp|$_hse"]=1
+      done < <(for (( i = 0; i < nh; i++ )); do printf '%s/%s/history\0' "$CONTESTSDIR/$c/users" "${KL[i]}"; done \
+                 | sort -zu | xargs -0 -r gawk -F: '{ n = split(FILENAME, a, "/"); v = $4; for (j = 5; j <= NF - 2; j++) v = v ":" $j
+                                                      sub(/¦.*$/, "", v)
+                                                      if (v ~ /^Accepted/ && v !~ / \(Ignored\)$/) print a[n-1] "\t" $2 "\t" $(NF-1) }' 2>/dev/null)
+    fi
     # os ids do lote num processo só (a regra do id está no _PR_BLN_MD5_PY)
     mapfile -t KI < <(for i in "${!KL[@]}"; do printf '%s%s%s\n' "$c" "${KL[i]}" "${KP[i]}"; done \
                         | python3 -c "$_PR_BLN_MD5_PY" 2>/dev/null)
@@ -1059,7 +1329,8 @@ pr_reconcile_balloons() {
     local -A SEEN=(); local -a SURV=()
     for i in "${!KL[@]}"; do
       id="${KI[i]}"
-      (( i >= nh )) && [[ -n "${_DQ[${KL[i]}]:-}" ]] && continue
+      [[ -n "${_DQ[${KL[i]}]:-}" ]] && continue
+      (( i < nh )) && [[ -z "${_HOK[${KL[i]}|${KP[i]}|${KE[i]}]:-}" ]] && continue   # o AC retido não vale mais
       [[ -n "${SEEN[$id]:-}" ]] && continue; SEEN[$id]=1
       [[ -f "$dir/$id.json" || -n "${FROZEN[$id]:-}" ]] && continue
       SURV+=("$i")
@@ -1088,37 +1359,47 @@ pr_reconcile_balloons() {
       key="$reg|$p"
       ac="${SM_AC[$key]:-0}"; acl="${SM_ACL[$key]:-}"; pend="${SM_PEND[$key]:-0}"
       [[ "$ac" =~ ^[0-9]+$ ]] || ac=0; [[ "$pend" =~ ^[0-9]+$ ]] || pend=0
+      # PAR INDEFINIDO: há run da sede, sem veredicto, mais antiga que o melhor AC — ela ainda pode ser o primeiro.
+      # Todo balão do par espera (o primeiro chega à sala antes dos outros); liberado pelo admin = sai sem a faixa
+      if (( pend > 0 && (ac == 0 || pend <= ac) )); then
+        [[ -n "${SM_REL[$key]:-}" ]] && return 0
+        _SV=hold; _SVPEND="$pend"; _SVREG="$reg"; return 0
+      fi
       if (( ac > 0 )); then
         (( ac < e )) && return 0                                          # alguém resolveu antes
         (( ac == e )) && [[ -n "$acl" && "$acl" != "$l" ]] && return 0    # empate: login decide
       fi
-      (( pend > 0 && pend <= e )) && { _SV=hold; return 0; }              # a mais antiga ainda na fila
       _SV=first
     }
 
     # ---- 4. DECIDE (sem processo) e monta o lote: T = tarefa, F = lápide do freeze --------------------------
-    declare -A C_SHORT=() C_HEX=() C_NAME=()
+    declare -A C_SHORT=() C_HEX=() C_NAME=() H_SHORT=()
     local se since fs short nT=0 rf; rf="$(mktemp)"
     local -a MK=()
     for i in "${SURV[@]}"; do
       login="${KL[i]}"; cid="${KP[i]}"; se="${KE[i]}"; since="${KS[i]:-$EPOCHSECONDS}"
-      _site_verdict "$login" "$cid" "$se"
-      if [[ "$_SV" == hold ]]; then
-        if (( EPOCHSECONDS - since < wait_s )); then
-          HOLD_KEEP+=("$(jq -cn --arg l "$login" --arg p "$cid" --argjson se "$se" \
-                          --argjson since "$since" '{login:$l, problem:$p, sub_epoch:$se, since:$since}')")
-          continue
-        fi
-        _SV=not   # prazo vencido: entrega o balão SEM estrela (nunca inventa um primeiro lugar)
-      fi
-      [[ "$_SV" == first ]] && fs=true || fs=false
       if [[ -z "${C_SHORT[$cid]+x}" ]]; then        # letra/cor só dependem do problema: uma vez por problema
         C_SHORT[$cid]="$(pr_short_of "$c" "$cid")"; [[ -n "${C_SHORT[$cid]}" ]] || C_SHORT[$cid]="?"
         C_HEX[$cid]="$(pr_balloon_color "$c" "${C_SHORT[$cid]}")"
         C_NAME[$cid]="$(pr_color_name "${C_HEX[$cid]}" "$C_LANG")"
       fi
-      if (( fz > 0 )) && [[ "$allow" != 1 ]] && (( se >= fz )); then MK+=("F"$'\t'"$i"$'\t'"$fs")
-      else MK+=("T"$'\t'"$i"$'\t'"$fs"); nT=$(( nT + 1 )); fi
+      # O FREEZE DECIDE ANTES DA ESPERA: o AC de depois do congelamento vira lápide na hora e nunca entra no `held`
+      # (a fila da sede mostra só o que o placar congelado mostra; a lápide vale mesmo que o placar descongele depois).
+      if (( fz > 0 )) && [[ "$allow" != 1 ]] && (( se >= fz )); then MK+=("F"$'\t'"$i"$'\t'"false"); continue; fi
+      _site_verdict "$login" "$cid" "$se"
+      if [[ "$_SV" == hold ]]; then
+        if (( wait_s < 0 || EPOCHSECONDS - since < wait_s )); then
+          # a letra vai no registro: a fila (bash e porteiro) mostra a espera sem abrir o conf
+          # (cache PRÓPRIO: o C_SHORT preenchido aqui faria o balão seguinte do problema pular o cálculo da cor)
+          if [[ -z "${H_SHORT[$cid]+x}" ]]; then H_SHORT[$cid]="$(pr_short_of "$c" "$cid")"; [[ -n "${H_SHORT[$cid]}" ]] || H_SHORT[$cid]="?"; fi
+          # TSV (um jq só, no fim, monta o JSONL — era um jq POR retido a cada reconcile, e a espera não tem mais teto)
+          HOLD_KEEP+=("$login"$'\t'"$cid"$'\t'"${H_SHORT[$cid]}"$'\t'"${_SVREG//$'\t'/ }"$'\t'"${se:-0}"$'\t'"${since:-0}"$'\t'"${_SVPEND:-0}")
+          continue
+        fi
+        _SV=not   # teto do conf vencido: entrega o balão SEM estrela (nunca inventa um primeiro lugar)
+      fi
+      [[ "$_SV" == first ]] && fs=true || fs=false
+      MK+=("T"$'\t'"$i"$'\t'"$fs"); nT=$(( nT + 1 ))
     done
 
     # ---- 5. MATERIALIZA o lote: um bloco de `seq`, um jq p/ as contas e as tarefas, um mv por tarefa ----------
@@ -1146,9 +1427,10 @@ pr_reconcile_balloons() {
         fi; true; } > "$af"
       tmf="$CONTESTSDIR/$c/teams-meta.json"
       { [[ -f "$tmf" ]] && jq -e . "$tmf" >/dev/null 2>&1; } || { tmf="$(mktemp)"; printf 'null' > "$tmf"; }
+      local -a NEWT=()
       while IFS=$'\t' read -r kind id _l; do
         case "$kind" in
-          T) printf '%s\n' "$_l" > "$dir/$id.json.tmp" && mv -f "$dir/$id.json.tmp" "$dir/$id.json" ;;
+          T) printf '%s\n' "$_l" > "$dir/$id.json.tmp" && mv -f "$dir/$id.json.tmp" "$dir/$id.json" && NEWT+=("$id") ;;
           F) printf '%s\n' "$_l" >> "$held" ;;
           A) audit_log_to "$c" "$id" "$_l" ;;
         esac
@@ -1187,10 +1469,17 @@ pr_reconcile_balloons() {
             end' 2>/dev/null)
       [[ "$tmf" == "$CONTESTSDIR/$c/teams-meta.json" ]] || rm -f "$tmf"
       rm -f "$af"
+      # a folha de cada balão novo sai pronta (um processo p/ o lote; ver pr_pregen_bg)
+      (( ${#NEWT[@]} )) && pr_pregen_bg "$c" "${NEWT[@]}"
     fi
     rm -f "$rf"
     # o que ficou esperando decisão volta para o arquivo de espera
-    if (( ${#HOLD_KEEP[@]} )); then printf '%s\n' "${HOLD_KEEP[@]}" > "$hold"; else rm -f "$hold"; fi
+    if (( ${#HOLD_KEEP[@]} )); then
+      local _ht="$hold.tmp.$BASHPID"   # resolvido ANTES do pipe: no alvo do redirect o ${BASHPID} seria o do filho
+      printf '%s\n' "${HOLD_KEEP[@]}" | jq -Rc 'split("\t") | {login:.[0], problem:.[1], short:.[2], region:.[3],
+          sub_epoch:(.[4] | tonumber? // 0), since:(.[5] | tonumber? // 0), pend:(.[6] | tonumber? // 0)}' > "$_ht" \
+        && mv -f "$_ht" "$hold" || rm -f "$_ht"
+    else rm -f "$hold"; fi
   ) 9>"$dir/.balloon.lock"
 }
 
@@ -1225,6 +1514,56 @@ pr_reconcile_balloons_bg() {
                                     || printf "%s %s: pr_reconcile_balloons rc=%s\n" "$EPOCHSECONDS" "$1" "$?" >&2' \
                                   _ "$c" "${SESSION_LOGIN:-?}" \
       </dev/null >/dev/null 2>>"$err" & ) 2>/dev/null
+  return 0
+}
+
+# pr_pregen_bg <c> <id…> — PRÉ-GERA a folha (PDF combinado do pedido, folha do balão) logo que a tarefa nasce
+# (09/11/2026, decisão do Ribas pós-LATAM): a estação que imprime pega o PDF já pronto em vez de esperar a
+# renderização no clique ("Abrir PDF") ou no modo automático. É o MESMO pr_build_pdf/pr_build_balloon, com o mesmo
+# cache e o mesmo flock por tarefa — pré-geração × clique nunca renderizam duas vezes. Um processo destacado por
+# LOTE (o molde do pr_reconcile_balloons_bg: setsid, fds no parêntese, env explícito, stderr num arquivo), em série,
+# dentro dos slots de renderização (_pr_render_slot). Desliga com PRINT_PREGEN=n no conf. MOJ_JOBS_SYNC=1 (testes)
+# NÃO pré-gera — senão todo smoke de balão renderiza PDFs —, salvo PR_PREGEN_SYNC=1, que roda na hora (o teste dele).
+# ⚠ `9>&-`: o reconcile chama isto SEGURANDO o .balloon.lock no fd 9; o filho não pode herdá-lo.
+pr_pregen_bg() {
+  local c="$1"; shift
+  (( $# )) || return 0
+  local pg; pg="$(sed -n 's/^[[:space:]]*PRINT_PREGEN=//p' "$CONTESTSDIR/$c/conf" 2>/dev/null | tail -1 | tr -d "\"' ")"
+  [[ "$pg" == n || "$pg" == no || "$pg" == 0 ]] && return 0
+  # PRINT_FORMAT=html (protótipo): a estação imprime em HTML — só o pedido que NÃO sai em HTML precisa do PDF pronto
+  local pf; pf="$(sed -n 's/^[[:space:]]*PRINT_FORMAT=//p' "$CONTESTSDIR/$c/conf" 2>/dev/null | tail -1 | tr -d "\"' ")"
+  if [[ "$pf" == html ]]; then
+    local -a keep=(); local i d; d="$(pr_dir "$c")"
+    for i in "$@"; do
+      [[ -f "$d/$i.src" && "$(jq -r '.kind // "print"' "$d/$i.json" 2>/dev/null)" != balloon ]] || continue
+      [[ "$(file -b --mime-encoding "$d/$i.src" 2>/dev/null)" == binary ]] && keep+=("$i")
+    done
+    (( ${#keep[@]} )) || return 0
+    set -- "${keep[@]}"
+  fi
+  if [[ "${MOJ_JOBS_SYNC:-0}" == 1 ]]; then
+    [[ "${PR_PREGEN_SYNC:-0}" == 1 ]] && _pr_pregen "$c" "$@"
+    return 0
+  fi
+  local api="${_LIBDIR:-${BASH_SOURCE[0]%/*}}/.."
+  local -a E=(CONTESTSDIR="$CONTESTSDIR" _DIR="$api")
+  [[ -n "${RUNDIR:-}" ]] && E+=(RUNDIR="$RUNDIR")
+  local err="/dev/null"; [[ -n "${RUNDIR:-}" && -d "$RUNDIR" ]] && err="$RUNDIR/print-pregen.err"
+  ( setsid env "${E[@]}" bash -c 'source "$_DIR/lib/sources.sh" >/dev/null 2>&1; source "$_DIR/lib/print.sh" || exit 1
+                                  c="$1"; shift; _pr_pregen "$c" "$@"' _ "$c" "$@" \
+      </dev/null >/dev/null 2>>"$err" 9>&- & ) 2>/dev/null
+  return 0
+}
+# _pr_pregen <c> <id…> — em série: o tipo vem do meta (balão × pedido); falha numa tarefa não para as outras
+# (o clique refaz a tentativa, como sempre) e vai p/ o stderr (print-pregen.err).
+_pr_pregen() {
+  local c="$1" id dir k; shift; dir="$(pr_dir "$c")"
+  for id in "$@"; do
+    [[ "$id" =~ ^[A-Za-z0-9]+$ && -f "$dir/$id.json" ]] || continue
+    k="$(jq -r '.kind // "print"' "$dir/$id.json" 2>/dev/null)"
+    if [[ "$k" == balloon ]]; then pr_build_balloon "$c" "$id" >/dev/null || printf '%s %s: pré-geração do balão %s falhou\n' "$EPOCHSECONDS" "$c" "$id" >&2
+    else pr_build_pdf "$c" "$id" >/dev/null || printf '%s %s: pré-geração do pedido %s falhou\n' "$EPOCHSECONDS" "$c" "$id" >&2; fi
+  done
   return 0
 }
 
@@ -1273,4 +1612,178 @@ staff_regions(){
     return 0
   fi
   return 1
+}
+
+# ==== TAREFAS DE TESTE (09/11/2026; pedido do Fernando: testar a velocidade e o paralelismo das impressoras) =======
+# Um lote de tarefas FALSAS (impressão de N páginas e/ou balão) que passa pela MESMA cadeia das reais — geração do
+# PDF, fila, claim, modo automático — para a sala medir as impressoras antes da prova.
+# - `test:true`, id `tst…`; numeração À PARTE: `seq` = "T<n>" (texto), contador `.test-seq`. O nº real que a sala
+#   confere com o sistema não pula.
+# - Folha com a faixa "TESTE — NÃO ENTREGAR"; páginas de impressão que dizem tarefa, página, sede e hora.
+# - Visível pela SEDE de quem criou: `test_scope` = as sedes do staff_regions do criador ([] = todas; o admin escolhe).
+#   Quem vê: admin; staff sem escopo (vê tudo, a regra da leitura); staff cuja sede está no test_scope.
+# - PROIBIDAS durante a prova (decisão do Ribas): a criação recusa, e a fila apaga as que sobraram na primeira
+#   consulta depois do início. Fora do relatório da prova. O porteiro não serve fila com teste (cai no bash).
+
+# pr_test_blocked <c> — 0 = prova em andamento (início definido e já passou, fim de TODAS as sedes ainda não):
+# tarefa de teste proibida. Contest sem início definido (START=0) não bloqueia: não há "durante a prova".
+pr_test_blocked() {
+  local st en
+  st="$(conf_value "$1" CONTEST_START)"; st="${st//[^0-9]/}"; st="${st:-0}"
+  (( st > 0 && EPOCHSECONDS >= st )) || return 1
+  declare -F contest_end_all >/dev/null || source "${_LIBDIR:-${BASH_SOURCE[0]%/*}}/contest-gate.sh"
+  en="$(contest_end_all "$1")"; en="${en//[^0-9]/}"; en="${en:-0}"
+  (( en == 0 || EPOCHSECONDS <= en ))
+}
+
+# pr_test_ids <c> — os ids das tarefas de teste (1/linha); vazio = nenhuma. Glob no nome, sem abrir arquivo.
+pr_test_ids() {
+  local d f; d="$(pr_dir "$1")"
+  ( set +o noglob; shopt -s nullglob
+    for f in "$d"/tst*.json; do f="${f##*/}"; printf '%s\n' "${f%.json}"; done )
+}
+
+# pr_test_my_sites — as sedes do staff da sessão (1/linha, minúsculas), rc 1 = sem escopo (vê tudo). Admin: rc 1.
+pr_test_my_sites() {
+  is_admin && return 1
+  local out; out="$(staff_regions "$1")" || return 1
+  printf '%s\n' "$out" | awk 'NF { print tolower($0) }'
+}
+
+# pr_task_can_see <c> <meta> — o staff da sessão pode ver/agir nesta tarefa? Teste: pela sede de quem a criou;
+# as demais: o staff_can_see do dono (a regra de sempre). Usado na fila, no claim/processed/delivered, no PDF e no
+# arquivo cru — a mesma decisão nos quatro lugares.
+pr_task_can_see() {
+  local c="$1" meta="$2" mine
+  if [[ "$(jq -r '.test == true' "$meta" 2>/dev/null)" == true ]]; then
+    mine="$(pr_test_my_sites "$c")" || return 0
+    jq -e --rawfile m <(printf '%s\n' "$mine") '
+      ($m | split("\n") | map(select(length > 0))) as $M
+      | (.test_scope // []) as $S
+      | ($S | length) == 0 or any($S[]; ascii_downcase as $x | ($M | index($x)) != null)' "$meta" >/dev/null 2>&1
+    return
+  fi
+  staff_can_see "$c" "$SESSION_LOGIN" "$(jq -r '.login // ""' "$meta" 2>/dev/null)"
+}
+
+# pr_test_visible_ids <c> — os ids de teste que o staff da sessão vê (1/linha). Um jq para o lote.
+pr_test_visible_ids() {
+  local c="$1" d mine ids; d="$(pr_dir "$c")"
+  ids="$(pr_test_ids "$c")"; [[ -n "$ids" ]] || return 0
+  if ! mine="$(pr_test_my_sites "$c")"; then printf '%s\n' "$ids"; return 0; fi
+  printf '%s\n' "$ids" | while IFS= read -r i; do printf '%s\0' "$d/$i.json"; done \
+    | xargs -0 -r jq -r --rawfile m <(printf '%s\n' "$mine") '
+        ($m | split("\n") | map(select(length > 0))) as $M
+        | (.test_scope // []) as $S
+        | select(($S | length) == 0 or any($S[]; ascii_downcase as $x | ($M | index($x)) != null)) | .id' 2>/dev/null
+}
+
+# pr_test_remove <c> <id…> — apaga as tarefas (json, fonte, PDF em cache, trava, log de erro). Ecoa quantas.
+pr_test_remove() {
+  local c="$1" d n=0 i; d="$(pr_dir "$c")"; shift
+  for i in "$@"; do
+    [[ "$i" =~ ^tst[0-9a-f]{20}$ ]] || continue
+    # sob o lock DA TAREFA (o mesmo do build): a pré-geração destacada (pr_pregen_bg) pode estar renderizando esta
+    # folha, e o render regrava o meta no fim — sem o lock, a tarefa apagada voltava (09/11/2026)
+    ( flock -w 30 9 || true
+      rm -f "$d/$i.json" "$d/$i.src" "$d/$i.combined.pdf" "$d/$i.err" ) 9>"$d/$i.lock"
+    rm -f "$d/$i.lock"; n=$(( n + 1 ))
+  done
+  printf '%s' "$n"
+}
+
+# pr_test_purge_if_running <c> — durante a prova, as tarefas de teste que sobraram são APAGADAS (a criação já recusa;
+# isto pega o lote esquecido antes do início). Audita. Barato quando não há nenhuma: um glob.
+pr_test_purge_if_running() {
+  local c="$1" ids n
+  ids="$(pr_test_ids "$c")"; [[ -n "$ids" ]] || return 0
+  pr_test_blocked "$c" || return 0
+  mapfile -t _tids <<<"$ids"
+  n="$(pr_test_remove "$c" "${_tids[@]}")"
+  audit_log_to "$c" staff-test "purge-at-start n=$n" 2>/dev/null || true
+}
+
+# pr_test_next_block <c> <k> — reserva k números de teste seguidos (contador .test-seq, a trava do seq); ecoa o 1º.
+pr_test_next_block() {
+  local c="$1" k="$2" dir; dir="$(pr_dir "$c")"; mkdir -p "$dir"
+  ( flock 9
+    local n=0; [[ -r "$dir/.test-seq" ]] && read -r n < "$dir/.test-seq"
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    printf '%s' "$(( n + k ))" > "$dir/.test-seq"; printf '%s' "$(( n + 1 ))"
+  ) 9>"$dir/.seqlock"
+}
+
+# pr_test_create <c> <count> <kind:print|balloon|mixed> <pages> <scope-json> <by> — cria o lote; ecoa "T<a> T<b>".
+# Impressão: um .txt de <pages> páginas (\f separa as páginas no paps), cada página dizendo o que é — linhas CURTAS:
+# com a numeração do _pr_text2pdf, linha longa quebra e cada página de teste viraria duas. Balão: as letras
+# A, B, C… com as cores do contest (balloons.json ou a paleta ICPC). mixed = alterna impressão e balão.
+pr_test_create() {
+  local c="$1" n="$2" kind="$3" pages="$4" scope="$5" by="$6" dir L t0 i k sq id site now hhmm
+  dir="$(pr_dir "$c")"; mkdir -p "$dir"; L="$(pr_lang "$c")"
+  t0="$(pr_test_next_block "$c" "$n")"
+  site="$(jq -r 'if length == 0 then "" else join(", ") end' <<<"$scope" 2>/dev/null)"
+  [[ -n "$site" ]] || site="$(_pr_t "$L" test_all)"
+  now="$EPOCHSECONDS"; hhmm="$(date -d "@$now" '+%d/%m %H:%M:%S' 2>/dev/null)"
+  local letters=(A B C D E F G H I J K L M N O)
+  local -a NEW=()
+  for (( i = 0; i < n; i++ )); do
+    sq="T$(( t0 + i ))"
+    id="tst$(printf '%s%s%s%s' "$now" "$RANDOM" "$i" "$by" | md5sum | cut -c1-20)"
+    NEW+=("$id")
+    k="$kind"; [[ "$kind" == mixed ]] && { (( i % 2 == 0 )) && k=print || k=balloon; }
+    if [[ "$k" == print ]]; then
+      local p
+      { for (( p = 1; p <= pages; p++ )); do
+          (( p > 1 )) && printf '\f'
+          _pr_t "$L" test_page "$sq" "$p" "$pages" "$site" "$by" "$hhmm"; printf '\n\n'
+          local ln; for (( ln = 1; ln <= 40; ln++ )); do
+            printf '%s  %02d  ........................................\n' "$sq" "$ln"
+          done
+        done; } > "$dir/$id.src"
+      jq -cn --arg id "$id" --arg seq "$sq" --arg by "$by" --argjson sc "$scope" --arg univ "$site" \
+        --arg fn "teste-$sq.txt" --argjson size "$(stat -c%s "$dir/$id.src")" --argjson t "$now" '{
+          id:$id, seq:$seq, test:true, test_by:$by, test_scope:$sc, kind:"print", login:"", fullname:"", team:"",
+          univ:$univ, filename:$fn, mime:"text/plain", size:$size, time:$t, status:"pending", pages:0,
+          claimed_by:"", claimed_at:0, processed_by:"", processed_at:0, delivered_by:"", delivered_at:0 }' > "$dir/$id.json"
+    else
+      local sh hex cn; sh="${letters[$(( i % 15 ))]}"
+      hex="$(pr_balloon_color "$c" "$sh")"; cn="$(pr_color_name "$hex" "$L")"
+      jq -cn --arg id "$id" --arg seq "$sq" --arg by "$by" --argjson sc "$scope" --arg univ "$site" \
+        --arg sh "$sh" --arg hex "$hex" --arg cn "$cn" --arg l "$L" --argjson t "$now" '{
+          id:$id, seq:$seq, test:true, test_by:$by, test_scope:$sc, kind:"balloon", login:"", fullname:"", team:"",
+          univ:$univ, problem:"", short:$sh, color_hex:$hex, color_name:$cn, color_lang:$l, first_site:false,
+          time:$t, status:"pending",
+          claimed_by:"", claimed_at:0, processed_by:"", processed_at:0, delivered_by:"", delivered_at:0 }' > "$dir/$id.json"
+    fi
+  done
+  # o teste mede a MESMA cadeia das tarefas reais — inclusive a pré-geração da folha
+  pr_pregen_bg "$c" "${NEW[@]}" >/dev/null 2>&1
+  printf 'T%s T%s' "$t0" "$(( t0 + n - 1 ))"
+}
+
+# pr_test_summary <c> — a MEDIDA do lote que o staff da sessão vê: contagem por estado, vazão (tarefas impressas por
+# minuto, do 1º claim ao último processed) e por estação (processed_by), e o maior intervalo entre duas impressões
+# seguidas. O tempo inclui a geração do PDF no servidor (o 1º pedido de cada tarefa a gera): é o caminho real.
+pr_test_summary() {
+  local c="$1" d ids; d="$(pr_dir "$c")"
+  ids="$(pr_test_visible_ids "$c")"
+  if [[ -z "$ids" ]]; then printf '{"total":0,"pending":0,"printed":0,"delivered":0,"stations":[]}'; return 0; fi
+  printf '%s\n' "$ids" | while IFS= read -r i; do printf '%s\0' "$d/$i.json"; done \
+    | xargs -0 -r jq -c '{seq, kind, status, claimed_by, claimed_at, processed_by, processed_at, pages}' 2>/dev/null \
+    | jq -cs '
+        def rate(xs): (xs | map(select(.processed_at > 0))) as $p
+          | if ($p | length) == 0 then null
+            else (($p | map(.claimed_at // .processed_at) | min) as $a | ($p | map(.processed_at) | max) as $b
+                  | {done: ($p | length), first_claim: $a, last_done: $b, span_s: ($b - $a),
+                     per_min: (if $b > $a then ((($p | length) * 600 / ($b - $a)) | round / 10) else null end)}) end;
+        { total: length,
+          pending: (map(select(.status == "pending")) | length),
+          printed: (map(select(.status == "printed")) | length),
+          delivered: (map(select(.status == "delivered")) | length),
+          pages: (map(select(.kind == "print") | .pages // 0) | add // 0),
+          overall: rate(.),
+          max_gap_s: ([ map(select(.processed_at > 0) | .processed_at) | sort | . as $t
+                        | range(1; length) | $t[.] - $t[. - 1] ] | max),
+          stations: (map(select((.processed_by // "") != "")) | group_by(.processed_by)
+                     | map({by: .[0].processed_by} + rate(.)) | sort_by(.by)) }'
 }

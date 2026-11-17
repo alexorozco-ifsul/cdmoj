@@ -32,6 +32,9 @@ if [[ "${REQUEST_METHOD:-GET}" == GET ]]; then
 fi
 
 require_method POST
+# pedido de impressão é do TIME (e de quem julga): conta de papel fora da prova não pede (registro dos papéis)
+source "$_LIBDIR/contest-gate.sh"
+_role_off_contest && fail 403 "Conta de papel não pede impressão" "role_forbidden"
 # precisa existir staff E impressão habilitada (a API sempre rejeita se indisponível)
 staff_exists "$contest"  || fail 403 "Impressão indisponível (sem staff neste contest)" "print_unavailable"
 print_enabled "$contest" || fail 403 "Impressão desabilitada pelo administrador do contest" "print_disabled"
@@ -63,4 +66,5 @@ jq -cn --arg id "$id" --argjson seq "$seq" --arg login "$login" --arg fn "$fulln
   }' > "$dir/$id.json"
 
 audit_log_to "$contest" print-request "seq=$seq login=$login arquivo=$safe tipo=$mime tamanho=${sz:-0}"
+pr_pregen_bg "$contest" "$id"          # a folha sai pronta p/ a estação (lib/print.sh pr_pregen_bg)
 ok_json '{id:$id, seq:$seq, status:"pending"}' --arg id "$id" --argjson seq "$seq"

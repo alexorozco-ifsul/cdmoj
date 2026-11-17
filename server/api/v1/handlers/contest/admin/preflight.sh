@@ -22,19 +22,19 @@ source "$_LIBDIR/langs.sh"          # lang_canon_ext (cc/cxx/c++ = cpp, py3 = py
 
 now="$EPOCHSECONDS"
 cdir="$CONTESTSDIR/$contest"
-CHECKS='[]'
 # add3 <id> <level> <label_pt> <detail_pt> <label_en> <detail_en> <label_es> <detail_es> [action]
-# — item TRILÍNGUE (+ botão). Texto só por --arg, nunca interpolado no programa jq.
+# — item TRILÍNGUE (+ botão). Os campos vão a um BUFFER (\x1f entre campos, \x1e entre itens, tirados do texto) e UM
+# jq monta a lista no fim (10/11/2026: era um jq por item, ~30 por abertura da Central). Texto nunca entra no programa.
+CKBUF=""
 add3(){
-  CHECKS="$(jq -c --arg i "$1" --arg lv "$2" --arg lb "$3" --arg d "$4" --arg le "$5" --arg de "$6" \
-    --arg ls "$7" --arg ds "$8" --arg a "${9:-}" \
-    '. + [{id:$i, level:$lv, label:$lb, detail:$d, label_en:$le, detail_en:$de, label_es:$ls, detail_es:$ds}
-          + (if $a == "" then {} else {action:$a} end)]' <<<"$CHECKS")"
+  local f r=""
+  for f in "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "${9:-}"; do r+="${f//[$'\x1e\x1f']/}"$'\x1f'; done
+  CKBUF+="$r"$'\x1e'
 }
 
 # conf num subshell-safe: só os campos que precisamos
 CONTEST_TYPE=""; CONTEST_START=0; CONTEST_END=0; FREEZE_TIME=""; LANGUAGES=""; LOGIN_START_TIME=""; LOGIN_ENABLED=""
-PRINT=""; MANUAL_VERDICT=""; REVIEW_JUDGES=""; PROBS=(); CONTEST_JUDGES=""; DEMO=""
+PRINT=""; MANUAL_VERDICT=""; REVIEW_JUDGES=""; PROBS=(); CONTEST_JUDGES=""; DEMO=""; VERDICT_RULE=""
 load_contest_conf "$contest"
 mode="$(contest_score_mode "$contest")"
 # MÓDULOS (lib/modules.sh): checagem de feature de evento só roda com o módulo LIGADO — contest
@@ -129,13 +129,25 @@ if [[ "$CONTEST_START" =~ ^[0-9]+$ && "$CONTEST_END" =~ ^[0-9]+$ ]] \
    && (( CONTEST_START > 0 && CONTEST_END > CONTEST_START && EPOCHSECONDS < CONTEST_END )); then
   _ls_s="$(fmt_epoch "$_ls" '%d/%m %H:%M' "$contest")"
   _st_s="$(fmt_epoch "$CONTEST_START" '%d/%m %H:%M' "$contest")"; _en_s="$(fmt_epoch "$CONTEST_END" '%d/%m %H:%M' "$contest")"
-  if [[ "${LOGIN_ENABLED:-}" == n ]]; then
+  # LOGIN FECHADO À MÃO perto da abertura = FAIL (LATAM 07/11/2026: o "sair de todos + fechar login" das 15:03 seguia
+  # valendo às 16:50 e 408 logins foram recusados até alguém reabrir). A abertura programada NÃO reabre um login fechado
+  # à mão (LOGIN_ENABLED=n é absoluto) — o aviso tem de dizer isso com a hora, e virar vermelho a 1 h dela.
+  _open_at=$(( _ls > 0 ? _ls : CONTEST_START ))
+  if [[ "${LOGIN_ENABLED:-}" == n ]] && (( _open_at <= EPOCHSECONDS + 3600 )); then
+    _oa_s="$(fmt_epoch "$_open_at" '%d/%m %H:%M' "$contest")"
+    add3 login_open fail "Login dos times FECHADO à mão" \
+      "o login está fechado (Regras › Login habilitado, ou o \"fechar o login\" de Pessoas › Sessões) e a abertura é $_oa_s: a abertura NÃO reabre um login fechado à mão. Nenhum time entra até alguém clicar em Reabrir login" \
+      "Team login CLOSED by hand" \
+      "the login is closed (Rules › Login enabled, or the \"close login\" of People › Sessions) and the opening is $_oa_s: the opening does NOT reopen a login closed by hand. No team can log in until someone clicks Reopen login" \
+      "Inicio de sesión de los equipos CERRADO a mano" \
+      "el login está cerrado (Reglas › Inicio de sesión habilitado, o el \"cerrar login\" de Personas › Sesiones) y la apertura es $_oa_s: la apertura NO reabre un login cerrado a mano. Ningún equipo entra hasta que alguien haga clic en Reabrir login"
+  elif [[ "${LOGIN_ENABLED:-}" == n ]]; then
     add3 login_open warn "Login dos times fechado" \
-      "\"Login habilitado\" está desligado em Regras: nenhum time entra (quem já entrou continua; contas de organização entram)" \
+      "\"Login habilitado\" está desligado em Regras: nenhum time entra (quem já entrou continua; contas de organização entram). A abertura programada não reabre: reabra à mão antes dela" \
       "Team login closed" \
-      "\"Login enabled\" is off in Rules: no team can log in (teams already in stay; organization accounts can log in)" \
+      "\"Login enabled\" is off in Rules: no team can log in (teams already in stay; organization accounts can log in). The scheduled opening does not reopen it: reopen it by hand before then" \
       "Inicio de sesión de los equipos cerrado" \
-      "\"Inicio de sesión habilitado\" está desactivado en Reglas: ningún equipo entra (quien ya entró sigue; las cuentas de la organización entran)"
+      "\"Inicio de sesión habilitado\" está desactivado en Reglas: ningún equipo entra (quien ya entró sigue; las cuentas de la organización entran). La apertura programada no lo reabre: reábrelo a mano antes de ella"
   elif (( _ls == 0 )); then
     add3 login_open ok "Abertura do login" "sem horário próprio: os times entram a partir do início ($_st_s)" \
       "Login opening" "no time of its own: teams can log in from the start ($_st_s)" \
@@ -288,11 +300,38 @@ fi
 # Um problema que pede k CPUs por teste só é julgado por juiz NOVO (manda slot_cpus) com
 # total_slots×slot_cpus ≥ k (com SAMENUMA, o maior nó); sem um, o job espera e vira Judge Error.
 declare -F cs_bank_json >/dev/null 2>&1 || source "$_DIR/lib/contest-statement.sh" 2>/dev/null
+# O JSON SERVÍVEL de cada problema lido UMA vez (10/11/2026): três laços (paralelos, parar no 1º erro, relógio do TL)
+# faziam um `$(cs_bank_json)` + um jq por problema cada — o arquivo traz o enunciado em base64. Um jq sobre todos;
+# arquivo ilegível derruba o lote do jq a partir dele, então quem faltou é relido um a um (o ilegível fica vazio, o
+# mesmo resultado de antes: sem par, stop_when desconhecido, relógio de parede).
+declare -A BK_HAS=() BK_K=() BK_N=() BK_SW=() BK_TC=() _bk_pid=()
+_bk_files=()
+for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
+  _p="${PROBS[i+4]}"; _f="$CONTESTSDIR/treino/var/jsons/$_p.json"
+  [[ -f "$_f" ]] || _f="$CONTESTSDIR/treino/var/jsons-private/$_p.json"
+  [[ -f "$_f" ]] || continue
+  BK_HAS[$_p]=1; _bk_pid[$_f]="$_p"; _bk_files+=("$_f")
+done
+_BK_JQ='input_filename as $f | [$f, ((.cpu_needed // 1) | tostring), ((.same_numa // false) | tostring),
+  (if (.stop_when | type) != "object" then "?"
+   else ([ (if .stop_when.tle == true then empty else "TLE" end), (if .stop_when.wa == true then empty else "WA" end),
+           (if .stop_when.re == true then empty else "RE" end) ] | join("/")) + "\u0002" + ((.tests // 0) | tostring) end),
+  ((.tl_clock // "wall") | tostring)] | join("\u0001")'
+_bk_read(){ local f k n sw tc; while IFS=$'\x01' read -r f k n sw tc; do
+    [[ -n "${_bk_pid[$f]:-}" ]] || continue
+    BK_K[${_bk_pid[$f]}]="$k"; BK_N[${_bk_pid[$f]}]="$n"; BK_SW[${_bk_pid[$f]}]="${sw/$'\x02'/$'\x01'}"; BK_TC[${_bk_pid[$f]}]="$tc"
+  done; }
+if (( ${#_bk_files[@]} )); then
+  _bk_read < <(jq -r "$_BK_JQ" "${_bk_files[@]}" 2>/dev/null)
+  for _f in "${_bk_files[@]}"; do
+    [[ -v BK_K[${_bk_pid[$_f]}] ]] || _bk_read < <(jq -r "$_BK_JQ" "$_f" 2>/dev/null)
+  done
+fi
 par_probs=""; par_bad=""
 pjm0='{}'; [[ -f "$cdir/problem-judges.json" ]] && pjm0="$(jq -c . "$cdir/problem-judges.json" 2>/dev/null)"; jq -e . >/dev/null 2>&1 <<<"$pjm0" || pjm0='{}'
 for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
-  pid="${PROBS[i+4]}"; bj="$(cs_bank_json "$pid" 2>/dev/null)" || continue
-  IFS=$'\x01' read -r pk pn < <(jq -j '[((.cpu_needed // 1)|tostring), ((.same_numa // false)|tostring)] | join("\u0001")' "$bj" 2>/dev/null)
+  pid="${PROBS[i+4]}"; [[ -n "${BK_HAS[$pid]:-}" ]] || continue
+  pk="${BK_K[$pid]:-}"; pn="${BK_N[$pid]:-}"
   [[ "$pk" =~ ^[0-9]+$ && "$pk" -gt 1 ]] || continue
   par_probs+=" ${PROBS[i+3]}"
   # pool efetivo do problema: override → CONTEST_JUDGES → todos os online
@@ -324,23 +363,32 @@ fi
 if [[ "${CONTEST_TYPE:-icpc}" == icpc ]]; then
   sw_bad=""; sw_n=0; sw_unk=0
   for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
-    pid="${PROBS[i+4]}"; bj="$(cs_bank_json "$pid" 2>/dev/null)" || continue
-    sw="$(jq -r 'if (.stop_when | type) != "object" then "?"
-                 else ([ (if .stop_when.tle == true then empty else "TLE" end), (if .stop_when.wa == true then empty else "WA" end),
-                         (if .stop_when.re == true then empty else "RE" end) ] | join("/")) + "\u0001" + ((.tests // 0) | tostring) end' "$bj" 2>/dev/null)"
+    pid="${PROBS[i+4]}"; [[ -n "${BK_HAS[$pid]:-}" ]] || continue
+    sw="${BK_SW[$pid]:-}"
     [[ "$sw" == "?" || -z "$sw" ]] && { sw_unk=$((sw_unk + 1)); continue; }
     sw_n=$((sw_n + 1))
     IFS=$'\x01' read -r sw_k sw_t <<<"$sw"
     [[ -n "$sw_k" ]] && sw_bad+=" ${PROBS[i+3]}(${sw_t} testes, segue após ${sw_k})"
   done
   if [[ -n "$sw_bad" ]]; then
+    # a REGRA DO VEREDICTO (09/11/2026) muda o porquê: com `first` o resto dos testes não muda nada (é só espera); com
+    # `worst` (o de sempre) eles ainda decidem o veredicto — parar no 1º erro muda o que o time recebe
+    if [[ "${VERDICT_RULE:-}" == first ]]; then
+      sw_why="a regra do veredicto é o 1º teste que falhou, então nada depois dele muda o resultado, mas estes rodam TODOS os testes:"
+      sw_why_en="the verdict rule is the first failing test, so nothing after it changes the result, but these run ALL the tests:"
+      sw_why_es="la regla del veredicto es el 1.er caso que falló, así que nada después de él cambia el resultado, pero estos ejecutan TODAS las pruebas:"
+    else
+      sw_why="em prova ICPC só o 1º erro importa, mas estes rodam TODOS os testes depois dele (e, com a regra do veredicto \"mais grave\" — Central › Regras —, um erro mais grave depois do 1º ainda muda o veredicto):"
+      sw_why_en="in an ICPC contest only the 1st failure matters, but these run ALL the tests after it (and, with the \"most severe\" verdict rule — Home › Rules —, a more severe error after the 1st still changes the verdict):"
+      sw_why_es="en una competencia ICPC solo importa el 1.er error, pero estos ejecutan TODAS las pruebas después de él (y, con la regla del veredicto \"más grave\" — Central › Reglas —, un error más grave después del 1.º todavía cambia el veredicto):"
+    fi
     sw_bad_en="${sw_bad// testes, segue após / tests, keeps going after }"; sw_bad_es="${sw_bad// testes, segue após / pruebas, sigue después de }"
     add3 stop_first warn "Problema que segue julgando depois do 1º erro" \
-      "em prova ICPC só o 1º erro importa, mas estes rodam TODOS os testes depois dele:$sw_bad — um TLE pode levar minutos p/ sair. No editor do problema, aba Limites, marque \"parar no primeiro\" TLE/WA/RE (STOPWHEN_*=y no conf)" \
+      "$sw_why$sw_bad — um TLE pode levar minutos p/ sair. No editor do problema, aba Limites, marque \"parar no primeiro\" TLE/WA/RE (STOPWHEN_*=y no conf)" \
       "Problem that keeps judging after the 1st failure" \
-      "in an ICPC contest only the 1st failure matters, but these run ALL the tests after it:$sw_bad_en — a TLE can take minutes to come out. In the problem editor, Limits tab, tick \"stop at first\" TLE/WA/RE (STOPWHEN_*=y in the conf)" \
+      "$sw_why_en$sw_bad_en — a TLE can take minutes to come out. In the problem editor, Limits tab, tick \"stop at first\" TLE/WA/RE (STOPWHEN_*=y in the conf)" \
       "Problema que sigue evaluando después del 1.er error" \
-      "en una competencia ICPC solo importa el 1.er error, pero estos ejecutan TODAS las pruebas después de él:$sw_bad_es — un TLE puede tardar minutos en salir. En el editor del problema, pestaña Límites, marca \"detener en el primer\" TLE/WA/RE (STOPWHEN_*=y en el conf)"
+      "$sw_why_es$sw_bad_es — un TLE puede tardar minutos en salir. En el editor del problema, pestaña Límites, marca \"detener en el primer\" TLE/WA/RE (STOPWHEN_*=y en el conf)"
   elif (( sw_n > 0 )); then
     add3 stop_first ok "Julgamento para no 1º erro" "os $sw_n problema(s) com a informação param no 1º TLE/WA/RE$( (( sw_unk > 0 )) && echo " ($sw_unk sem a informação — reindexe)")" \
       "Judging stops at the 1st failure" "the $sw_n problem(s) with the information stop at the 1st TLE/WA/RE$( (( sw_unk > 0 )) && echo " ($sw_unk without the information — reindex)")" \
@@ -348,14 +396,48 @@ if [[ "${CONTEST_TYPE:-icpc}" == icpc ]]; then
   fi
 fi
 
+# --- FOLGA DO TL (10/11/2026) -------------------------------------------------------------------------------------
+# Bancada de 06–07/11: vizinhos pesados em memória no mesmo soquete inflam o tempo em até ~1,6× (+64% medido). Com o
+# TL efetivo abaixo de TL_MARGIN_MIN (1,6) × o pior tempo AC das good, uma solução INTENCIONAL pode levar TLE por azar.
+# O rerun do TLE perto do TL (mojtools TLERERUN_BAND) cobre parte; o resto é TL com folga (TLOVERRIDE ou fator maior).
+# Lê a `margin` do sumário da calibração (run/calib-sum/<id>.json, calx_margin — um arquivo por problema, sem abrir
+# pacote); sumário velho (stale) ou sem a margem não conta. Todos ≥ o mínimo = ok; nenhum com o dado = ausente.
+mg_min="${TL_MARGIN_MIN:-1.6}"; [[ "$mg_min" =~ ^[0-9]+\.?[0-9]*$ ]] || mg_min=1.6
+declare -A mg_letter=(); mg_files=()
+for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
+  f="$RUNDIR/calib-sum/${PROBS[i+4]}.json"; [[ -s "$f" ]] || continue
+  mg_letter[$f]="${PROBS[i+3]}"; mg_files+=("$f")
+done
+mg_bad=""; mg_n=0; mg_worst=""
+if (( ${#mg_files[@]} )); then
+  while IFS=$'\t' read -r f m lang; do
+    [[ -n "$f" ]] || continue
+    mg_n=$((mg_n + 1))
+    if LC_ALL=C awk -v m="$m" -v t="$mg_min" 'BEGIN{exit !(m < t)}'; then mg_bad+=" ${mg_letter[$f]}(${m}× ${lang})"; fi
+    [[ -z "$mg_worst" ]] || LC_ALL=C awk -v m="$m" -v w="$mg_worst" 'BEGIN{exit !(m < w)}' && mg_worst="$m"
+  done < <(jq -r 'select(.stale != true and (.margin | type) == "object") | [input_filename, (.margin.min | tostring), (.margin.lang // "")] | @tsv' "${mg_files[@]}" 2>/dev/null)
+fi
+if [[ -n "$mg_bad" ]]; then
+  add3 tl_margin warn "TL com pouca folga" \
+    "TL efetivo abaixo de ${mg_min}× o pior tempo das soluções corretas em:$mg_bad. Vizinhos pesados em memória no juiz podem deixar uma solução correta até ~1,6× mais lenta (medido em 06–07/11); o juiz repete o TLE perto do TL, mas isso não cobre tudo. Para dar folga: TLOVERRIDE ou um TLMOD[calibrafactor] maior no conf (aba Limites do editor)" \
+    "TL with little headroom" \
+    "effective TL below ${mg_min}× the worst time of the correct solutions in:$mg_bad. Memory-heavy neighbours on the judge can make a correct solution up to ~1.6× slower (measured on Nov 6–7); the judge reruns a TLE near the TL, but that does not cover everything. To add headroom: TLOVERRIDE or a larger TLMOD[calibrafactor] in the conf (Limits tab of the editor)" \
+    "TL con poca holgura" \
+    "TL efectivo por debajo de ${mg_min}× el peor tiempo de las soluciones correctas en:$mg_bad. Vecinos pesados en memoria en el juez pueden hacer una solución correcta hasta ~1,6× más lenta (medido el 6–7/11); el juez repite el TLE cerca del TL, pero eso no lo cubre todo. Para dar holgura: TLOVERRIDE o un TLMOD[calibrafactor] mayor en el conf (pestaña Límites del editor)"
+elif (( mg_n > 0 )); then
+  add3 tl_margin ok "TL com folga" "os $mg_n problema(s) calibrados têm TL ≥ ${mg_min}× o pior tempo das soluções corretas (a menor folga: ${mg_worst}×)" \
+    "TL has headroom" "the $mg_n calibrated problem(s) have TL ≥ ${mg_min}× the worst time of the correct solutions (smallest headroom: ${mg_worst}×)" \
+    "TL con holgura" "los $mg_n problema(s) calibrados tienen TL ≥ ${mg_min}× el peor tiempo de las soluciones correctas (la menor holgura: ${mg_worst}×)"
+fi
+
 # --- RELÓGIO DO TL (05/11/2026; TLCLOCK=cpu no pacote, docs/PACOTE.md "Relógio do TL") --------------------------
 # Informativo (ok): quais problemas cobram o TL pelo tempo de CPU, com a parede como teto maior — a folha de TL da
 # prova os marca com †. Escolha do AUTOR do problema, nunca aviso. Do json servível (tl_clock), sem abrir pacote.
 tc_cpu=""; tc_n=0
 for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
-  pid="${PROBS[i+4]}"; bj="$(cs_bank_json "$pid" 2>/dev/null)" || continue
+  pid="${PROBS[i+4]}"; [[ -n "${BK_HAS[$pid]:-}" ]] || continue
   tc_n=$((tc_n + 1))
-  [[ "$(jq -r '.tl_clock // "wall"' "$bj" 2>/dev/null)" == cpu ]] && tc_cpu+=" ${PROBS[i+3]}"
+  [[ "${BK_TC[$pid]:-}" == cpu ]] && tc_cpu+=" ${PROBS[i+3]}"
 done
 if [[ -n "$tc_cpu" ]]; then
   add3 tl_clock ok "Tempo-limite por tempo de CPU" \
@@ -462,15 +544,20 @@ fi
 # refaz ao re-registrar, e bastava UM juiz ter o problema. Quem responde "este juiz vai calibrar na 1ª
 # submissão?" é o item judges_warm, logo abaixo, juiz por juiz.
 noTL=""; noPool=""; nprob=0
+# o pool de cada problema e os juízes vivos em mapas do bash, UM jq cada (eram dois jq por problema por abertura)
+declare -A PJPOOL=() JLIVE=()
+while IFS=$'\t' read -r _k _v; do [[ -n "$_k" ]] && PJPOOL[$_k]="$_v"; done \
+  < <(jq -r 'to_entries[] | [.key, ((.value // []) | if type == "array" then join(" ") else "" end)] | @tsv' <<<"$pjm" 2>/dev/null)
+while IFS= read -r _h; do [[ -n "$_h" ]] && JLIVE[$_h]=1; done < <(jq -r '.[].host // empty' <<<"$judges" 2>/dev/null)
 for ((i=0; i+4<${#PROBS[@]}; i+=5)); do
   id="${PROBS[i+4]}"; (( nprob++ ))
   # pool efetivo do problema: override (problem-judges.json) -> pool do contest -> todos
-  ppool="$(jq -r --arg id "$id" '(.[$id] // []) | join(" ")' <<<"$pjm" 2>/dev/null)"
+  ppool="${PJPOOL[$id]:-}"
   [[ -n "$ppool" ]] || ppool="${CONTEST_JUDGES:-}"
   if [[ -n "$ppool" ]]; then
     live=0
     for h in $ppool; do
-      jq -e --arg h "$h" 'any(.[]; .host == $h)' >/dev/null 2>&1 <<<"$judges" && { live=1; break; }
+      [[ -n "${JLIVE[$h]:-}" ]] && { live=1; break; }
     done
     (( live == 0 )) && noPool+=" $id"
     # calibrado = algum host DO POOL reportou TL p/ o problema — no MÉTODO do problema: com TLMETHOD=kattis
@@ -550,6 +637,14 @@ else
     "Impresión sin staff" "PRINT activado pero no existe ninguna cuenta .staff — globos/impresiones quedarán sin operador"
 fi
 
+# --- tarefas de TESTE da impressão (pr_test_*) na fila: somem sozinhas no início da prova, mas a sala precisa saber
+ntst=0; [[ -d "$cdir/print-requests" ]] && ntst="$(find "$cdir/print-requests" -maxdepth 1 -name 'tst*.json' 2>/dev/null | wc -l | tr -d '[:space:]')"
+if (( ${ntst:-0} > 0 )); then
+  add3 print_tests warn "Tarefas de teste na fila" "$ntst tarefa(s) de teste da impressão ainda na fila: apague em Operação › Staff (ou na página do staff). No início da prova elas são apagadas sozinhas" \
+    "Test tasks in the queue" "$ntst printer test task(s) still in the queue: delete them in Operations › Staff (or on the staff page). They are deleted automatically when the contest starts" \
+    "Tareas de prueba en la cola" "$ntst tarea(s) de prueba de impresión aún en la cola: bórralas en Operación › Staff (o en la página del staff). Al iniciar la competencia se borran solas"
+fi
+
 # --- escopo do staff/chefe de sede -------------------------------------------------
 # Sem staff-filters.json (ou com lista vazia), staff_can_see devolve TRUE p/ todo mundo: cada
 # chefe de sede imprime as ETIQUETAS COM SENHA de TODOS os times, não só da sede dele.
@@ -574,9 +669,9 @@ else
       "Staff scope per site" "$scoped staff account(s) with a defined scope" \
       "Alcance del staff por sede" "$scoped cuenta(s) de staff con alcance definido"
   else
-    add3 staff_filters warn "Staff sem escopo de sede" "$(( cstaff_n + staff_n - scoped )) de $(( cstaff_n + staff_n )) conta(s) .staff/.cstaff sem filtro: veem a fila e as ETIQUETAS COM SENHA de todos os times (Operação › Staff)" \
-      "Staff without a site scope" "$(( cstaff_n + staff_n - scoped )) of $(( cstaff_n + staff_n )) .staff/.cstaff account(s) without a filter: they see the queue and the LABELS WITH PASSWORDS of every team (Operations › Staff)" \
-      "Staff sin alcance de sede" "$(( cstaff_n + staff_n - scoped )) de $(( cstaff_n + staff_n )) cuenta(s) .staff/.cstaff sin filtro: ven la cola y las ETIQUETAS CON CONTRASEÑA de todos los equipos (Operación › Staff)"
+    add3 staff_filters warn "Staff sem escopo de sede" "$(( cstaff_n + staff_n - scoped )) de $(( cstaff_n + staff_n )) conta(s) .staff/.cstaff sem filtro: veem a fila e as ETIQUETAS COM SENHA de todos os times; o .cstaff sem filtro não troca foto nem música de time (Operação › Staff)" \
+      "Staff without a site scope" "$(( cstaff_n + staff_n - scoped )) of $(( cstaff_n + staff_n )) .staff/.cstaff account(s) without a filter: they see the queue and the LABELS WITH PASSWORDS of every team; a .cstaff without a filter cannot change any team's photo or music (Operations › Staff)" \
+      "Staff sin alcance de sede" "$(( cstaff_n + staff_n - scoped )) de $(( cstaff_n + staff_n )) cuenta(s) .staff/.cstaff sin filtro: ven la cola y las ETIQUETAS CON CONTRASEÑA de todos los equipos; el .cstaff sin filtro no cambia la foto ni la música de ningún equipo (Operación › Staff)"
   fi
 fi
 fi   # módulo sedes
@@ -601,9 +696,9 @@ else
 fi
 
 # --- contas ------------------------------------------------------------------------
-# (o `cstaff` PRECISA estar na lista: sem ele o chefe de sede era contado como competidor)
+# conta de papel (registro server/etc/roles.tsv) não é competidor: o diretório é o login, então tira o `$` do ROLE_RE
 users_n="$(find "$cdir/users" -maxdepth 2 -name account.json 2>/dev/null \
-  | grep -vcE '\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)/account\.json$')"
+  | grep -vcE "${ROLE_RE%\$}/account\\.json\$")"
 users_n="${users_n//[^0-9]/}"; users_n="${users_n:-0}"
 src_users="$(_users_source "$contest")"
 if [[ "$src_users" != "$contest" ]]; then
@@ -917,7 +1012,7 @@ else
   # quem está DENTRO do gate e quem ficou sem regra: o time sem esperado entra de qualquer
   # navegador — se isso não foi escolha (lista de isentos), é buraco no gate.
   logins="$(find "$cdir/users" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null \
-    | grep -vE '\.(admin|judge|cjudge|staff|cstaff|mon|animeitor)$' | jq -R . | jq -cs .)"
+    | grep -vE "$ROLE_RE" | jq -R . | jq -cs .)"
   [[ -n "$logins" ]] || logins='[]'
   ugmap="$(ug_expected_map "$contest" "$logins")"
   [[ -n "$ugmap" ]] || ugmap='{}'
@@ -1293,6 +1388,10 @@ if mod_on "$contest" telao; then
   fi
 fi
 
+CHECKS="$(printf '%s' "$CKBUF" | jq -cRs 'split("\u001e") | map(select(length > 0) | split("\u001f")
+  | {id:.[0], level:.[1], label:.[2], detail:.[3], label_en:.[4], detail_en:.[5], label_es:.[6], detail_es:.[7]}
+    + (if (.[8] // "") == "" then {} else {action:.[8]} end))')"
+[[ -n "$CHECKS" ]] || CHECKS='[]'
 ok_json '{checks:$c, summary:{ok:($c|map(select(.level=="ok"))|length),
                               warn:($c|map(select(.level=="warn"))|length),
                               fail:($c|map(select(.level=="fail"))|length)}}' \

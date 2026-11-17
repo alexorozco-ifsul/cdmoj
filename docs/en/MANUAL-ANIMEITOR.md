@@ -1,4 +1,4 @@
-<!-- i18n-source: MANUAL-ANIMEITOR.md blob:683e095b4d33ed3f92a48c9e5b0d4bac0812fa56 -->
+<!-- i18n-source: MANUAL-ANIMEITOR.md blob:49cd0f5e5f242eaade411140af7dfa496129fcf2 -->
 # MOJ: Big-screen manual (`.animeitor`)
 
 > **Translation note.** This manual is a translation of the Portuguese original. The command-line tools (`moj`, `moj-contest`, `moj-comp`) print their messages in Portuguese, and the command examples below are identical to the original.
@@ -109,12 +109,20 @@ or no music.
 
 - **⬆ Bulk upload** is the fast way: drag dozens of files. The **file name is the team
   login** (`time-alfa.jpg`, `time-alfa.mp3`). You can send photos and music together.
+- The bulk upload also accepts **`.zip` packages** with the photos and the music, in any folder of the
+  zip. The browser opens the package, and nothing is uploaded until you confirm. Before the upload, the
+  screen shows a **check**: each file, the team that its name matches, if it is new or replaces the
+  current one, and what is left out (a name without a team, a file that is not a photo or an MP3, the
+  same team twice — the last one counts). Check the list and click **Upload**. The zip cannot have a
+  password, and each file can have up to 20 MB.
 - The server converts and resizes the **photo** (webp + thumbnail). The **music** stays as it
   was sent and must be a **real mp3** (up to 15 MB). The server checks the file, not the extension.
 - **⬇ Download package (.zip)**: everything in one file (photos, music and a CSV of the teams). Give
   this file to the person who operates the display.
 - The **site chiefs** (`.cstaff`) upload the photos **of their own site**. In a contest with many sites,
   let them collect the photos locally. Then you only check the to-do list.
+- The site of each site chief is their filter in **Operations › Staff**. Without a filter, the site
+  chief cannot change the photo or the music of any team.
 
 ### The DEFAULT photo and music
 
@@ -191,6 +199,11 @@ The checklist for the day before, in order:
 | See/create/revoke **webcast keys** (legacy) | **Yes** | No | No |
 | Scoreboard | Always unfrozen | Frozen | Frozen |
 | Statistics | Yes | No | No |
+
+**`.foto` and `.musica`** (roles with a scope, 2026-11-09): they open this same page and see the gallery **of their
+scope only** (Operations › Staff). `.foto` only uploads, replaces or removes **photos**; `.musica`, only **music** —
+the button of the other type does not appear, and the batch rejects what the account cannot upload. Without a
+scope, they see no team. They do not change the contest default, publish to the Animeitor or see the webcast keys.
 
 ## Pointers
 

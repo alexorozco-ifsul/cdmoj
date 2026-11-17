@@ -38,7 +38,7 @@ painel de módulo **desligado** cai em **Central › Módulos** com um aviso diz
 
 | Bloco | O que faz |
 |---|---|
-| **🚦 Falta para começar** | O checklist pré-prova (verde/amarelo/vermelho) com **botão que abre o painel exato** de cada pendência. Vermelho é **crítico**: confira antes de começar. O checklist é um aviso — o MOJ não impede login nem submissão por causa dele; os itens já conferidos ficam recolhidos. Confere janela, log de julgamento, freeze, juízes, linguagens, TL calibrado, pool, contas, staff e o daemon, se algum problema de prova ICPC **segue julgando depois do 1º erro** (*Julgamento para no 1º erro*: o TLE de um problema com centenas de testes leva minutos — marque "parar no primeiro" TLE/WA na aba Limites do editor do problema), e se **cada juiz já calibrou cada problema** (*Juízes aquecidos*): o tempo-limite é medido por máquina, e o juiz que ainda não calibrou um problema faz isso na 1ª submissão dele — que espera minutos. Quando há juiz frio, o item traz o botão **🔥 Aquecer juízes**, que manda só os juízes frios calibrarem; faça isso **antes do início** (cada calibração ocupa um lugar do juiz por alguns minutos) e rode o checklist de novo (↻) para ver "aquecendo" virar "aquecidos". O mesmo botão fica fixo em **Operação › Situação**, e, em contest de prioridade **Prova** (ou Super), o aquecimento também roda **sozinho**: ao promover uma rodada e uns 15 minutos antes do início de cada rodada (fica no audit como `warm-judges`). Lista de aula fica só com o botão. E, **só com o módulo ligado**, coortes, gate de navegador, trava de sede, rodada seguinte, documentos, balões e prorrogação. A checagem **módulos** avisa quando um módulo está desligado mas tem dados no contest. *Sem freeze* e *contas compartilhadas* só viram aviso em contest de prioridade **Prova** (numa lista são o normal). |
+| **🚦 Falta para começar** | O checklist pré-prova (verde/amarelo/vermelho) com **botão que abre o painel exato** de cada pendência. Vermelho é **crítico**: confira antes de começar. O checklist é um aviso — o MOJ não impede login nem submissão por causa dele; os itens já conferidos ficam recolhidos. Confere janela, log de julgamento, freeze, juízes, linguagens, TL calibrado, pool, contas, staff e o daemon, se algum problema de prova ICPC **segue julgando depois do 1º erro** (*Julgamento para no 1º erro*: o TLE de um problema com centenas de testes leva minutos — marque "parar no primeiro" TLE/WA na aba Limites do editor do problema), se o **TL tem folga** (*TL com folga*: o TL efetivo de cada problema calibrado contra o pior tempo das soluções corretas; abaixo de 1,6× uma solução correta pode levar TLE quando o juiz está cheio de programas que usam muita memória — dê folga com `TLOVERRIDE` ou um `TLMOD[calibrafactor]` maior), e se **cada juiz já calibrou cada problema** (*Juízes aquecidos*): o tempo-limite é medido por máquina, e o juiz que ainda não calibrou um problema faz isso na 1ª submissão dele — que espera minutos. Quando há juiz frio, o item traz o botão **🔥 Aquecer juízes**, que manda só os juízes frios calibrarem; faça isso **antes do início** (cada calibração ocupa um lugar do juiz por alguns minutos) e rode o checklist de novo (↻) para ver "aquecendo" virar "aquecidos". O mesmo botão fica fixo em **Operação › Situação**, e, em contest de prioridade **Prova** (ou Super), o aquecimento também roda **sozinho**: ao promover uma rodada e uns 15 minutos antes do início de cada rodada (fica no audit como `warm-judges`). Lista de aula fica só com o botão. E, **só com o módulo ligado**, coortes, gate de navegador, trava de sede, rodada seguinte, documentos, balões e prorrogação. A checagem **módulos** avisa quando um módulo está desligado mas tem dados no contest. *Sem freeze* e *contas compartilhadas* só viram aviso em contest de prioridade **Prova** (numa lista são o normal). |
 | **🧰 Gerar** | Um cartão por artefato, com o estado atual: etiquetas de credenciais, relatório da prova e jplag sempre (o jplag também abre para o juiz-chefe, que pode rodar, e para o juiz, que só vê); documentos (`documentos`), promover rodada (`rodadas`), cerimônia de revelação e telão (`telao`) com o módulo. |
 | **📡 Ao vivo** | Resumo curto (pendentes, submissões, juízes online, resposta p95, correção manual). Atualiza sozinho; o painel completo é **Operação › Situação**. |
 | **⏱️ Regras da prova** | Início, fim e freeze editáveis ali mesmo, o modo e as linguagens em leitura, e os **módulos ligados** (com atalho para ligar/desligar). O resto está em **Central › Regras**. |
@@ -105,7 +105,7 @@ não tem título nesse idioma, o MOJ usa o título em português.
 | Painel | O que faz |
 |---|---|
 | **Situação** | O dashboard ao vivo (atualiza em lugar a cada ~12s): logados, juízes online/ocupados, fila, pendentes, latência, timeline, avaliação manual, as **ações sugeridas** quando algo está fora do lugar e o botão **🔥 Aquecer juízes**. Balões pendentes/retidos só com o módulo `baloes`. |
-| **Staff** | Panorama e ação sobre a fila de impressão (+ balões com o módulo), desempenho por staff e o **escopo** de cada staff/chefe de sede (regex ou `region:<sede>`). `region:<nome>` cobre tudo o que está **naquele nó** de Evento › Sedes & escolas: a sede e, se for um nó pai, todas as sedes abaixo dele (`region:Nordeste` vê as sedes do Nordeste), e também um recorte (`view`) pelo nome. Vale a sede gravada no time ou, sem ela, a regex. A regex no escopo é testada no login. |
+| **Staff** | Panorama e ação sobre a fila de impressão (+ balões com o módulo), desempenho por staff e o **escopo** de cada staff/chefe de sede (regex ou `region:<sede>`). `region:<nome>` cobre tudo o que está **naquele nó** de Evento › Sedes & escolas: a sede e, se for um nó pai, todas as sedes abaixo dele (`region:Nordeste` vê as sedes do Nordeste), e também um recorte (`view`) pelo nome. Vale a sede gravada no time ou, sem ela, a regex. A regex no escopo é testada no login. Embaixo, o **🧪 teste de impressora** e o **🧾 formato da folha**: PDF (o de sempre, montado no servidor e já pronto quando a tarefa nasce) ou HTML no navegador da estação (experimental, bem mais leve para o servidor; o pedido que não é texto segue em PDF). Meça com um lote de teste em cada formato antes de usar o HTML numa prova. |
 | **Juízes** | A fila da correção manual: quem pegou cada submissão, votos, idade; decidir/resolver na hora; e a configuração do veredicto manual (opções de rótulo + **🔎 o que vai para revisão**: uma tabela problema × veredicto — o marcado vai para os juízes, o resto sai automático; sem nada marcado, tudo sai automático — com exceções por linguagem e o botão de liberar retidos que a tabela nova solta). |
 | **Auditoria** | Feed unificado de tudo que aconteceu (ações de admin, logins, submissões, veredictos) com filtros e CSV, mais os **backups** que os usuários subiram (por usuário, com ZIP). |
 
@@ -138,6 +138,14 @@ não tem título nesse idioma, o MOJ usa o título em português.
 > mostra qual política está valendo, e **Operação › Situação** mostra quantos balões estão
 > retidos.
 
+> **Balão esperando o 1º da sede.** O balão sai com a estrela de primeiro da sede só com certeza: se
+> outro time da sede enviou antes e essa submissão ainda não tem veredicto (julgando ou na revisão
+> manual), **todos os balões do problema naquela sede esperam**, sem limite de tempo. **Operação ›
+> Staff** lista os pares retidos (sede, problema, quantos, há quanto tempo e a submissão que segura),
+> com alerta depois de 10 minutos. O normal é decidir a submissão na fila do juiz (ela aparece marcada
+> com 🎈). Se ela não puder ser decidida agora, clique **Liberar sem faixa** (duas vezes, para confirmar):
+> os balões saem sem a estrela. O juiz-chefe pode liberar também, na fila dele.
+
 > **Como o placar marca quem resolveu.** Por padrão a célula de quem resolveu é **sempre igual**
 > (verde) e a cor do balão vai numa **bolinha** ao lado. É de propósito: a paleta ICPC dá o
 > problema A **branco**, e branco sobre o fundo branco do placar é o mesmo pixel — quem resolvia
@@ -145,6 +153,19 @@ não tem título nesse idioma, o MOJ usa o título em português.
 > preferir o clássico — a célula inteira pintada com a cor do balão — marque em **Central ›
 > Regras › Célula "resolveu" no placar**; as cores claras ganham contorno para não sumirem. Vale
 > para o placar, a cerimônia de revelação e o relatório.
+
+> **Qual veredicto o time recebe.** Quando uma submissão erra em mais de um teste, a regra do
+> contest decide qual erro vale. Em **Central › Regras › Qual veredicto o time recebe**:
+> - **O do 1º teste que falhou** (o padrão de um contest ICPC novo, a regra do ICPC): os exemplos são
+>   julgados primeiro, depois os outros testes pelo nome, e vale o primeiro erro. Quem erra o exemplo
+>   recebe o erro do exemplo.
+> - **O do teste mais grave** (a regra antiga do MOJ; os contests criados antes de 09/11/2026 ficam
+>   nela): vale o pior erro entre todos os testes (TLE/MLE, depois RE, depois WA). É também o padrão
+>   de um contest novo nos outros modos (OBI, treino, heurístico): lá a nota é o que vale e, num
+>   problema que para no primeiro erro, a ordem dos testes muda a nota.
+>
+> A mudança vale para os julgamentos e rejulgamentos feitos depois de salvar. Para aplicar a regra
+> nova a submissões antigas, rejulgue.
 
 Fora do painel, mas linkadas da Central: **etiquetas de credenciais**, **cerimônia de revelação**,
 **jplag**, **fila do staff** e **placar**.
@@ -296,6 +317,15 @@ operações em massa (reset de senha, desabilitar) **pulam** contas privilegiada
 | **Staff** | `.staff` | Fila de **🖨️ impressão e balões** (pegar/imprimir/entregar, modo automático de quiosque). | Ver problemas ou submeter (nunca); etiquetas; placar sem freeze. |
 | **Chefe de sede** | `.cstaff` | Observar a fila do staff da sua sede (somente leitura), **Etiquetas** de credenciais dos competidores e do **`.staff`** da sua sede (com senha — exceto em contest que usa contas do treino, onde a senha é pessoal e não sai na etiqueta; a credencial do próprio chefe também não sai em etiqueta), o **🎥 telão** da sede e a **🏆 revelação por sede** depois do fim. | Agir na fila de impressão; ver problemas/submeter; não herda `.staff`. |
 | **Monitor** | `.mon` | Submeter DURANTE a prova (sem aparecer no placar), **responder clarifications**, Todas as Submissões e Estatísticas. | Ver problemas antes da largada; correção manual. |
+| **Fotos** | `.foto` | Na página do **🎥 telão**, subir e trocar a **foto** dos times do seu escopo (um arquivo, em lote ou num `.zip`). | Música; chaves do webcast; ver problemas ou submeter; placar sem freeze. |
+| **Músicas** | `.musica` | O mesmo, para a **música** dos times do seu escopo. | Foto; o resto, como o `.foto`. |
+| **Sistemas** | `.sistemas` | **🖥 Máquinas** das sedes do seu escopo: o panorama, os comandos, travar e destravar telas, e **soltar** um IP preso pela trava de sede. | Máquinas de outra sede; ligar ou desligar a trava; ver problemas ou submeter. |
+| **Diretor** | `.diretor` | O **placar SEM freeze**, durante a prova toda, **só do seu recorte** (região, país ou sede), com a posição e a ★ de primeiro recalculadas dentro do recorte. | Ver os outros times; ver problemas ou submeter; etiquetas, fila, estatísticas. |
+
+Os quatro papéis de baixo têm **escopo**: em **Operação › Staff › Escopo das contas de papel**, diga quais
+sedes, países ou regiões cada login vê (`region:<nome>`, um por linha). **Sem escopo, eles não veem ninguém** — ao
+contrário do `.staff` e do `.cstaff`, que sem escopo veem todos. O corte é sempre do servidor.
+Os papéis vêm de um registro único (`server/etc/roles.tsv`): sufixo, classe e o que cada um pode.
 
 Regra de ouro: **nenhuma conta com sufixo de papel entra no placar ou nas estatísticas** —
 crie quantas precisar sem medo de sujar o resultado.
@@ -580,6 +610,24 @@ O MOJ recusa publicar o relatório quando ele mostraria o que ainda não é púb
 - **Com coorte PRIVADA e os resultados não liberados.** O relatório mostra todos os times. Vale também para o
   relatório de uma rodada arquivada. Libere os resultados em Evento › Coortes.
 
+**Desclassificar quem não logou** (Pessoas › Contas › cartão **🚫 Desclassificar quem não logou**; na CLI,
+`moj-contest -c <contest> users absent`). Tira do placar e da estatística, de uma vez, os times que não participaram:
+
+- **Quem sai:** o time sem nenhum login de 1 hora antes da abertura do login até o fim da prova (para todas as sedes)
+  **e** sem nenhuma submissão. Quem submeteu nunca sai, mesmo sem login registrado. Login de aquecimento não conta.
+- **Quem fica:** quem está num estágio **publicado** da classificação, quem já estava desclassificado e as contas de
+  papel.
+- **Ver prévia** mostra a janela usada, as contagens e a lista, com o último login de cada time, sem gravar nada. O
+  botão **Desclassificar N times** confirma. Se a lista mudou desde a prévia, o painel mostra a lista nova e pede de
+  novo.
+- Funciona a qualquer momento. Com a prova ainda rodando, a janela vai até agora, e quem logar depois já estará
+  desclassificado.
+- Cada clique vira um **lote**, listado no cartão com data e autor. **Desfazer** devolve o lote inteiro, menos quem
+  você desclassificou ou devolveu à mão depois. Tudo vai para a Auditoria.
+- A desclassificação é a mesma de cada conta: a conta, a senha e o histórico ficam. Se o relatório já foi publicado,
+  republique-o. O placar congelado preservado pelo **Encerrar evento** não muda: é o registro do que foi exibido na
+  prova.
+
 ## 6¾. Participação virtual (Evento › Virtual — módulo `virtual`)
 
 Com a prova encerrada, qualquer conta do Treino Livre pode **refazer o contest uma vez**, no próprio
@@ -613,6 +661,22 @@ treino. Um contest que não pode ser visto por fora não deve ligar o módulo.
   linha do placar virtual (o registro fica guardado; **devolver** desfaz). A ação é auditada.
   O botão **devolver tentativa** apaga a linha e deixa aquela conta largar de novo neste contest. Use
   para um testador, ou para quem teve problema durante a prova. A ação também é auditada.
+
+**O que o participante vê do contest.** A tela tem a cara da prova (abas Prova · Placar · Clarifications & avisos ·
+Minhas submissões · Ajuda), e o servidor libera cada coisa no **tempo relativo** da participação:
+
+- os enunciados, com o **tempo-limite por linguagem**: o que julga a submissão virtual, isto é, o do treino agora (se o
+  problema foi recalibrado depois da prova, pode diferir da folha de tempos-limite);
+- os **documentos publicados** em Evento › Documentos (caderno, ambiente de julgamento, tempos-limite) desde a largada;
+  o **editorial** e os **links externos** dos Recursos, só quando a participação termina;
+- as **clarifications respondidas em público**, os **avisos oficiais** e as **notícias**, cada um no minuto da prova em
+  que saiu (o que saiu depois do fim, só quando a participação termina). Pergunta privada nunca aparece, e o
+  participante não pergunta: ninguém responderia. Aviso ou notícia **editados** contam pelo horário da edição;
+- o **placar congela** no mesmo minuto do freeze da prova (o **Encerrar evento** guarda esse minuto) e descongela
+  quando a participação termina.
+
+O que você publicar ou editar depois da prova também chega a quem fizer o virtual depois. Não publique ali o que não
+deve ser visto.
 
 **Regra do participante** (ele a lê antes de largar): uma participação por conta; pode desistir sem
 gravar nos primeiros 15 minutos ou enquanto não tiver nenhum aceito, no máximo 2 vezes; a 3ª largada
@@ -773,7 +837,10 @@ identificada o painel avisa e mostra só as sessões e o log de acessos.
   (competidor recebe 403 `login_disabled`; a organização entra), **deslogar competidores**, **staff e
   chefes de sede** ou os dois (nunca admin, juízes, chefe, monitor nem telão), promover a rodada em
   Evento › Rodadas, e **reabrir o login** quando os times puderem entrar. Cada sessão derrubada vira
-  evento na linha do tempo; a ação vai ao audit (`logout-all`).
+  evento na linha do tempo; a ação vai ao audit (`logout-all`). Atenção: o login fechado aqui só volta
+  quando alguém clicar em **Reabrir login**. A abertura programada (a do login ou o início da rodada)
+  **não** o reabre. Com o login fechado, a tela mostra a hora da abertura num aviso, e o checklist
+  pré-prova fica vermelho a 1 h dela (LATAM 2026: 408 logins recusados até alguém reabrir).
 - **🔒 Trava de sede**: os IPs presos a esta prova (logins, bloqueios, até quando), os bloqueios
   registrados (quando, IP, alvo, rota, sessão) e os botões **soltar** e **prender IPs já vistos**.
   O cartão "bloqueios da trava" e os eventos 🔒 da linha do tempo vêm do audit. A seção 7 explica.

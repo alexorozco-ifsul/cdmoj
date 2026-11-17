@@ -8,7 +8,7 @@ import { status } from '/shared/auth.js';
 import { el, verdictClass, isPending, fmtDate } from '/shared/ui.js';
 import { T } from '/shared/i18n.js';
 import { mountChrome } from '/lib/contest-chrome.js';
-import { openHtmlReport } from '/shared/submission-links.js';
+import { srcLink, logLink, runLink, setRunPage } from '/shared/submission-links.js';
 import { langLabel } from '/shared/languages.js';
 
 const qs = new URLSearchParams(location.search);
@@ -39,22 +39,6 @@ async function downloadAuthed(path, filename) {
     const a = el('a', { href: URL.createObjectURL(await r.blob()), download: filename });
     document.body.append(a); a.click(); a.remove();
   } catch { alert(T('Falha ao baixar.', 'Download failed.', 'Error al descargar.')); }
-}
-async function openLogAuthed(path) {
-  try {
-    const r = await fetch('/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + getToken(CONTEST) } });
-    const w = window.open(); const pre = w.document.createElement('pre');
-    pre.style.cssText = 'font-family:monospace;white-space:pre-wrap;padding:1rem'; pre.textContent = await r.text();
-    w.document.body.append(pre); w.document.close();
-  } catch { alert(T('Falha ao abrir o log.', 'Failed to open the log.', 'Error al abrir el registro.')); }
-}
-// abre o report.html do julgamento numa aba nova (openHtmlReport: blob, nunca srcdoc — é o que
-// faz as âncoras dos casos de teste rolarem em vez de navegar; ver shared/submission-links.js).
-async function openReportAuthed(path) {
-  try {
-    const r = await fetch('/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + getToken(CONTEST) } });
-    openHtmlReport(await r.text());
-  } catch { alert(T('Falha ao abrir o report.', 'Failed to open the report.', 'No se pudo abrir el informe.')); }
 }
 
 function filteredSubs() {
@@ -142,10 +126,12 @@ function rowTable(items) {
       el('td', { class: 'small' }, langLabel(s.lang)),
       el('td', {}, el('span', { class: 'verdict ' + verdictClass(s.verdict) }, pending ? el('span', {}, el('span', { class: 'spin' }), ' ' + s.verdict) : vShow(s.verdict))),
       el('td', {},
-        el('a', { href: '#', title: T('ver código', 'view code', 'ver código'), onclick: (e) => { e.preventDefault(); openLogAuthed(`/submission/source?contest=${encodeURIComponent(CONTEST)}&id=${encodeURIComponent(s.submission_id)}&time=${encodeURIComponent(s.epoch)}`); } }, T('ver', 'view', 'ver')),
+        // "ver": o pop-up com cor de sintaxe (Ctrl/clique do meio: a página da submissão)
+        srcLink(CONTEST, { id: s.submission_id, sub_epoch: s.epoch, lang: s.lang }, T('ver', 'view', 'ver')),
         ' ',
         el('a', { href: '#', title: T('baixar', 'download', 'descargar'), class: 'small muted', onclick: (e) => { e.preventDefault(); downloadAuthed(`/submission/source?contest=${encodeURIComponent(CONTEST)}&id=${encodeURIComponent(s.submission_id)}&time=${encodeURIComponent(s.epoch)}`, s.submission_id + '.' + (s.lang || 'txt').toLowerCase()); } }, '⬇')),
-      el('td', {}, el('a', { href: '#', onclick: (e) => { e.preventDefault(); openReportAuthed(`/submission/log?contest=${encodeURIComponent(CONTEST)}&id=${encodeURIComponent(s.submission_id)}&time=${encodeURIComponent(s.epoch)}`); } }, s.submission_id.slice(0, 8)))));
+      // o id curto: link de verdade para a página da submissão; 📄 abre o report numa aba (como antes)
+      el('td', {}, runLink(CONTEST, { id: s.submission_id }), ' ', logLink(CONTEST, { id: s.submission_id, sub_epoch: s.epoch }, '📄'))));
   });
   return el('div', { class: 'chart-wrap' }, el('table', { class: 'moj' }, head, tb));
 }
@@ -214,6 +200,7 @@ async function boot() {
   const isMon = /\.mon$/.test(st.login || '');
   if (!st.is_admin && !st.is_chief && !st.is_judge && !isMon) { document.body.innerHTML = `<div class="container"><div class="notice">${T('Acesso restrito a administradores, juízes e monitores.', 'Restricted to administrators, judges and monitors.', 'Restringido a administradores, jueces y monitores.')}</div></div>`; return; }
   FULL = !!(st.is_admin || st.is_chief);
+  setRunPage(!!(st.is_admin || st.is_chief || st.is_judge));   // a página da submissão é só de juiz (o .mon não abre)
 
   await mountChrome(CONTEST, basic, { auth: true });
 

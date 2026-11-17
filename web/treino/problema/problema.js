@@ -5,9 +5,9 @@ import { el, verdictClass, isPending, fmtDate, renderAuthArea, resumoText } from
 import { createEditor } from '/shared/editor.js';
 import { skeletonFor, isSkeleton, docOnLangChange } from '/shared/editor-skeleton.js';
 import { DEFAULT_SUBMIT_LANGUAGES, langById, extCanon } from '/shared/languages.js';
-import { openHtmlReport } from '/shared/submission-links.js';
+import { openReportAuthed as openReportFor } from '/shared/submission-links.js';
 import { T } from '/shared/i18n.js';
-import { tlClockBadge } from '/shared/tl-clock.js';
+import { tlParts, fmtTime } from '/shared/tl-chips.js';
 import { makeSubmitFlow, attachSubmitButton, lastSubKey } from '/shared/submit-ux.js';
 import { pickStmtLang, makeStmtLangChips, setChipsActive, rememberStmtLang, stmtHtmlLang } from '/shared/statement-langs.js';
 import { decorateSamples, downloadSamplesZip, downloadableSamples } from '/shared/statement-samples.js';
@@ -64,11 +64,6 @@ function b64utf8(b64) {
   } catch { return ''; }
 }
 
-function fmtTime(v) {
-  const n = parseFloat(v);
-  if (isNaN(n)) return String(v);
-  return n < 1 ? Math.round(n * 1000) + ' ms' : (Math.round(n * 1000) / 1000) + ' s';
-}
 
 async function swapEditor(content, langId) {
   curLangId = langId;
@@ -125,21 +120,7 @@ async function loadProblem() {
   problemLangs = Array.isArray(p.languages) ? p.languages : [];
   problemFnLangs = Array.isArray(p.function_langs) ? p.function_langs : [];
   const ptl = document.getElementById('ptl'); ptl.innerHTML = '';
-  const tEntries = Object.entries(tl)
-    .sort((a, b) => (a[0] === 'default' ? -1 : b[0] === 'default' ? 1 : a[0].localeCompare(b[0])));
-  if (tEntries.length) {
-    ptl.append(el('span', { class: 'tl-label' }, T('⏱ Tempo limite', '⏱ Time limit', '⏱ Tiempo límite')));
-    const clk = tlClockBadge(p); if (clk) ptl.append(clk);   // TL de CPU (TLCLOCK=cpu no pacote)
-    // TL ÚNICO (TLUNIFIED=y no pacote): o mesmo em toda linguagem — um chip só (se um ajuste por linguagem do conf
-    // desfez a igualdade, os chips de sempre: a tela nunca esconde um TL diferente)
-    const one = p.tl_unified && new Set(tEntries.map(([, v]) => String(+v))).size === 1;
-    const uni = one ? [['', tEntries[0][1]]] : tEntries;
-    uni.forEach(([k, v]) => {
-      const label = one ? T('todas as linguagens', 'all languages', 'todos los lenguajes')
-        : (k === 'default' ? T('padrão', 'default', 'predeterminado') : (langById(k).label || k));
-      ptl.append(el('span', { class: 'tl-chip' }, el('b', {}, label), el('span', { class: 'tl-time' }, fmtTime(v))));
-    });
-  }
+  ptl.append(...tlParts(p));   // chips de TL (shared/tl-chips.js: TL único, relógio de CPU — a regra do contest e do virtual)
 
   document.getElementById('problem-head').append(
     el('div', { style: 'margin-top:.6rem' },
@@ -189,12 +170,8 @@ async function downloadAuthed(path, filename) {
 
 // abre o report.html do julgamento numa aba nova (openHtmlReport: blob, nunca srcdoc — ver
 // shared/submission-links.js; é o que faz as âncoras dos casos de teste rolarem).
-async function openReportAuthed(path) {
-  try {
-    const r = await fetch('/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + getToken(CONTEST) } });
-    openHtmlReport(await r.text());
-  } catch { alert(T('Falha ao abrir o report.', 'Failed to open the report.', 'No se pudo abrir el informe.')); }
-}
+// a janela abre NO CLIQUE e o erro da API aparece nela
+const openReportAuthed = (path) => openReportFor(CONTEST, path);
 
 async function openSubmissionInEditor(subid, time, langField) {
   let txt;

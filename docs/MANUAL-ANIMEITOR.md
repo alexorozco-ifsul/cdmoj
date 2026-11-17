@@ -99,12 +99,19 @@ galeria abre no filtro **⚠ Pendências** — exatamente quem ainda está sem f
 
 - **Enviar em lote** é o caminho rápido: arraste dezenas de arquivos; o **nome do arquivo é o
   login** do time (`time-alfa.jpg`, `time-alfa.mp3`). Fotos e músicas podem ir juntas.
+- O lote aceita também **pacotes `.zip`** com as fotos e as músicas, em qualquer pasta dentro do zip.
+  O navegador abre o pacote, e nada sobe sem a sua confirmação. Antes de enviar, a tela mostra uma
+  **conferência**: cada arquivo, o time que ele achou pelo nome, se é novo ou se troca o atual, e o que
+  fica de fora (nome sem time, arquivo que não é foto nem MP3, o mesmo time repetido — vale o último).
+  Confira e clique em **Enviar**. O zip não pode ter senha, e cada arquivo vai até 20 MB.
 - A **foto** é convertida e redimensionada pelo servidor (webp + miniatura). A **música** vai como
   veio e precisa ser **mp3 de verdade** (até 15 MB) — o servidor confere o arquivo, não a extensão.
 - **Baixar pacote (.zip)**: tudo num arquivo (fotos, músicas e um CSV dos times) — é o que se passa
   para quem opera o exibidor.
 - Os **chefes de sede** (`.cstaff`) sobem as fotos **da sede deles**. Numa prova com várias sedes,
   deixe-os recolher localmente e você só confere a lista de pendências.
+- A sede de cada chefe de sede é o filtro dele em **Operação › Staff**. Sem filtro definido, o chefe
+  de sede não troca a foto nem a música de nenhum time.
 
 ### A foto/música PADRÃO
 
@@ -180,6 +187,11 @@ A lista da véspera, em ordem:
 | Ver/criar/revogar **chaves de webcast** (legado) | **Sim** | Não | Não |
 | Placar | Sempre descongelado | Congelado | Congelado |
 | Estatísticas | Sim | Não | Não |
+
+**`.foto` e `.musica`** (papéis com escopo, 09/11/2026): entram nesta mesma página e veem a galeria **só do seu
+escopo** (Operação › Staff). O `.foto` só envia, troca ou remove **fotos**; o `.musica`, só **músicas** — o botão do
+outro tipo nem aparece, e o lote recusa o que a conta não envia. Sem escopo definido, eles não veem nenhum time.
+Não trocam o padrão do contest, não publicam no Animeitor e não veem as chaves do webcast.
 
 ## Ponteiros
 

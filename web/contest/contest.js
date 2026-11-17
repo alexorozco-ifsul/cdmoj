@@ -3,6 +3,7 @@
 import { apiGet, apiGetText, apiGetBlob, apiPost, getToken } from '/shared/api.js';
 import { login, logout, status, fileToBase64, textToBase64 } from '/shared/auth.js';
 import { el, verdictClass, isPending, fmtDate, resumoText, fmtCountdown as fmtLeft } from '/shared/ui.js';
+import { roleCan } from '/shared/roles.js';   // registro dos papéis (GERADO de server/etc/roles.tsv)
 import { createEditor } from '/shared/editor.js';
 import { skeletonFor, isSkeleton, docOnLangChange, contestSkeletonCfg } from '/shared/editor-skeleton.js';
 import { LANGUAGES, DEFAULT_SUBMIT_LANGUAGES, langById, extCanon } from '/shared/languages.js';
@@ -13,11 +14,11 @@ import { makeSubmissionsTable } from '/contest/submissions-table.js';
 import { makeSubmitFlow, attachSubmitButton, lastSubKey, submitChannel } from '/shared/submit-ux.js';
 import { mountSiteFooter } from '/shared/site-footer.js';
 import { baseOrigin, contestOrigin } from '/shared/contest-host.js';
-import { openHtmlReport } from '/shared/submission-links.js';
+import { openReportAuthed as openReportFor, openTextAuthed } from '/shared/submission-links.js';
 import { balloonColorHex, balloonSVG, balloonEdge, balloonTint } from '/contest/score/score-colors.js';
 import { pickStmtLang, makeStmtLangChips, setChipsActive, rememberStmtLang, stmtHtmlLang } from '/shared/statement-langs.js';
 import { decorateSamples, downloadSamplesZip, SAMPLES_TAB_SCRIPT } from '/shared/statement-samples.js';
-import { tlClockBadge } from '/shared/tl-clock.js';
+import { tlParts } from '/shared/tl-chips.js';   // chips de TL (fonte única com o treino e o virtual)
 import { serverNow } from '/shared/server-clock.js';   // contagem pelo relógio do SERVIDOR (shared/server-clock.js)
 
 const qs = new URLSearchParams(location.search);
@@ -94,11 +95,6 @@ let preStartTimer = null, preStartPoll = null;
 
 // ---- helpers ---------------------------------------------------------------
 // tempo-limite: segundos (string/num) -> "NNN ms" (<1s) ou "N.NNN s" (espelha o treino)
-function fmtTime(v) {
-  const n = parseFloat(v);
-  if (isNaN(n)) return String(v);
-  return n < 1 ? Math.round(n * 1000) + ' ms' : (Math.round(n * 1000) / 1000) + ' s';
-}
 function show(id) { document.getElementById(id).classList.remove('hidden'); }
 function hide(id) { document.getElementById(id).classList.add('hidden'); }
 
@@ -138,27 +134,9 @@ async function downloadAuthed(path, filename) {
     document.body.append(a); a.click(); a.remove();
   } catch { alert(T('Falha ao baixar arquivo/log.', 'Failed to download file/log.', 'No se pudo descargar el archivo/registro.')); }
 }
-async function openLogAuthed(path) {
-  try {
-    const r = await fetch('/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + getToken(CONTEST) } });
-    const txt = await r.text();
-    const w = window.open();
-    const pre = w.document.createElement('pre');
-    pre.style.cssText = 'font-family:monospace;white-space:pre-wrap;padding:1rem';
-    pre.textContent = txt;
-    w.document.body.append(pre);
-    w.document.close();
-  } catch { alert(T('Falha ao abrir o log.', 'Failed to open log.', 'No se pudo abrir el registro.')); }
-}
-
-// abre o report.html do julgamento numa aba nova (openHtmlReport: blob, nunca srcdoc — é o que
-// faz as âncoras dos casos de teste rolarem em vez de navegar; ver shared/submission-links.js).
-async function openReportAuthed(path) {
-  try {
-    const r = await fetch('/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + getToken(CONTEST) } });
-    openHtmlReport(await r.text());
-  } catch { alert(T('Falha ao abrir o report.', 'Failed to open the report.', 'No se pudo abrir el informe.')); }
-}
+// log cru e report.html do julgamento: a janela abre NO CLIQUE e o erro da API aparece nela (shared/submission-links.js)
+const openLogAuthed = (path) => openTextAuthed(CONTEST, path);
+const openReportAuthed = (path) => openReportFor(CONTEST, path);
 
 // ============================================================================
 // LOGIN FULL-SCREEN
@@ -352,8 +330,9 @@ function renderUser() {
   // judge/chief, todas com o mesmo botão no topo). Aqui o papel é o COMPETIDOR — então o botão só
   // aparece p/ quem não tem papel nenhum; organização e juiz já têm o tutorial DELES na página
   // deles. O contest-guard deixa passar porque o caminho começa em /contest/.
-  const plain = !(userinfo.is_admin || userinfo.is_judge || userinfo.is_staff
-    || userinfo.is_cstaff || userinfo.is_animeitor);
+  // sem papel, ou papel que participa como time (o .mon: `como_time` no registro server/etc/roles.tsv)
+  const plain = ('role' in userinfo) ? (!userinfo.role || roleCan(userinfo.login, 'como_time'))
+    : !(userinfo.is_admin || userinfo.is_judge || userinfo.is_staff || userinfo.is_cstaff || userinfo.is_animeitor);
   if (plain) {
     box.append(el('a', { class: 'btn ghost', href: '/contest/ajuda/competidor.html', target: '_blank',
       rel: 'noopener', style: 'float:right;margin:.2rem 0 0',
@@ -729,35 +708,13 @@ function toggleDetail(p, item, toggle, submitWrap) {
   if (opened) { detail.classList.add('hidden'); toggle.textContent = '▶'; return; }
   toggle.textContent = '▼';
   if (!detail.dataset.rendered) {
-    // time limits — chips (nome da linguagem expandido, igual ao treino)
-    const tl = p.time_limits || {};
-    // com whitelist (do problema ou do contest): UM chip POR linguagem permitida — o TL
-    // medido dela, senão o `default` — e SEM o chip "padrão" (a lista é fechada, não há
-    // "demais linguagens"). resolveLangs degrada p/ TODAS com tokens exóticos: nesse caso
-    // trata como sem restrição (chips medidos + "padrão" cobrindo as não calibradas).
+    // time limits — chips (shared/tl-chips.js, a regra única com o treino e o virtual). Com whitelist (do problema ou
+    // do contest) UM chip POR linguagem permitida; resolveLangs degrada p/ TODAS com tokens exóticos: aí trata como
+    // sem restrição (chips medidos + "padrão" cobrindo as não calibradas).
     const rl = resolveLangs(p.languages || []);
     const restricted = Array.isArray(p.languages) && p.languages.length > 0 && rl !== LANGUAGES;
-    let chips;   // [{label, time}]
-    // TL ÚNICO (TLUNIFIED=y): o mesmo em toda linguagem — um chip só (se um ajuste por linguagem do conf desfez a
-    // igualdade, os chips de sempre: a tela nunca esconde um TL diferente)
-    if (p.tl_unified && Object.keys(tl).length && new Set(Object.values(tl).map((v) => String(+v))).size === 1) {
-      chips = [{ label: T('todas as linguagens', 'all languages', 'todos los lenguajes'), time: Object.values(tl)[0] }];
-    } else if (restricted) {
-      chips = rl.map((l) => ({ label: l.label, time: tl[l.id] != null ? tl[l.id] : tl.default }))
-        .filter((c) => c.time != null);
-    } else {
-      chips = Object.keys(tl)
-        .sort((a, b) => (a === 'default' ? -1 : b === 'default' ? 1 : a.localeCompare(b)))
-        .map((k) => ({ label: k === 'default' ? T('padrão', 'default', 'predeterminado') : (langById(k).label || k), time: tl[k] }));
-    }
-    if (chips.length) {
-      const tlBlock = el('div', { class: 'tl-block' },
-        el('span', { class: 'tl-label' }, '⏱ ' + T('Tempo limite', 'Time limit', 'Límite de tiempo')));
-      const clk = tlClockBadge(p); if (clk) tlBlock.append(clk);   // TL de CPU (TLCLOCK=cpu no pacote)
-      chips.forEach((c) => tlBlock.append(el('span', { class: 'tl-chip' },
-        el('b', {}, c.label), el('span', { class: 'tl-time' }, fmtTime(c.time)))));
-      detail.append(tlBlock);
-    }
+    const tlp = tlParts(p, restricted ? rl : null);
+    if (tlp.length) detail.append(el('div', { class: 'tl-block' }, ...tlp));
     // enunciado | editor lado a lado — editor embutido só se o admin do contest o habilitou
     const editorOn = !(userinfo && userinfo.show_editor === false);
     // coluna do enunciado (decodifica o b64 só agora, na 1ª abertura)
