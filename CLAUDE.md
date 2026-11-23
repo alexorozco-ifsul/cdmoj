@@ -83,12 +83,45 @@ Deploy: `docs/DEPLOY.md`. Docs em HTML: `bash docs/build-html.sh`.
   `/judge/heartbeat` (o lote de jobs agregava por `--argjson`): o `q_claim` já tinha movido
   o job p/ `assigned/`, o beat respondia 200 VAZIO e o job quicava assigned→TTL→fila p/
   sempre — fonte grande era aceita mas nunca julgada. Hoje o lote agrega por arquivo e a
-  resposta sai por `ok_json_slurp`. E o /submit é FAIL-CLOSED: valida o spool
+  resposta sai por `ok_json_slurp`. A 5ª (19/11/2026): as regras de países e escolas (`teams-meta.json`) levam o BRASÃO
+  da escola em data: URI por regra, e a criação, o GET/POST de `/contest/admin/config` e o export (a seção do módulo)
+  as passavam por argv — dois contests nasceram com o arquivo VAZIO (o `>` trunca antes de o jq falhar) e todo GET do
+  config virou 500 `build_fail` (Evento › Balões). Duas regras a mais: saída de jq redirecionada para o arquivo de
+  verdade ⇒ tmp+`mv` ou conferir o rc (jq que falha não pode deixar o vazio no lugar do bom); arquivo que PODE estar
+  vazio ⇒ `[[ -s ]]` + o padrão (o jq num arquivo vazio sai 0 sem imprimir, e o `|| echo padrão` não pega). Teste:
+  `smoke-teams-meta-big.sh`.
+  **O EMBRULHO DO JQ (`lib/jq-safe.sh`, 20/11/2026; pedido do Ribas: "tratar melhor o jq como um todo")**: a função
+  `jq` (carregada pela `common.sh`, `users.sh`, `sched-lib.sh` e pelos avulsos de `score/`) vence o binário em todo
+  shell que a carregou. (1) Argumento de `--arg`/`--argjson` acima de 64 KiB (bytes; `JQ_SAFE_MAX`) vira ARQUIVO sem o
+  chamador saber (`--rawfile`; `--slurpfile` + `($__jqsN[0]) as $nome |` na frente do programa, inclusive com `-f`) —
+  o ARG_MAX deixa de matar o jq. (2) jq que falha (rc 2/3/5/126/127) vira uma linha em `run/jq-errors/AAAA-MM-DD.log`
+  (TSV: epoch, rc, classe, rota, quem chamou, NOMES e tamanhos dos argumentos, o programa — nunca os valores), mesmo
+  com o `2>/dev/null` do chamador; fica de fora o esperado (calibrado rodando a suíte inteira com o log ligado: 1.259
+  linhas, 1.189 do idioma do `fail`, que deixou de rodar o jq sem `FAIL_EXTRA`): arquivo de entrada ausente (o idioma
+  `jq … "$f" 2>/dev/null || padrão`), TESTE (stdout em /dev/null: só o rc importa), morte por sinal (o 141 do `| head`)
+  e a chamada marcada `JQ_SAFE_EXPECT=1 jq …` (validação de entrada de USUÁRIO que usa a saída: penalidade, seções do
+  spec). O que sobra é sinal de verdade — arquivo de estado corrompido ou bug: na 1ª rodada o log achou DOIS bugs
+  calados no checklist (`preflight.sh`, problema paralelo × pool de juízes: `$vs[] | .[$vs[]]` indexava a string, e
+  `index(.host)` lia a lista — o argumento de função jq avalia contra o INPUT; com pool definido o aviso "sem juiz com
+  as CPUs" saía sempre e o pool por problema nunca valia). A conversão também é anotada (`argv-convertido`: o lugar
+  que deveria passar por arquivo). Nunca escreve no stdout/stderr; rc intacto; `JQ_SAFE=0` desliga; o judged apaga
+  log com mais de 30 dias; o `ops-day.sh` tem a seção JQ e o `jqerr=` no METRICS; e o mojinho AVISA (condição
+  `jq_errors` do `lib/alerts.sh`, um EVENTO: no máx. um aviso por `ALERT_JQ_COOLDOWN`=1 h, com o total e as 3 origens
+  mais frequentes; o que chega no meio sai somado no seguinte; `argv-convertido` não avisa; teste
+  `smoke-alerts-jq.sh`). No mesmo dia: os escapes de HTML do Telegram (`_alert_html`, `ab_html`) usavam `&` cru na
+  substituição — no bash 5.2+ ele vira o texto casado e `<` saía `<lt;`; hoje `\&lt;`. NÃO alcança o jq chamado por
+  `xargs`/`find -exec`/`timeout` (executam o binário; hoje só com argumentos pequenos) nem dois casos que o jq não
+  vê como erro: arquivo VAZIO (rc 0, saída vazia — use `[[ -s ]]` + `${v:-padrão}`) e o `jq … > arquivo-de-verdade`
+  que trunca antes de falhar (tmp+`mv` ou conferir o rc). Código novo continua passando agregado por arquivo
+  (`ok_json_slurp`/`--slurpfile`): o embrulho é a rede, não o desenho. Teste: `smoke-jq-safe.sh` (rode com o jq 1.7). E o /submit é FAIL-CLOSED: valida o spool
   antes do OK; o judged nunca descarta submit em silêncio (JSON ruim → Judge Error na linha) e
   o **reconciliador** (`reconcile_stale_pending`, `--reconcile` p/ rodar à mão) resolve
   pendência órfã >15 min (re-enfileira com fonte 1×; sem fonte → Judge Error). Whitelist de
   linguagem tem CHÃO: lista vazia = `PLATFORM_LANGS` (as 17 de mojtools/lang), nunca "qualquer
-  extensão". Teste: `smoke-submit-pipeline.sh`. —
+  extensão". E o juiz tem de RODÁ-LA (20/11/2026, `lang_runnable`): linguagem da lista fora da plataforma só passa se o
+  PACOTE a traz (`script_langs` do json servível, mojtools gen-problem-json) — senão 400 `lang_unavailable` (a lista
+  lfa_regex só tinha `grepe` e quatro problemas não o traziam); teste a mais depois do `lang_allowed`, nunca dentro do
+  `effective_problem_langs` (lá `[]` = todas); índice sem o campo = aceita. Teste: `smoke-submit-pipeline.sh`. —
   pares do jplag, times, clarifications, fila de impressão, fila de revisão, backups. Use o
   helper **`ok_json_slurp <filtro> <nome> <json> [args…]`** (`lib/common.sh`; no filtro o
   valor vira `$<nome>[0]`). Sintoma do estouro, antes da blindagem: **200 com corpo vazio** e

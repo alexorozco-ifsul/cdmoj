@@ -478,7 +478,13 @@ cc_create(){
     cc_regions_ok "$regions_j" || { rm -rf "$stg"; cc_regions_fail; }
     printf '%s' "$regions_j" > "$stg/regions.json"
   fi
-  [[ -n "$teams_j"   && "$teams_j"   != null ]] && jq -cn --argjson r "$teams_j" '{rules:$r}' > "$stg/teams-meta.json"
+  # as regras entram por STDIN, nunca por argv: cada uma pode levar o brasão da escola como data: URI (o `logo` do editor
+  # de países e escolas) e a lista passa fácil dos 128 KiB por argumento do jq — o `--argjson` nem rodava e o `>` deixava o
+  # teams-meta.json VAZIO (19/11/2026, cnpci-2026: todo GET de /contest/admin/config virou 500 build_fail)
+  if [[ -n "$teams_j" && "$teams_j" != null ]]; then
+    printf '%s' "$teams_j" | jq -c '{rules:.}' > "$stg/teams-meta.json" \
+      || { rm -rf "$stg"; fail 500 "Falha ao gravar as regras de países e escolas" "teams_meta_write_fail"; }
+  fi
   cc_apply_modules_spec "$spec" "$stg" "$creator" || { rm -rf "$stg"; fail 422 "Seção de módulo inválida no spec (${CC_MOD_ERR:-modules})" "modules_spec_invalid"; }
 
   mv -T "$stg" "$CONTESTSDIR/$id" 2>/dev/null || { rm -rf "$stg"; fail 500 "Falha ao publicar o contest (id pode ter sido criado em paralelo)" "publish_fail"; }
@@ -552,7 +558,7 @@ cc_apply_modules_spec(){
     # desligado não grava dado.
     [[ "$(jq -r --arg m "$mod" 'if (.modules[$m] | type) == "object" and .modules[$m].on == false then "off" else "" end' \
           <<<"$spec" 2>/dev/null)" == off ]] && return 0
-    val="$(jq -c "$1 // empty" <<<"$spec" 2>/dev/null)"
+    val="$(JQ_SAFE_EXPECT=1 jq -c "$1 // empty" <<<"$spec" 2>/dev/null)"   # spec do usuário: tipo errado = 422
     [[ -n "$val" ]] || return 0
     jq -e "type == \"$2\"" >/dev/null 2>&1 <<<"$val" || { CC_MOD_ERR="$1 deve ser $2"; return 1; }
     printf '%s' "$val"
@@ -640,7 +646,8 @@ cc_apply_modules_spec(){
       keys="$(jq -c --arg k "$k" --arg v "$vw" --arg l "$lb" --arg by "$creator" --argjson t "$EPOCHSECONDS" \
         '. + [{id:($k[6:14]), key:$k, view:$v, label:$l, created_by:$by, created_at:$t, revoked_at:0, fetches:0, last_at:0, last_ip:""}]' <<<"$keys")"
     done < <(jq -r '.[] | select(type=="object") | [(.view // "public"), (.label // "")] | @tsv' <<<"$v")
-    ( umask 077; jq -cn --argjson k "$keys" '{version:1, keys:$k}' > "$stg/webcast.json" )
+    ( umask 077; jq -cn --argjson k "$keys" '{version:1, keys:$k}' > "$stg/webcast.json" ) \
+      || { CC_MOD_ERR="telao: falha ao gravar as chaves do webcast"; return 1; }   # nunca o arquivo vazio publicado
   fi
   # esqueletos.langs -> esqueletos.json (lib/esqueletos.sh: só modos válidos, código até o teto). O texto do
   # admin anda por stdin, nunca por argv (ARG_MAX: até ESQ_MAX_BYTES por linguagem)
@@ -681,7 +688,8 @@ cc_apply_modules_spec(){
                + ($st[0][$i] | {name, venue, when, chip} | with_entries(select((.value | type) == "string" and .value != ""))) ]' \
         "$stg/.cl-stages.json" > "$stg/.cl-stages.tmp" && mv -f "$stg/.cl-stages.tmp" "$stg/.cl-stages.json"
     done
-    jq -c '{version:1, stages:.}' "$stg/.cl-stages.json" > "$stg/classification.json"
+    jq -c '{version:1, stages:.}' "$stg/.cl-stages.json" > "$stg/classification.json" \
+      || { CC_MOD_ERR="classificacao: falha ao gravar os estágios"; return 1; }   # nunca o arquivo vazio publicado
     rm -f "$cf" "$cst" "$stg/.cl-stages.json"
   fi
   return 0
@@ -745,7 +753,9 @@ cc_modules_spec(){
             else .stages = [ $S[] | {id, algorithm:(.config.algorithm // "sbc-fase1"), config:(.config | del(.algorithm))}
                              + ({name, venue, when, chip} | with_entries(select(.value != null))) ] end' <<<"$sec" 2>/dev/null || printf '%s' "$sec")";;
     esac
-    out="$(jq -c --arg m "$m" --argjson s "$sec" '.[$m]=$s' <<<"$out")"
+    # a seção entra por ARQUIVO: a de sedes leva as regras de países e escolas, com brasões em data: URI (passa dos 128 KiB
+    # por argumento do jq — o export, o duplicate e o template a partir do contest perdiam os módulos; 19/11/2026)
+    out="$(jq -c --arg m "$m" --slurpfile s <(printf '%s' "$sec") '.[$m]=$s[0]' <<<"$out")"
   done
   # esqueletos: o código pode somar centenas de KB — entra por ARQUIVO, nunca pelo argv do jq (ARG_MAX)
   if [[ ",$mods," == *",esqueletos,"* ]]; then
